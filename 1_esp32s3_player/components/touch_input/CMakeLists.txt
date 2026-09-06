@@ -1,0 +1,15 @@
+idf_component_register(
+    SRCS
+        "touch_input.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        board_io
+        audio_player
+        oled_display
+        menu
+        usb_manager
+        driver
+        esp_driver_gpio
+        nvs_flash
+)

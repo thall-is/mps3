@@ -1,0 +1,32 @@
+menu "MPS3 WiFi Transfer"
+
+    config WIFI_STA_SSID
+        string "SSID da sua rede WiFi de casa (modo 'WiFi: minha rede')"
+        default ""
+        help
+            Nome da rede que o player tenta entrar no modo "WiFi: minha
+            rede" (upload direto do seu servidor/PC de casa). Deixe vazio
+            se ainda nao for usar esse modo - o player mostra "SSID nao
+            configurado" e nao trava tentando conectar.
+
+    config WIFI_STA_PASSWORD
+        string "Senha da sua rede WiFi de casa"
+        default ""
+
+    config WIFI_AP_SSID
+        string "Nome da rede criada pelo player (modo 'WiFi: hotspot')"
+        default "mps3-player"
+        help
+            Rede local que o proprio player cria - conecte algum dispositivo nela
+            diretamente pra' enviar musicas sem precisar da sua rede de
+            casa (o dispositivo fica sem internet enquanto conectado nela).
+
+    config WIFI_AP_PASSWORD
+        string "Senha da rede criada pelo player"
+        default "mps3musica"
+        help
+            Minimo de 8 caracteres (exigencia do WPA2 - com menos que
+            isso a rede fica aberta, sem senha). Recomendado trocar o
+            padrao pelo menos uma vez.
+
+endmenu

@@ -1,0 +1,15 @@
+idf_component_register(
+    SRCS
+        "oled_display.c"
+        "bitmaps.c"
+        "u8g2_hal.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        audio_player
+        board_io
+        u8g2
+        esp_driver_i2c
+        esp_timer
+        driver
+)

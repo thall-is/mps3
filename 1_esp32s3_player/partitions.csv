@@ -1,0 +1,11 @@
+# Name,     Type, SubType,  Offset,   Size,     Flags
+# ESP32-S3 N16R8 tem 16MB de flash - a tabela padrao do PlatformIO/ESP-IDF
+# (usada ate' agora, implicitamente) reserva so' 1MB pro app, o que
+# deixava de sobra 15MB inuteis E nao cabia mais o firmware depois de
+# TinyUSB + WiFi + servidor HTTP (foi o que estourou o build). 4MB da'
+# bastante folga pra crescer sem precisar mexer nisso nunca mais - o
+# cartao SD continua sendo o armazenamento de musica, essa flash e' so'
+# pro codigo do firmware.
+nvs,      data, nvs,      0x9000,   0x6000,
+phy_init, data, phy,      0xf000,   0x1000,
+factory,  app,  factory,  0x10000,  0x400000,

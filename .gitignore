@@ -1,0 +1,62 @@
+# PlatformIO & ESP-IDF Build Artifacts
+.pio/
+build/
+sdkconfig.old
+sdkconfig.esp32-s3-n16r8.old
+CMakeCache.txt
+CMakeFiles/
+.ninja_deps
+.ninja_log
+*.bin
+*.elf
+*.map
+*.o
+*.a
+*.d
+*.obj
+*.tmp
+*.bak
+
+# Logs and Debug outputs
+*.log
+testbench.log
+
+# IDE & Editor Files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python Caches & Virtualenvs
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env/
+
+# Workspace specific archives
+archive/
+mps3_bins/
+*.zip
+*.tar.gz
+
+# ESP-IDF Component Manager (managed external dependencies)
+managed_components/
+mps3_fix/
+
+# Security and Secret Keys (Never commit production keys)
+recovery_key.h
+ota_key.bin
+*.key
+*.pem
+
+# Firmware Binary Releases (host on GitHub Releases, not git repo)
+*.enc
+
+# Ignore raw high-bitrate video captures (host on YouTube / GitHub Release assets)
+docs/media/videos/
+*.mp4
+*.mkv

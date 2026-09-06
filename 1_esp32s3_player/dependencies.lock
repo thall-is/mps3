@@ -1,0 +1,95 @@
+dependencies:
+  espressif/esp_audio_codec:
+    component_hash: 694d210da7a148dfb43b1b08581404b7093ec33c5e566a8cf721397b44e791c7
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.6.1
+  espressif/esp_audio_effects:
+    component_hash: 3cee4f73b50425d3e0f339849196cc238d6666abb38d84a57ca4ecc3149e0fa4
+    dependencies:
+    - name: espressif/gmf_fft
+      registry_url: https://components.espressif.com
+      require: private
+      version: ~1.0
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.4.2
+  espressif/esp_tinyusb:
+    component_hash: a8558cc89dae68552cb7a20123ffcb8db81a8a25bd560bc4d5b2f60a12bd6afb
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    - name: espressif/tinyusb
+      registry_url: https://components.espressif.com
+      require: public
+      version: '>=0.17.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32h4
+    version: 2.0.1
+  espressif/gmf_fft:
+    component_hash: b59451ef2f96d22b80c27a162515b21f1b85954dda434c0b092172164028779d
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.0.0
+  espressif/mdns:
+    component_hash: e81ca7a7f53ea34e78274df054da692c272e1315572876b237b1748e267c013b
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.11.3
+  espressif/tinyusb:
+    component_hash: a72b7d67472914ab76309340fd50d578b31e310963d45ad0f81144bde3314752
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32h4
+    - esp32s31
+    version: 0.21.0~1
+  idf:
+    source:
+      type: idf
+    version: 6.0.1
+  u8g2:
+    component_hash: 2b462a458ef4918fe9d73e27138d6e6783bc62d816a487e2b6c9b163d23eeb96
+    dependencies: []
+    source:
+      git: https://github.com/olikraus/u8g2.git
+      path: .
+      type: git
+    version: 9a93ba2e383afb02313c4805b321316aa9b0d2da
+direct_dependencies:
+- espressif/esp_audio_codec
+- espressif/esp_audio_effects
+- espressif/esp_tinyusb
+- espressif/mdns
+- u8g2
+manifest_hash: d7266a849ef59626a6b928d99d9a3427c401aaa7fb792f03689473782decb209
+target: esp32s3
+version: 2.0.0

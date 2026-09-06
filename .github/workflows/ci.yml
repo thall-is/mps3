@@ -1,0 +1,26 @@
+name: CI Tests
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  companion-tests:
+    name: BT Companion Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Host Unit Tests (LDAC, SBC, aptX, aptX HD, Pipeline, RTP Payload, ABR)
+        run: |
+          cd 2_esp32_bt_companion
+          chmod +x tests/run_host_tests.sh tests/compile_check.sh
+          ./tests/run_host_tests.sh
+
+      - name: Run ESP-IDF Stub Compile Checks (UART, I2S, BT Source, Main)
+        run: |
+          cd 2_esp32_bt_companion
+          ./tests/compile_check.sh

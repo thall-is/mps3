@@ -1,0 +1,27 @@
+idf_component_register(
+    SRCS
+        "main.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        board_io
+        audio_player
+        touch_input
+        usb_manager
+        wifi_transfer
+        bt_link
+        uart_ctrl
+        menu
+        u8g2
+        driver
+        fatfs
+        sdmmc
+        esp_timer
+        spi_flash
+        vfs
+        nvs_flash
+        esp_driver_i2c
+        esp_driver_sdmmc
+        sd_card
+        oled_display
+)

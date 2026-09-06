@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS
+        "i2s_output.c"
+        "battery.c"
+        "rgb_led.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        driver
+        esp_driver_gpio
+        esp_driver_i2s
+        esp_driver_rmt
+        esp_adc
+        esp_timer
+        nvs_flash
+)

@@ -1,0 +1,4 @@
+dependencies:
+  u8g2:
+    git: https://github.com/olikraus/u8g2.git
+  espressif/mdns: "^1.0"

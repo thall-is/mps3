@@ -1,0 +1,28 @@
+# Bluetooth classico (Bluedroid) ligado, BLE desligado - A2DP source e'
+# um perfil classico e o ESP32 classico (nao o S3) e' quem tem o radio
+# BR/EDR necessario. Desligar BLE economiza RAM interna.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BT_CLASSIC_ENABLED=y
+CONFIG_BT_BLE_ENABLED=n
+CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=y
+CONFIG_BT_A2DP_ENABLE=y
+CONFIG_BT_SPP_ENABLED=n
+
+# Codec externo: e' isto que abre o caminho pra' registrar LDAC como
+# Stream Endpoint e mandar frames ja' codificados via
+# esp_a2d_source_audio_data_send() em vez do encode SBC interno do
+# Bluedroid. REQUER os 4 patches em esp-idf-patches/ aplicados no seu
+# checkout do ESP-IDF - sem eles o registro do SEP LDAC falha
+# (ESP_A2D_SEP_REG_UNSUPPORTED).
+CONFIG_BT_A2DP_USE_EXTERNAL_CODEC=y
+
+# Quatro SEPs: LDAC (preferido), aptX HD, aptX, e SBC (fallback
+# obrigatorio do A2DP - todo receptor suporta, garante que o
+# companheiro conecta em qualquer fone/caixa mesmo sem suporte aos
+# outros tres).
+CONFIG_BT_A2DP_SEP_NUM_MAX=10
+
+# WiFi nao e' usado neste companheiro (so' Bluetooth) - desligar libera
+# RAM/flash.
+CONFIG_ESP32_WIFI_ENABLED=n
