@@ -7,7 +7,7 @@
 [![Licença](https://img.shields.io/badge/Licenca-MIT%20%2F%20Apache%202.0-green.svg)](LICENSE)
 
 <p align="center">
-  <img src="docs/media/photos/foto_4.jpg" alt="mps3 Hardware Prototype" width="48%">
+  <img src="docs/media/photos/foto_3.jpg" alt="mps3 Hardware Prototype" width="48%">
   <img src="docs/media/photos/foto_1.jpg" alt="mps3 Display e Controles" width="48%">
 </p>
 
