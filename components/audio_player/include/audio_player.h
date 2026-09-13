@@ -173,6 +173,15 @@ void audio_player_get_eq_config(player_eq_config_t *out);
 // Aplica e persiste na NVS uma nova configuracao do equalizador.
 void audio_player_set_eq_config(const player_eq_config_t *config);
 
+// --- Modo de Ordenacao de Faixas -----------------------------------------
+typedef enum {
+    SORT_MODE_NAME = 0, // Alfabetica por nome de arquivo (A-Z)
+    SORT_MODE_DATE = 1, // Por data de modificacao do arquivo (mtime)
+} track_sort_mode_t;
+
+void audio_player_set_sort_mode(track_sort_mode_t mode);
+track_sort_mode_t audio_player_get_sort_mode(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,9 +1,13 @@
-﻿#pragma once
+#pragma once
 
 #include <stddef.h>
 #include <stdbool.h>
+#include "audio_player.h"
 
 #define MAX_ENTRIES 256
+
+void fs_browser_set_sort_mode(track_sort_mode_t mode);
+track_sort_mode_t fs_browser_get_sort_mode(void);
 
 struct DirScan {
     char *subdirs[MAX_ENTRIES];

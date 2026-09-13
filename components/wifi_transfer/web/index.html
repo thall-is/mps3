@@ -861,7 +861,7 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ old_path: currentCtxItem.path, new_path: newPath })
                 });
-                if(res.ok) { load(); } else { alert('Erro ao renomear'); }
+                if(res.ok) { dirCache = {}; load(); } else { alert('Erro ao renomear'); }
             }
         };
 
@@ -910,7 +910,7 @@
                 }
 
                 // Apenas pastas (exclui a própria pasta selecionada caso seja uma pasta)
-                const dirs = (data.files || []).filter(f => f.dir && (!moveTargetItem || !moveTargetItem.isDir || f.name !== moveTargetItem.name));
+                const dirs = (data.entries || []).filter(f => f.dir && (!moveTargetItem || !moveTargetItem.isDir || f.name !== moveTargetItem.name));
                 
                 if (dirs.length === 0) {
                     const emptyDiv = document.createElement('div');
@@ -948,6 +948,7 @@
                     body: JSON.stringify({ path: newDirPath })
                 });
                 if (res.ok) {
+                    dirCache = {};
                     await renderMoveFolderList();
                 } else {
                     alert('Erro ao criar pasta');
@@ -959,6 +960,11 @@
 
         document.getElementById('btnConfirmMove').onclick = async () => {
             if (!moveTargetItem) return;
+            if (moveTargetItem.isDir &&
+                (moveCurrentDir === moveTargetItem.path || moveCurrentDir.startsWith(moveTargetItem.path + '/'))) {
+                alert('Não é possível mover uma pasta para dentro dela mesma.');
+                return;
+            }
             let newPath = joinPath(moveCurrentDir, moveTargetItem.name);
             if (newPath === moveTargetItem.path) {
                 alert('O item já está nesta pasta.');
@@ -971,10 +977,13 @@
                     body: JSON.stringify({ old_path: moveTargetItem.path, new_path: newPath })
                 });
                 if (res.ok) {
+                    dirCache = {};
                     closeMoveModal();
                     load();
                 } else {
-                    alert('Erro ao mover');
+                    let errData = {};
+                    try { errData = await res.json(); } catch(e) {}
+                    alert(errData.error || 'Erro ao mover');
                 }
             } catch(e) {
                 alert('Falha na requisição ao mover');
@@ -994,7 +1003,7 @@
                 'Excluir "' + currentCtxItem.name + '"?';
             if(confirm(msg)) {
                 let res = await fetch('/api/delete?path='+encodeURIComponent(currentCtxItem.path), {method:'DELETE'});
-                if(res.ok) { load(); } else { alert('Erro ao excluir'); }
+                if(res.ok) { dirCache = {}; load(); } else { alert('Erro ao excluir'); }
             }
         };
 
@@ -1008,7 +1017,7 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ path: path })
                 });
-                if(res.ok) { load(); } else { alert('Erro ao criar pasta'); }
+                if(res.ok) { dirCache = {}; load(); } else { alert('Erro ao criar pasta'); }
             }
         };
 

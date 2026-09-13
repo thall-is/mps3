@@ -96,6 +96,7 @@ void oled_display_show_loading(void);
 void oled_display_show_eq_preset_list(int cursor, int active_preset, bool eq_enabled, const void *eq_cfg);
 void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int grid_y, int page, bool is_confirming);
 void oled_display_show_unsupported(const char *filename);
+void oled_display_show_sort_mode(int mode);
 
 #ifdef __cplusplus
 }

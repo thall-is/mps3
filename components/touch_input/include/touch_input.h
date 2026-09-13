@@ -24,6 +24,7 @@ typedef enum {
     UI_MODE_CONF_MENU = 6,
     UI_MODE_VOLUME = 7,
     UI_MODE_BALANCE = 14,
+    UI_MODE_SORT = 15,
 } ui_mode_t;
 
 // Configura os 5 GPIOs do joystick de navegação (UP/DOWN/LEFT/RIGHT/CENTER)

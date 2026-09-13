@@ -58,6 +58,7 @@ static const char *TAG = "audio_player";
 #define NVS_KEY_LAST_ELAPSED "last_elapsed"
 #define NVS_KEY_VOLUME "volume"
 #define NVS_KEY_BALANCE "balance"
+#define NVS_KEY_SORT_MODE "sort_mode"
 
 // Espera o usuario terminar o ajuste de volume antes de escrever na flash.
 // Isso evita uma escrita NVS repetitiva a cada alteracao rapida.
@@ -623,6 +624,48 @@ static void load_balance(void)
     if (balance < -100) balance = -100;
     if (balance > 100) balance = 100;
     s_balance = balance;
+}
+
+static track_sort_mode_t s_track_sort_mode = SORT_MODE_NAME;
+
+static void save_sort_mode(track_sort_mode_t mode)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, NVS_KEY_SORT_MODE, (uint8_t)mode);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void load_sort_mode(void)
+{
+    uint8_t mode = (uint8_t)SORT_MODE_NAME;
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u8(h, NVS_KEY_SORT_MODE, &mode);
+        nvs_close(h);
+    }
+    if (mode > (uint8_t)SORT_MODE_DATE) mode = (uint8_t)SORT_MODE_NAME;
+    s_track_sort_mode = (track_sort_mode_t)mode;
+    fs_browser_set_sort_mode(s_track_sort_mode);
+}
+
+void audio_player_set_sort_mode(track_sort_mode_t mode)
+{
+    if (mode > SORT_MODE_DATE) mode = SORT_MODE_NAME;
+    s_track_sort_mode = mode;
+    fs_browser_set_sort_mode(mode);
+    save_sort_mode(mode);
+
+    // Re-ordena imediatamente a lista da pasta aberta na navegacao
+    scan_lock();
+    scan_dir(s_browse_dir, s_browse_scan);
+    scan_unlock();
+}
+
+track_sort_mode_t audio_player_get_sort_mode(void)
+{
+    return s_track_sort_mode;
 }
 
 static void volume_persistence_task(void *arg)
@@ -2721,6 +2764,7 @@ esp_err_t audio_player_start(const char *music_dir)
     // tasks para que a primeira faixa ja' saia no volume salvo.
     load_volume();
     load_balance();
+    load_sort_mode();
 
     strncpy(s_root_dir, music_dir, sizeof(s_root_dir) - 1);
     s_root_dir[sizeof(s_root_dir) - 1] = '\0';

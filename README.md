@@ -35,13 +35,24 @@ Este projeto preza pela honestidade técnica e relata com clareza o estado real 
 * **Leitura Rápida do Cartão SD (SDMMC 4-Bit 40 MHz)**: Barramento nativo de 4 vias a 40 MHz, permitindo navegar ágil pelas pastas e carregar arquivos pesados sem esvaziamento de buffer.
 * **Equalizador Paramétrico de 10 Bandas**: Filtros IIR biquad com ganho configurável de -12 dB a +12 dB. Possui **bypass automático inteligente acima de 48 kHz** para não introduzir distorções de fase nem sobrecarregar o processamento em faixas Hi-Res de 96 kHz.
 * **Interface Monocromática Fluida no OLED SSD1306**: Navegação intuitiva com joystick de 5 direções, menus em carrossel, visualização da biblioteca por pastas e arquivos, além da tela "Now Playing" com dados da faixa, formato, taxa de amostragem, profundidade de bits e tempo decorrido.
-* **Persistência de Estado (NVS)**: Grava e recupera automaticamente a última música tocada, o ponto exato onde a reprodução foi pausada, o volume atual e a preferência de codec.
-* **Gerenciador de Músicas via Wi-Fi (`mps3.local`)**: Ao ativar o modo Wi-Fi, o mps3 cria um servidor web acessível na rede local para upload de álbuns e faixas diretamente pelo navegador, dispensando a remoção física do cartão.
+* **Persistência de Estado (NVS)**: Grava e recupera automaticamente a última música tocada, o ponto exato onde a reprodução foi pausada, o volume atual, a preferência de codec e o modo de ordenação das faixas.
+* **Ordenação Flexível de Faixas (Nome A-Z vs Data / Tracklist Original)**: Configurado diretamente no menu **"Conf" (Opção 6 — "Ordenar")**. Permite alternar instantaneamente entre a ordem alfabética clássica e a ordem por data de modificação (`mtime` do cartão SD), preservando a sequência original de faixas das gravações/álbuns. A preferência é gravada na NVS e a pasta ativa é reordenada imediatamente.
+* **Gerenciador de Músicas via Wi-Fi (`mps3.local`)**: Ao ativar o modo Wi-Fi, o mps3 cria um servidor web acessível na rede local para gerenciamento e upload de álbuns e faixas diretamente pelo navegador:
+  * **Explorador de Arquivos Web Completo**: Navegação multinível por subpastas dentro do modal "Mover para...", permitindo organizar a biblioteca sem remover o cartão.
+  * **Proteção contra Movimentação Circular**: Validação no front-end e no back-end (`/api/move` e `/api/rename`) impedindo mover uma pasta para dentro de si mesma ou de suas subpastas, garantindo a integridade da tabela FatFS.
+  * **Invalidação Inteligente de Cache**: O cache do navegador é atualizado imediatamente após qualquer operação de criação, renomeação, exclusão ou movimentação de pastas/arquivos.
 * **Controle de Volume Bidirecional (AVRCP)**: Modificar o volume no joystick do mps3 atualiza o volume no fone, e os botões físicos do próprio fone também refletem instantaneamente no mps3 via UART.
 * **Modos USB Exclusivos (TinyUSB Device)**: Chaveamento limpo e isolado de perfis USB sem sobreposição de descritores:
+  * **Detecção Automática e Menu de Seleção (Estilo Android)**: Ao conectar o cabo na porta USB de dados (GPIO 19/20), o mps3 detecta o evento de conexão e abre instantaneamente um menu interativo no OLED:
+    1. **Flash (CDC / Debug)**: Para gravação de firmware e logs seriais.
+    2. **DAC (Placa de som USB)**: Placa de som estéreo UAC2 24-bit.
+    3. **Armazenamento (MSC)**: Montagem do cartão MicroSD como unidade externa no PC.
+    4. **Nada a fazer**: Fecha o prompt e permanece no player de áudio normalmente.
+    *Inclui timeout automático de 15 segundos para fechar o diálogo sem interromper a música caso nenhuma tecla seja pressionada.*
   * **Modo Flash / CDC (`0x4000`)**: Console CDC com interceptação DTR/RTS e 1200 bps touch para reboot automático no bootloader ROM da Espressif (flashing sem pressionar botões).
   * **Modo DAC USB / UAC2 (`0x4004`)**: Placa de som USB estéreo de alta fidelidade (UAC2 24-bit em subslots de 32 bits, taxas de 44.1 kHz e 48 kHz):
     * **Interface Visual Refinada no OLED**: Badge estilizado `[USB DAC]`, indicação de resolução (`44.1k / 24b` ou `48k / 24b`), indicador gráfico de streaming (`● STREAMING ATIVO` / `○ AGUARDANDO USB...`), preset ativo do equalizador e barra de volume de alta resolução.
+    * **Resistência à Suspensão Seletiva (Selective Suspend)**: Suporte a ciclos de economia de energia do driver de áudio do sistema operacional sem desconectar ou fechar a tela do DAC.
     * **Controle de Volume Integrado**: Joystick Cima/Baixo (`JOY_UP` / `JOY_DOWN`) com repeat contínuo para ajuste suave de volume e ganho padrão de linha sem distorção (0 dBFS em 100%).
     * **Acesso Imediato ao Equalizador**: Joystick para a Direita (`JOY_RIGHT`) abre diretamente o menu de Presets do Equalizador de 10 bandas em tempo real durante a reprodução do computador. Joystick para a Esquerda (`JOY_LEFT`) retorna instantaneamente ao DAC; segurar Esquerda retorna ao player de músicas.
   * **Modo Armazenamento / MSC (`0x4002`)**: Montagem do cartão SD como drive USB no Windows/Linux via SDMMC de 4 vias (buffer de 8 KB com DWC2 double-buffering).
@@ -158,6 +169,12 @@ O projeto adota o **ESP-IDF v6.0.1 puro** como *Single Source of Truth* para com
 | **Joystick de 5 Vias** | Botões de navegação | **UP: GPIO 2** \| **LEFT: GPIO 39** \| **DOWN: GPIO 41** \| **RIGHT: GPIO 42** \| **CENTER: GPIO 40** |
 | **Monitor de Bateria & TP4056** | Divisor Li-Ion + status TP4056 | **ADC: GPIO 1** (Tensão Li-Ion) \| **CHRG: GPIO 11** (LED Carregando) |
 | **LED RGB WS2812** | Feedback visual on-board | **DIN: GPIO 38** |
+| **Porta USB Dados & Debug** | Conexão OTG Nativa ESP32-S3 (CDC / DAC / MSC) | **D-: GPIO 19** \| **D+: GPIO 20** |
+| **Porta USB Carga Bateria** | Alimentação independente do carregador TP4056 | Sem conexão de dados com a MCU (Apenas VBUS/GND ao TP4056) |
+
+> ℹ️ **Arquitetura de Portas USB**: O mps3 conta com **duas portas USB físicas distintas**:
+> 1. **Porta de Carga**: Conectada exclusivamente ao módulo carregador de bateria de lítio TP4056. Utilizada apenas para carregar o dispositivo com segurança.
+> 2. **Porta de Dados e Debug**: Conectada diretamente ao hardware USB OTG nativo do ESP32-S3 (GPIOs 19 e 20). É esta porta que executa a gravação de firmware, o console serial de debug, o DAC USB (UAC2) e o Mass Storage (MSC), disparando a seleção automática no display ao ser plugada.
 
 ---
 

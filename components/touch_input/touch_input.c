@@ -572,7 +572,13 @@ static void touch_task(void *arg)
                         oled_display_show_message("Entrando em modo", "FLASH / GRAVACAO");
                         vTaskDelay(pdMS_TO_TICKS(400));
                         usb_manager_enter_bootloader();
+                    } else if (s_list_cursor == 3) {
+                        touch_input_cancel_usb();
                     }
+
+                } else if (s_mode == UI_MODE_SORT) {
+                    track_sort_mode_t cur = audio_player_get_sort_mode();
+                    audio_player_set_sort_mode(cur == SORT_MODE_NAME ? SORT_MODE_DATE : SORT_MODE_NAME);
 
                 } else if (s_mode == UI_MODE_TOP_SCREEN) {
                     if (s_top_cursor == 1) {
@@ -695,9 +701,12 @@ static void touch_task(void *arg)
                 switch (i) {
                                         case JOY_UP:
                         if (s_mode == UI_MODE_USB_PROMPT && pressed_edge) {
-                            s_list_cursor = (s_list_cursor == 0) ? 2 : (s_list_cursor - 1);
+                            s_list_cursor = (s_list_cursor == 0) ? 3 : (s_list_cursor - 1);
                         } else if (s_mode == UI_MODE_CONF_MENU && pressed_edge) {
-                            s_list_cursor = (s_list_cursor == 0) ? 4 : (s_list_cursor - 1);
+                            s_list_cursor = (s_list_cursor == 0) ? 5 : (s_list_cursor - 1);
+                        } else if (s_mode == UI_MODE_SORT && pressed_edge) {
+                            track_sort_mode_t cur = audio_player_get_sort_mode();
+                            audio_player_set_sort_mode(cur == SORT_MODE_NAME ? SORT_MODE_DATE : SORT_MODE_NAME);
                         } else if (s_mode == UI_MODE_BALANCE && pressed_edge) {
                             s_mode = UI_MODE_CONF_MENU;
                         } else if (s_mode == UI_MODE_LED && pressed_edge) {
@@ -738,9 +747,12 @@ static void touch_task(void *arg)
                         break;
                     case JOY_DOWN:
                         if (s_mode == UI_MODE_USB_PROMPT && pressed_edge) {
-                            s_list_cursor = (s_list_cursor + 1) % 3;
+                            s_list_cursor = (s_list_cursor + 1) % 4;
                         } else if (s_mode == UI_MODE_CONF_MENU && pressed_edge) {
-                            s_list_cursor = (s_list_cursor + 1) % 5;
+                            s_list_cursor = (s_list_cursor + 1) % 6;
+                        } else if (s_mode == UI_MODE_SORT && pressed_edge) {
+                            track_sort_mode_t cur = audio_player_get_sort_mode();
+                            audio_player_set_sort_mode(cur == SORT_MODE_NAME ? SORT_MODE_DATE : SORT_MODE_NAME);
                         } else if (s_mode == UI_MODE_BALANCE && pressed_edge) {
                             s_mode = UI_MODE_CONF_MENU;
                         } else if (s_mode == UI_MODE_LED && pressed_edge) {
@@ -791,6 +803,8 @@ static void touch_task(void *arg)
                             touch_input_cancel_usb();
                         } else if (s_mode == UI_MODE_CONF_MENU && pressed_edge) {
                             s_mode = UI_MODE_LIST;
+                        } else if (s_mode == UI_MODE_SORT && pressed_edge) {
+                            s_mode = UI_MODE_CONF_MENU;
                         } else if (s_mode == UI_MODE_TELA && pressed_edge) {
                             if (s_tela_cursor == 0) {
                                 int next_idx = 0;
@@ -859,7 +873,12 @@ static void touch_task(void *arg)
                             } else if (s_list_cursor == 4) {
                                 s_mode = UI_MODE_TELA;
                                 s_tela_cursor = 0;
+                            } else if (s_list_cursor == 5) {
+                                s_mode = UI_MODE_SORT;
                             }
+                        } else if (s_mode == UI_MODE_SORT && pressed_edge) {
+                            track_sort_mode_t cur = audio_player_get_sort_mode();
+                            audio_player_set_sort_mode(cur == SORT_MODE_NAME ? SORT_MODE_DATE : SORT_MODE_NAME);
                         } else if (s_mode == UI_MODE_BALANCE) {
                             audio_player_adjust_balance(+1);
                         } else if (s_mode == UI_MODE_TELA && pressed_edge) {
@@ -1043,9 +1062,6 @@ esp_err_t touch_input_start(void)
 
 void touch_input_set_usb_prompt(void) {
     if (s_mode != UI_MODE_USB_PROMPT && s_mode != UI_MODE_USB_DAC && s_mode != UI_MODE_USB_MSC) {
-        // Libera imediatamente todos os arquivos abertos no SD e coloca player_task em espera passiva
-        audio_player_release_sd_for_usb();
-        i2s_output_disable();
         s_mode = UI_MODE_USB_PROMPT;
         s_list_cursor = 0; // default pra pendrive
     }

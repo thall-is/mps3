@@ -16,6 +16,7 @@
 #include "class/hid/hid_device.h"
 #include "soc/rtc_cntl_reg.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "tinyusb_cdc_acm.h"
 #include <math.h>
 #include <string.h>
@@ -80,8 +81,12 @@ static void tinyusb_event_callback(tinyusb_event_t *event, void *arg)
 {
     switch (event->id) {
     case TINYUSB_EVENT_ATTACHED:
-        ESP_LOGI(TAG, "Cabo USB Conectado!");
+        ESP_LOGI(TAG, "Cabo USB Conectado ao PC!");
         s_connected = true;
+        if (s_current_mode == USB_MODE_NONE) {
+            ESP_LOGI(TAG, "Exibindo tela de selecao de modo USB");
+            touch_input_set_usb_prompt();
+        }
         break;
 
     case TINYUSB_EVENT_DETACHED:
@@ -98,6 +103,18 @@ static void tinyusb_event_callback(tinyusb_event_t *event, void *arg)
     default:
         break;
     }
+}
+
+// Callbacks de gerenciamento de energia USB (Selective Suspend do Windows/Host)
+void tud_suspend_cb(bool remote_wakeup_en)
+{
+    (void)remote_wakeup_en;
+    ESP_LOGD(TAG, "USB Suspend (idle do Host)");
+}
+
+void tud_resume_cb(void)
+{
+    ESP_LOGD(TAG, "USB Resume (Host ativo)");
 }
 
 // -----------------------------------------------------------------------------

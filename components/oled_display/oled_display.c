@@ -1599,6 +1599,12 @@ void oled_display_show_usb_prompt(int cursor)
     u8g2_SetDrawColor(&s_u8g2, cursor == 2 ? 0 : 1);
     u8g2_DrawStr(&s_u8g2, 4, 45, "3. Gravar Firmware (Flash)");
 
+    // Opcao 3: Nada a fazer
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    if (cursor == 3) u8g2_DrawBox(&s_u8g2, 2, 57-7, 124, 9);
+    u8g2_SetDrawColor(&s_u8g2, cursor == 3 ? 0 : 1);
+    u8g2_DrawStr(&s_u8g2, 4, 57, "4. Nada a fazer");
+
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);
 }
@@ -2264,6 +2270,47 @@ void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int gr
         u8g2_DrawStr(&s_u8g2, 86, 48, "OK ->");
     }
     
+    apply_brightness_if_needed();
+    u8g2_SendBuffer(&s_u8g2);
+}
+
+void oled_display_show_sort_mode(int mode)
+{
+    if (!s_ready) return;
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont12_tr);
+
+    // Titulo
+    u8g2_DrawStr(&s_u8g2, 18, 10, "ORDENAR FAIXAS");
+    u8g2_DrawLine(&s_u8g2, 0, 13, 127, 13);
+
+    // Opcao 0: Nome A-Z
+    bool is_name = (mode == 0);
+    if (is_name) {
+        u8g2_DrawBox(&s_u8g2, 4, 18, 120, 15);
+        u8g2_SetDrawColor(&s_u8g2, 0);
+    } else {
+        u8g2_DrawFrame(&s_u8g2, 4, 18, 120, 15);
+        u8g2_SetDrawColor(&s_u8g2, 1);
+    }
+    u8g2_DrawStr(&s_u8g2, 10, 29, "Nome (A -> Z)");
+
+    // Opcao 1: Data de Modificacao
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    if (!is_name) {
+        u8g2_DrawBox(&s_u8g2, 4, 36, 120, 15);
+        u8g2_SetDrawColor(&s_u8g2, 0);
+    } else {
+        u8g2_DrawFrame(&s_u8g2, 4, 36, 120, 15);
+        u8g2_SetDrawColor(&s_u8g2, 1);
+    }
+    u8g2_DrawStr(&s_u8g2, 10, 47, "Data (Tracklist)");
+
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_SetFont(&s_u8g2, u8g2_font_tom_thumb_4x6_t_all);
+    u8g2_DrawStr(&s_u8g2, 8, 60, "JOY: Alternar | ESQ: Voltar");
+
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);
 }

@@ -143,8 +143,10 @@ static void display_task(void *arg)
                 oled_display_show_list(names, count, touch_input_get_list_cursor(), &state);
             }
                 } else if (touch_input_get_mode() == UI_MODE_CONF_MENU) {
-            const char* conf_items[] = {"Volume", "Balanco L/R", "Equalizador", "LED RGB", "Tela"};
-            oled_display_show_list(conf_items, 5, touch_input_get_list_cursor(), &state);
+            const char* conf_items[] = {"Volume", "Balanco L/R", "Equalizador", "LED RGB", "Tela", "Ordenar"};
+            oled_display_show_list(conf_items, 6, touch_input_get_list_cursor(), &state);
+        } else if (touch_input_get_mode() == UI_MODE_SORT) {
+            oled_display_show_sort_mode((int)audio_player_get_sort_mode());
         } else if (touch_input_get_mode() == UI_MODE_BALANCE) {
             oled_display_show_balance(audio_player_get_balance());
         } else if (touch_input_get_mode() == UI_MODE_TELA) {

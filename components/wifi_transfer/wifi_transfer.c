@@ -1388,6 +1388,15 @@ static esp_err_t api_rename_post_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
+    // Proteção: não permitir mover/renomear item para dentro dele mesmo ou subpasta dele
+    size_t old_len = strlen(old_abs);
+    if (strncmp(old_abs, new_abs, old_len) == 0 &&
+        (new_abs[old_len] == '/' || new_abs[old_len] == '\0')) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_send(req, "{\"error\":\"destino nao pode ser o proprio item ou uma subpasta dele\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
     mkdir_p_for_file(new_abs);
     if (rename(old_abs, new_abs) != 0) {
         httpd_resp_set_status(req, "500 Internal Server Error");
