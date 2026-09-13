@@ -19,6 +19,8 @@ managed_components/
 *.dll
 *.so
 *.dylib
+versionamento/binarios/**/*.bin
+versionamento/binarios/**/*.json
 
 # Temporary & Test Artifacts
 *.tmp
