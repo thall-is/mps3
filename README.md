@@ -40,7 +40,10 @@ Este projeto preza pela honestidade técnica e relata com clareza o estado real 
 * **Controle de Volume Bidirecional (AVRCP)**: Modificar o volume no joystick do mps3 atualiza o volume no fone, e os botões físicos do próprio fone também refletem instantaneamente no mps3 via UART.
 * **Modos USB Exclusivos (TinyUSB Device)**: Chaveamento limpo e isolado de perfis USB sem sobreposição de descritores:
   * **Modo Flash / CDC (`0x4000`)**: Console CDC com interceptação DTR/RTS e 1200 bps touch para reboot automático no bootloader ROM da Espressif (flashing sem pressionar botões).
-  * **Modo DAC USB / UAC2 (`0x4001`)**: Placa de som USB estéreo de alta resolução assíncrona (48 kHz / 16-bit com EQ de 10 bandas, balanço L/R e controle multimídia HID).
+  * **Modo DAC USB / UAC2 (`0x4004`)**: Placa de som USB estéreo de alta fidelidade (UAC2 24-bit em subslots de 32 bits, taxas de 44.1 kHz e 48 kHz):
+    * **Interface Visual Refinada no OLED**: Badge estilizado `[USB DAC]`, indicação de resolução (`44.1k / 24b` ou `48k / 24b`), indicador gráfico de streaming (`● STREAMING ATIVO` / `○ AGUARDANDO USB...`), preset ativo do equalizador e barra de volume de alta resolução.
+    * **Controle de Volume Integrado**: Joystick Cima/Baixo (`JOY_UP` / `JOY_DOWN`) com repeat contínuo para ajuste suave de volume e ganho padrão de linha sem distorção (0 dBFS em 100%).
+    * **Acesso Imediato ao Equalizador**: Joystick para a Direita (`JOY_RIGHT`) abre diretamente o menu de Presets do Equalizador de 10 bandas em tempo real durante a reprodução do computador. Joystick para a Esquerda (`JOY_LEFT`) retorna instantaneamente ao DAC; segurar Esquerda retorna ao player de músicas.
   * **Modo Armazenamento / MSC (`0x4002`)**: Montagem do cartão SD como drive USB no Windows/Linux via SDMMC de 4 vias (buffer de 8 KB com DWC2 double-buffering).
 
 ### 💾 Desempenho USB Mass Storage (MSC) e Limitações

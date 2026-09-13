@@ -17,12 +17,34 @@
 #include "soc/rtc_cntl_reg.h"
 #include "esp_system.h"
 #include "tinyusb_cdc_acm.h"
+#include <math.h>
+#include <string.h>
 
 static const char *TAG = "usb_manager";
 static volatile usb_mode_t s_current_mode = USB_MODE_NONE;
 static volatile bool s_connected = false;
 static volatile bool s_switching_mode = false;
 static tinyusb_msc_storage_handle_t s_msc_handle = NULL;
+static uint32_t s_sample_rate = 48000;
+static int16_t s_volume[3] = { 0, 0, 0 }; // master, ch1, ch2 (0 dB em 1/256 dB)
+static uint8_t s_mute[3] = { 0, 0, 0 };
+static volatile uint32_t s_usb_pkt_count = 0;
+static volatile int32_t s_usb_last_sample = 0;
+
+uint32_t usb_manager_get_sample_rate(void)
+{
+    return s_sample_rate;
+}
+
+uint32_t usb_manager_get_pkt_count(void)
+{
+    return s_usb_pkt_count;
+}
+
+int32_t usb_manager_get_last_sample(void)
+{
+    return s_usb_last_sample;
+}
 
 // Forca reboot imediato no modo de download (ROM bootloader para gravacao via esptool)
 void usb_manager_enter_bootloader(void)
@@ -87,8 +109,8 @@ static TaskHandle_t s_audio_task_handle = NULL;
 // -----------------------------------------------------------------------------
 static void usb_audio_task(void *arg)
 {
-    static uint8_t usb_rx_buf[512];
-    static int32_t i2s_buf[256];
+    static uint8_t usb_rx_buf[1024] __attribute__((aligned(4)));
+    static int32_t i2s_buf[512];
     uint32_t pkt_count = 0;
 
     while (1) {
@@ -101,37 +123,65 @@ static void usb_audio_task(void *arg)
             while ((read = tud_audio_read(usb_rx_buf, sizeof(usb_rx_buf))) > 0) {
                 pkt_count++;
 
-                if (pkt_count % 1000 == 0) {
-                    ESP_LOGI(TAG, "DAC Streaming ativo: %lu pacotes processados", (unsigned long)pkt_count);
+                if (pkt_count == 1 || pkt_count % 1000 == 0) {
+                    ESP_LOGI(TAG, "DAC Streaming ativo: pacote #%lu (%u bytes lidos do USB)", (unsigned long)pkt_count, (unsigned)read);
                 }
 
-                // 1. Converter 16-bit PCM (Little-Endian) para 32-bit Philips I2S (MSB)
-                size_t num_samples = read / 2;
-                if (num_samples > 256) num_samples = 256;
+                // Garante alinhamento estrito em frames estéreo de 8 bytes (4 bytes L + 4 bytes R)
+                read = read - (read % 8);
+                if (read == 0) continue;
+
+                // 1. Ler amostras nativas de 24-bit em subslot de 32 bits (alinhadas ao MSB)
+                size_t num_samples = read / 4;
+                if (num_samples > 512) num_samples = 512;
+                num_samples = num_samples - (num_samples % 2);
+
+                const int32_t *src32 = (const int32_t *)usb_rx_buf;
                 for (size_t i = 0; i < num_samples; i++) {
-                    uint8_t b0 = usb_rx_buf[i * 2 + 0];
-                    uint8_t b1 = usb_rx_buf[i * 2 + 1];
-                    int16_t s16 = (int16_t)(b0 | (b1 << 8));
-                    i2s_buf[i] = ((int32_t)s16) << 16;
+                    i2s_buf[i] = src32[i];
+                }
+                s_usb_pkt_count = pkt_count;
+                if (num_samples > 0) s_usb_last_sample = i2s_buf[0];
+
+                // 2. Aplicar Mute, Volume (DAP e UAC2 Host) e Balanco L/R
+                bool mute_L = (s_mute[0] != 0) || (s_mute[1] != 0);
+                bool mute_R = (s_mute[0] != 0) || (s_mute[2] != 0);
+                int vol = audio_player_get_volume(); // 0 a 100%
+                if (vol <= 0) {
+                    vol = 100; // Fallback de protecao no modo DAC
                 }
 
-                // 2. Aplicar Balanco L/R
-                int bal = audio_player_get_balance();
-                if (bal != 0) {
-                    int pct_L = 100;
-                    int pct_R = 100;
-                    if (bal < 0) pct_R = 100 + bal;
-                    else pct_L = 100 - bal;
-                    if (pct_L < 0) pct_L = 0;
-                    if (pct_R < 0) pct_R = 0;
-                    float gL = ((float)pct_L / 100.0f);
-                    float gR = ((float)pct_R / 100.0f);
-                    int32_t multL = (int32_t)(gL * 32768.0f);
-                    int32_t multR = (int32_t)(gR * 32768.0f);
-                    for (size_t i = 0; i < num_samples; i += 2) {
-                        i2s_buf[i]     = (int32_t)(((int64_t)i2s_buf[i]     * multL) >> 15);
-                        if (i + 1 < num_samples) {
-                            i2s_buf[i + 1] = (int32_t)(((int64_t)i2s_buf[i + 1] * multR) >> 15);
+                if (mute_L && mute_R) {
+                    memset(i2s_buf, 0, num_samples * sizeof(int32_t));
+                } else {
+                    // Ganho de volume do DAP: 0 a 100% (1.0f em 100% para nivel padrao de linha e bit-perfect)
+                    float dap_gain = (vol >= 100) ? 1.0f : powf(10.0f, (-50.0f * (1.0f - (float)vol / 100.0f)) / 20.0f);
+
+                    // Ganho UAC2 do Host USB (0 a -50 dB, s_volume em passos de 1/256 dB)
+                    int16_t uac_vol_L = (s_volume[0] < 0 ? s_volume[0] : 0) + (s_volume[1] < 0 ? s_volume[1] : 0);
+                    int16_t uac_vol_R = (s_volume[0] < 0 ? s_volume[0] : 0) + (s_volume[2] < 0 ? s_volume[2] : 0);
+                    float uac_gain_L = (uac_vol_L <= -12800) ? 0.05f : powf(10.0f, ((float)uac_vol_L / 256.0f) / 20.0f);
+                    float uac_gain_R = (uac_vol_R <= -12800) ? 0.05f : powf(10.0f, ((float)uac_vol_R / 256.0f) / 20.0f);
+
+                    // Balanco L/R (-100 a +100)
+                    int bal = audio_player_get_balance();
+                    float bal_L = (bal > 0) ? ((float)(100 - bal) / 100.0f) : 1.0f;
+                    float bal_R = (bal < 0) ? ((float)(100 + bal) / 100.0f) : 1.0f;
+
+                    float gL = mute_L ? 0.0f : (dap_gain * uac_gain_L * bal_L);
+                    float gR = mute_R ? 0.0f : (dap_gain * uac_gain_R * bal_R);
+
+                    // Multiplica apenas se houver atenuacao para preservar fidelidade bit-perfect
+                    if (gL < 0.9999f || gR < 0.9999f) {
+                        int32_t multL = (int32_t)(gL * 32768.0f);
+                        int32_t multR = (int32_t)(gR * 32768.0f);
+                        if (multL < 0) multL = 0;
+                        if (multR < 0) multR = 0;
+                        for (size_t i = 0; i < num_samples; i += 2) {
+                            i2s_buf[i] = (int32_t)(((int64_t)i2s_buf[i] * multL) >> 15);
+                            if (i + 1 < num_samples) {
+                                i2s_buf[i + 1] = (int32_t)(((int64_t)i2s_buf[i + 1] * multR) >> 15);
+                            }
                         }
                     }
                 }
@@ -261,6 +311,7 @@ void usb_manager_set_mode(usb_mode_t mode)
         audio_player_reacquire_sd_after_usb();
     } else if (prev_mode == USB_MODE_DAC && mode != USB_MODE_DAC) {
         ESP_LOGI(TAG, "Saindo do MODO EXCLUSIVO: USB DAC. Retomando player local...");
+        tud_audio_clear_ep_out_ff();
         i2s_output_disable();
         audio_player_reacquire_sd_after_usb();
     }
@@ -330,12 +381,18 @@ void usb_manager_set_mode(usb_mode_t mode)
         ESP_LOGI(TAG, "Entrando no MODO EXCLUSIVO: USB DAC Puro (PID 0x4001 com EQ e Balanco)");
         // 1. Garante que o player_task liberou o SD e esta em espera passiva
         audio_player_release_sd_for_usb();
-        // 2. Silencia I2S antes de trocar clock
-        i2s_output_disable();
-        // 3. Reconfigura o clock I2S e EQ para 48.000 Hz
+        tud_audio_clear_ep_out_ff();
+        // 2. Reconfigura o clock I2S e EQ para 48.000 Hz
+        s_sample_rate = 48000;
         i2s_output_set_rate(48000);
         i2s_output_enable();
         eq_set_sample_rate(48000);
+
+        // 3. Toca bipe duplo de 880 Hz no PCM5102A para confirmar fone e DAC 100% audiveis
+        ESP_LOGI(TAG, "Tocando bipe duplo de 880 Hz no PCM5102A...");
+        i2s_output_play_test_tone(880, 150);
+        vTaskDelay(pdMS_TO_TICKS(50));
+        i2s_output_play_test_tone(880, 150);
 
         // 4. Configura descritores de DAC Puro + HID (sem MSC, sem CDC)
         const tinyusb_desc_config_t dac_desc_cfg = {
@@ -364,9 +421,6 @@ bool usb_manager_is_connected(void)
 // -----------------------------------------------------------------------------
 // AUDIO CLASS CALLBACKS & ENTITY REQUESTS (UAC2)
 // -----------------------------------------------------------------------------
-static uint32_t s_sample_rate = 48000;
-static int16_t s_volume[3] = { 0, 0, 0 }; // master, ch1, ch2 (0 dB)
-static uint8_t s_mute[3] = { 0, 0, 0 };
 
 bool tud_audio_rx_done_isr(uint8_t rhport, uint16_t n_bytes_received, uint8_t func_id, uint8_t ep_out, uint8_t cur_alt_setting)
 {
@@ -379,14 +433,16 @@ bool tud_audio_rx_done_isr(uint8_t rhport, uint16_t n_bytes_received, uint8_t fu
     return true;
 }
 
+#if CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP
 void tud_audio_feedback_params_cb(uint8_t func_id, uint8_t alt_itf, audio_feedback_params_t *feedback_param)
 {
     (void)func_id;
     (void)alt_itf;
     feedback_param->method = AUDIO_FEEDBACK_METHOD_FIFO_COUNT;
     feedback_param->sample_freq = s_sample_rate;
-    feedback_param->fifo_count.fifo_threshold = 384; // 2 ms de áudio stereo 16-bit 48kHz
+    feedback_param->fifo_count.fifo_threshold = (s_sample_rate * 2 * 4 / 1000) * 2;
 }
+#endif
 
 bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_request)
 {
@@ -415,12 +471,11 @@ bool tud_audio_get_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
                 audio20_control_cur_4_t curf = { .bCur = (int32_t)tu_htole32(s_sample_rate) };
                 return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &curf, sizeof(curf));
             } else if (p_request->bRequest == AUDIO20_CS_REQ_RANGE) {
-                audio20_control_range_4_n_t(1) rangef = {
-                    .wNumSubRanges = tu_htole16(1),
-                    .subrange[0] = {
-                        .bMin = (int32_t)tu_htole32(48000),
-                        .bMax = (int32_t)tu_htole32(48000),
-                        .bRes = 0
+                audio20_control_range_4_n_t(2) rangef = {
+                    .wNumSubRanges = tu_htole16(2),
+                    .subrange = {
+                        { .bMin = (int32_t)tu_htole32(44100), .bMax = (int32_t)tu_htole32(44100), .bRes = 0 },
+                        { .bMin = (int32_t)tu_htole32(48000), .bMax = (int32_t)tu_htole32(48000), .bRes = 0 },
                     }
                 };
                 return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &rangef, sizeof(rangef));
@@ -465,9 +520,17 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
     if (p_request->bRequest == AUDIO20_CS_REQ_CUR) {
         if (entity_id == UAC2_ENTITY_CLOCK && ctrl_sel == AUDIO20_CS_CTRL_SAM_FREQ) {
             audio20_control_cur_4_t const *cur = (audio20_control_cur_4_t const *)buf;
-            s_sample_rate = (uint32_t)cur->bCur;
-            ESP_LOGI(TAG, "UAC2 Set Sample Rate: %lu Hz", s_sample_rate);
-            return true;
+            uint32_t new_rate = (uint32_t)tu_le32toh(cur->bCur);
+            if (new_rate == 44100 || new_rate == 48000) {
+                s_sample_rate = new_rate;
+                ESP_LOGI(TAG, "UAC2 Set Sample Rate: %lu Hz", (unsigned long)s_sample_rate);
+                i2s_output_set_rate(new_rate);
+                eq_set_sample_rate(new_rate);
+                return true;
+            } else {
+                ESP_LOGW(TAG, "UAC2 Taxa de amostragem nao suportada: %lu Hz", (unsigned long)new_rate);
+                return false;
+            }
         } else if (entity_id == UAC2_ENTITY_FEATURE_UNIT) {
             if (ctrl_sel == AUDIO20_FU_CTRL_MUTE) {
                 uint8_t ch_idx = (ch < 3) ? ch : 0;

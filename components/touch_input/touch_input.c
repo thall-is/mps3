@@ -730,8 +730,8 @@ static void touch_task(void *arg)
                             float max_db = (s_eq_band < 10) ? 15.0f : 30.0f;
                             if (*gain_ptr > max_db) *gain_ptr = max_db;
                             audio_player_set_eq_config(&cfg);
-                        } else if (s_mode == UI_MODE_USB_DAC && pressed_edge) {
-                            usb_manager_send_hid(3); // VolUp
+                        } else if (s_mode == UI_MODE_USB_DAC) {
+                            audio_player_adjust_volume(VOLUME_STEP_PERCENT);
                         } else if (s_mode == UI_MODE_LIST) {
                             joy_move_cursor(-1, pressed_edge);
                         }
@@ -780,8 +780,8 @@ static void touch_task(void *arg)
                                 ESP_LOGI(TAG, "Voltando para a lista (JOY_DOWN)");
                                 s_mode = UI_MODE_LIST;
                             }
-                        } else if (s_mode == UI_MODE_USB_DAC && pressed_edge) {
-                            usb_manager_send_hid(4); // VolDown
+                        } else if (s_mode == UI_MODE_USB_DAC) {
+                            audio_player_adjust_volume(-VOLUME_STEP_PERCENT);
                         } else if (s_mode == UI_MODE_LIST) {
                             joy_move_cursor(+1, pressed_edge);
                         }
@@ -913,7 +913,12 @@ static void touch_task(void *arg)
                         } else if (s_mode == UI_MODE_PLAYING) {
                             joy_seek_hold_pulse(+1, now, now - joy_press_ms[i], pressed_edge);
                         } else if (s_mode == UI_MODE_USB_DAC && pressed_edge) {
-                            usb_manager_send_hid(1); // Next
+                            s_prev_mode_before_eq = UI_MODE_USB_DAC;
+                            player_eq_config_t cfg;
+                            audio_player_get_eq_config(&cfg);
+                            s_eq_preset_cursor = cfg.active_preset_idx;
+                            s_mode = UI_MODE_EQ_PRESETS;
+                            ESP_LOGI(TAG, "Entrando no EQ a partir do USB DAC (JOY_RIGHT)");
                         } else if (s_mode == UI_MODE_LIST && pressed_edge) {
                             ESP_LOGI(TAG, "JOY_RIGHT pressionado");
                             joy_select();

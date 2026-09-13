@@ -81,28 +81,27 @@ esp_err_t i2s_output_init(void)
 esp_err_t i2s_output_set_rate(uint32_t sample_rate)
 {
     if (sample_rate == s_current_rate) {
+        if (!s_channel_enabled) {
+            esp_err_t en_ret = i2s_channel_enable(s_tx_handle);
+            if (en_ret == ESP_OK) s_channel_enabled = true;
+            return en_ret;
+        }
         return ESP_OK;
     }
 
-    esp_err_t ret = i2s_channel_disable(s_tx_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao desabilitar canal I2S: %s", esp_err_to_name(ret));
-        return ret;
+    if (s_channel_enabled) {
+        esp_err_t ret = i2s_channel_disable(s_tx_handle);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Falha ao desabilitar canal I2S: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        s_channel_enabled = false;
     }
-    // A partir daqui o canal esta' de fato desabilitado no hardware -
-    // s_channel_enabled so' pode voltar a "true" se a gente realmente
-    // conseguir reabilita-lo mais abaixo (senao audio_player fica
-    // escrevendo silenciosamente num canal mudo, sem erro visivel).
-    s_channel_enabled = false;
 
     i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
-    ret = i2s_channel_reconfig_std_clock(s_tx_handle, &clk_cfg);
+    esp_err_t ret = i2s_channel_reconfig_std_clock(s_tx_handle, &clk_cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Falha ao reconfigurar clock I2S: %s", esp_err_to_name(ret));
-        // Tenta religar o canal na taxa antiga em vez de deixar o audio
-        // mudo ate' a proxima troca de taxa - best effort, se isso
-        // tambem falhar s_channel_enabled fica false (estado real) e o
-        // erro original e' o que retorna pro chamador.
         esp_err_t re_ret = i2s_channel_enable(s_tx_handle);
         if (re_ret == ESP_OK) s_channel_enabled = true;
         return ret;
@@ -211,7 +210,7 @@ void i2s_output_play_test_tone(uint32_t freq_hz, uint32_t duration_ms)
     while (frames_sent < total_frames) {
         size_t count = (total_frames - frames_sent < chunk_frames) ? (total_frames - frames_sent) : chunk_frames;
         for (size_t i = 0; i < count; i++) {
-            int16_t val = (int16_t)(sin(phase) * 16000.0);
+            int16_t val = (int16_t)(sin(phase) * 28000.0);
             int32_t s32 = ((int32_t)val) << 16;
             buf[2 * i]     = s32;
             buf[2 * i + 1] = s32;

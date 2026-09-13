@@ -32,6 +32,13 @@ void usb_manager_send_hid(int command);
 // Forca reboot imediato no modo de gravacao (Download Bootloader da ROM)
 void usb_manager_enter_bootloader(void);
 
+// Retorna a taxa de amostragem ativa negociada via UAC2
+uint32_t usb_manager_get_sample_rate(void);
+
+// Telemetria de streaming do DAC de mesa
+uint32_t usb_manager_get_pkt_count(void);
+int32_t  usb_manager_get_last_sample(void);
+
 #ifdef __cplusplus
 }
 #endif

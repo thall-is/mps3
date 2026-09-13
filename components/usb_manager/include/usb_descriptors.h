@@ -29,6 +29,7 @@
 // Todos os CFG_TUD_AUDIO_* estao definidos globalmente no CMakeLists.txt raiz
 
 #include "tusb.h"
+#include "uac2_speaker_fb_desc.h"
 
 // Descriptors for Pure CDC Mode (PID 0x4000) - Serial / Auto-Flash
 extern const tusb_desc_device_t desc_device_cdc;

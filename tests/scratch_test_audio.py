@@ -72,7 +72,8 @@ wfx.cbSize = 0
 h_waveout = wintypes.HANDLE()
 res = winmm.waveOutOpen(ctypes.byref(h_waveout), mps3_id, ctypes.byref(wfx), 0, 0, 0)
 if res != 0:
-    print(f"waveOutOpen failed: {res}")
+    err_names = {1: "MMSYSERR_ERROR", 2: "MMSYSERR_BADDEVICEID", 4: "MMSYSERR_ALLOCATED", 7: "MMSYSERR_NOMEM", 11: "MMSYSERR_INVALFLAG", 32: "WAVERR_BADFORMAT (AUDCLNT_E_UNSUPPORTED_FORMAT)"}
+    print(f"waveOutOpen failed: {res} ({err_names.get(res, 'UNKNOWN')})")
     exit(1)
 
 # Generate 2 seconds of 440Hz sine wave

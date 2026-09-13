@@ -62,6 +62,7 @@ static void display_task(void *arg)
     }
 
     static bool s_was_sleeping = false;
+    static ui_mode_t s_last_rendered_ui_mode = (ui_mode_t)-1;
 
     while (true) {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
@@ -81,6 +82,10 @@ static void display_task(void *arg)
             oled_display_set_power_save(false);
             s_was_sleeping = false;
         }
+
+        ui_mode_t cur_ui_mode = touch_input_get_mode();
+        bool ui_mode_changed = (cur_ui_mode != s_last_rendered_ui_mode);
+        s_last_rendered_ui_mode = cur_ui_mode;
 
         audio_player_get_state(&state);
 
@@ -178,6 +183,7 @@ static void display_task(void *arg)
             oled_display_show_usb_prompt(touch_input_get_list_cursor());
         } else if (touch_input_get_mode() == UI_MODE_USB_MSC) {
             static int s_msc_state = -1;
+            if (ui_mode_changed) s_msc_state = -1;
             if (s_msc_state != 1) {
                 oled_display_show_usb_msc();
                 s_msc_state = 1;
@@ -187,16 +193,35 @@ static void display_task(void *arg)
         } else if (touch_input_get_mode() == UI_MODE_USB_DAC) {
             static int s_last_dac_vol = -1;
             static int s_last_dac_bal = -999;
+            static uint32_t s_last_dac_rate = 0;
+            static uint32_t s_last_dac_pkts = 999999;
+            static int s_last_dac_eq_preset = -1;
+            static bool s_last_dac_eq_en = false;
             static int s_dac_state = -1;
+            if (ui_mode_changed) s_dac_state = -1;
+
             int cur_vol = audio_player_get_volume();
             int cur_bal = audio_player_get_balance();
-            if (s_dac_state != 1 || cur_vol != s_last_dac_vol || cur_bal != s_last_dac_bal) {
+            uint32_t cur_rate = usb_manager_get_sample_rate();
+            uint32_t cur_pkts = usb_manager_get_pkt_count();
+
+            player_eq_config_t eq_cfg;
+            audio_player_get_eq_config(&eq_cfg);
+
+            if (s_dac_state != 1 || cur_vol != s_last_dac_vol || cur_bal != s_last_dac_bal || 
+                cur_rate != s_last_dac_rate || eq_cfg.active_preset_idx != s_last_dac_eq_preset ||
+                eq_cfg.enabled != s_last_dac_eq_en ||
+                (cur_pkts != s_last_dac_pkts && (cur_pkts % 50 == 0 || s_last_dac_pkts == 999999))) {
                 s_last_dac_vol = cur_vol;
                 s_last_dac_bal = cur_bal;
+                s_last_dac_rate = cur_rate;
+                s_last_dac_pkts = cur_pkts;
+                s_last_dac_eq_preset = eq_cfg.active_preset_idx;
+                s_last_dac_eq_en = eq_cfg.enabled;
                 s_dac_state = 1;
                 oled_display_show_usb_dac();
             }
-            vTaskDelay(pdMS_TO_TICKS(200));
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         } else {
             if (!s_sd_ok) {

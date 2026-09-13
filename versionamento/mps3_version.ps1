@@ -47,6 +47,7 @@ function Get-EsptoolCmd {
 }
 
 function Invoke-FlashDir($DirToFlash, $Port) {
+    Ensure-IdfEnv
     if (-not $Port) { $Port = $DefaultPort }
     if (-not (Test-Path $DirToFlash)) {
         Write-Host "[!] ERRO: Pasta $DirToFlash nao existe!" -ForegroundColor Red
@@ -69,10 +70,16 @@ function Invoke-FlashDir($DirToFlash, $Port) {
     Write-Host "  Porta:  $Port | Baud: 460800" -ForegroundColor Cyan
     Write-Host "==================================================" -ForegroundColor Cyan
 
-    $esptool = Get-EsptoolCmd
-    $cmd = "$esptool --chip esp32s3 -p $Port -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB 0x0 `"$bootloader`" 0x8000 `"$partitions`" 0x10000 `"$app`""
+    $esptool = if (Get-Command esptool.exe -ErrorAction SilentlyContinue) { "esptool.exe" } else { Get-EsptoolCmd }
+    $cmd = "$esptool --chip esp32s3 -p $Port -b 460800 --before default-reset --after hard-reset write-flash --flash-mode dio --flash-freq 80m --flash-size 16MB 0x0 `"$bootloader`" 0x8000 `"$partitions`" 0x10000 `"$app`""
     
     Invoke-Expression $cmd
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "==================================================" -ForegroundColor Red
+        Write-Host "[!] ERRO: Falha na gravacao (exit code: $LASTEXITCODE)!" -ForegroundColor Red
+        Write-Host "==================================================" -ForegroundColor Red
+        return
+    }
     Write-Host "==================================================" -ForegroundColor Green
     Write-Host "  GRAVACAO FINALIZADA COM SUCESSO!" -ForegroundColor Green
     Write-Host "==================================================" -ForegroundColor Green

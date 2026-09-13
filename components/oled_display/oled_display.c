@@ -5,6 +5,7 @@
 #include "bitmaps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "i2s_output.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1703,26 +1704,82 @@ void oled_display_show_sd_error(void) {
     u8g2_SendBuffer(&s_u8g2);
 }
 
+extern uint32_t usb_manager_get_pkt_count(void);
+
 void oled_display_show_usb_dac(void)
 {
     if (!s_ready) return;
     u8g2_ClearBuffer(&s_u8g2);
+
+    // 1. Cabecalho Superior: Badge [USB DAC] e Formato de Amostragem
     u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_DrawRBox(&s_u8g2, 0, 0, 56, 12, 2);
+    u8g2_SetDrawColor(&s_u8g2, 0);
     u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
-    u8g2_DrawStr(&s_u8g2, 15, 12, "DAC DE MESA");
+    u8g2_DrawStr(&s_u8g2, 5, 10, "USB DAC");
 
+    // Taxa e resolucao a direita
+    u8g2_SetDrawColor(&s_u8g2, 1);
     u8g2_SetFont(&s_u8g2, u8g2_font_5x8_tf);
-    u8g2_DrawStr(&s_u8g2, 4, 25, "Audio USB: 48kHz / 32b");
+    uint32_t rate = i2s_output_get_rate();
+    if (rate == 0) rate = 48000;
+    char rate_str[24];
+    if (rate == 44100) {
+        snprintf(rate_str, sizeof(rate_str), "44.1k / 24b");
+    } else {
+        snprintf(rate_str, sizeof(rate_str), "%luk / 24b", (unsigned long)(rate / 1000));
+    }
+    int rate_w = u8g2_GetStrWidth(&s_u8g2, rate_str);
+    u8g2_DrawStr(&s_u8g2, 128 - rate_w, 10, rate_str);
 
-    int bal = audio_player_get_balance();
+    // Linha divisoria superior
+    u8g2_DrawHLine(&s_u8g2, 0, 14, 128);
+
+    // 2. Status de Streaming (Linha 2, y=24)
+    uint32_t pkts = usb_manager_get_pkt_count();
+    u8g2_SetFont(&s_u8g2, u8g2_font_5x8_tf);
+    if (pkts > 0) {
+        u8g2_DrawDisc(&s_u8g2, 3, 21, 2, U8G2_DRAW_ALL); // Indicador solido
+        u8g2_DrawStr(&s_u8g2, 9, 24, "STREAMING ATIVO");
+    } else {
+        u8g2_DrawCircle(&s_u8g2, 3, 21, 2, U8G2_DRAW_ALL); // Indicador vazado
+        u8g2_DrawStr(&s_u8g2, 9, 24, "AGUARDANDO USB...");
+    }
+
+    // 3. Preset de EQ e Volume (Linha 3, y=36)
+    player_eq_config_t eq_cfg;
+    audio_player_get_eq_config(&eq_cfg);
+    char eq_str[32];
+    if (eq_cfg.enabled) {
+        snprintf(eq_str, sizeof(eq_str), "EQ: %s", eq_cfg.presets[eq_cfg.active_preset_idx].name);
+    } else {
+        snprintf(eq_str, sizeof(eq_str), "EQ: Direto/Off");
+    }
+    u8g2_DrawStr(&s_u8g2, 0, 36, eq_str);
+
     int vol = audio_player_get_volume();
-    char info_str[32];
-    snprintf(info_str, sizeof(info_str), "Vol: %d%%  Bal: %s%d", vol, (bal > 0 ? "+" : ""), bal);
-    u8g2_DrawStr(&s_u8g2, 4, 38, info_str);
+    char vol_str[16];
+    snprintf(vol_str, sizeof(vol_str), "Vol: %d%%", vol);
+    int vol_w = u8g2_GetStrWidth(&s_u8g2, vol_str);
+    u8g2_DrawStr(&s_u8g2, 128 - vol_w, 36, vol_str);
 
+    // 4. Mini barra de progresso do volume (y=41..45)
+    u8g2_DrawFrame(&s_u8g2, 0, 41, 128, 5);
+    int bar_fill = (vol * 124) / 100;
+    if (bar_fill > 124) bar_fill = 124;
+    if (bar_fill < 0) bar_fill = 0;
+    if (bar_fill > 0) {
+        u8g2_DrawBox(&s_u8g2, 2, 42, bar_fill, 3);
+    }
+
+    // Linha divisoria inferior
+    u8g2_DrawHLine(&s_u8g2, 0, 49, 128);
+
+    // 5. Guia de navegacao no rodape (y=61)
     u8g2_SetFont(&s_u8g2, u8g2_font_tom_thumb_4x6_t_all);
-    u8g2_DrawStr(&s_u8g2, 4, 52, "Processando EQ 10 Bandas");
-    u8g2_DrawStr(&s_u8g2, 4, 62, "Segure ESQUERDA p/ sair");
+    u8g2_DrawStr(&s_u8g2, 1, 58, "> DIR: Equalizador (EQ)");
+    u8g2_DrawStr(&s_u8g2, 1, 64, "CIMA/BAIXO: Vol | < Segure ESQ: Sair");
+
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);
 }
