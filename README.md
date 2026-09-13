@@ -4,7 +4,6 @@
 [![Hardware](https://img.shields.io/badge/Hardware-ESP32--S3%20%2B%20ESP32-darkblue.svg)](docs/WIRING.md)
 [![Hi-Res Audio](https://img.shields.io/badge/Hi--Res%20Audio-FLAC%2024--bit%20%2F%2096kHz%20Nativo-gold.svg)](#o-que-funciona-muito-bem)
 [![Bluetooth](https://img.shields.io/badge/Bluetooth-Sony%20LDAC%20(24b%2F96k%20%7C%20990kbps)%20%7C%20SBC-purple.svg)](#o-que-funciona-muito-bem)
-[![USB High Performance](https://img.shields.io/badge/USB%20Storage-720%20KB%2Fs%20(15.4x%20Boost)-brightgreen.svg)](#desempenho-usb-mass-storage-msc--limite-fisico)
 [![Licença](https://img.shields.io/badge/Licenca-MIT%20%2F%20Apache%202.0-green.svg)](LICENSE)
 
 O **mps3** é um player de áudio digital portátil de alta fidelidade (**Hi-Res Digital Audio Player / DAP**) de arquitetura aberta, construído em torno de **dois microcontroladores (Dual-MCU)** que trabalham em sincronia. O projeto foi projetado para entregar uma experiência sonora pura e sem perdas, reproduzindo músicas do cartão micro SD com resolução de estúdio tanto pela saída analógica cabeada (via DAC dedicado) quanto sem fio pelo Bluetooth com o codec audiófilo **Sony LDAC em 24-bit / 96 kHz** reais.
@@ -13,7 +12,7 @@ A divisão de trabalho entre dois processadores independentes evita gargalos de 
 
 1. **Placa Principal (ESP32-S3 N16R8)**:
    Gerencia a leitura do cartão micro SD em alta velocidade (SDMMC 4 vias a 40 MHz), decodifica arquivos Hi-Res (**FLAC 24-bit / 96 kHz nativo**, MP3, WAV, AAC, M4A, OGG), processa a equalização paramétrica de 10 bandas, comanda a interface visual no display OLED com joystick de 5 direções e transmite o áudio digital PCM nativo (até 24-bit / 96 kHz) via barramento I2S tanto para o conversor DAC local quanto para o módulo Bluetooth.
-   Conta também com subsistema **USB TinyUSB nativo** em modos exclusivos (Serial CDC, USB DAC UAC2 e USB Mass Storage otimizado).
+   Conta também com subsistema **USB TinyUSB nativo** em modos exclusivos (Serial CDC, USB DAC UAC2 e USB Mass Storage).
 
 2. **Co-Processador de Bluetooth (`bt_companion` — ESP32 Clássico)**:
    Dedicado exclusivamente ao rádio sem fio. Recebe o áudio PCM digital vindo do S3 via I2S, processa a codificação em tempo real com **Sony LDAC 24-bit / 96 kHz** (com taxa dinâmica adaptativa entre 330 e 990 kbps) ou **SBC** de alta qualidade, além de sincronizar o volume absoluto do fone via AVRCP.
@@ -42,21 +41,16 @@ Este projeto preza pela honestidade técnica e relata com clareza o estado real 
 * **Modos USB Exclusivos (TinyUSB Device)**: Chaveamento limpo e isolado de perfis USB sem sobreposição de descritores:
   * **Modo Flash / CDC (`0x4000`)**: Console CDC com interceptação DTR/RTS e 1200 bps touch para reboot automático no bootloader ROM da Espressif (flashing sem pressionar botões).
   * **Modo DAC USB / UAC2 (`0x4001`)**: Placa de som USB estéreo de alta resolução assíncrona (48 kHz / 16-bit com EQ de 10 bandas, balanço L/R e controle multimídia HID).
-  * **Modo Armazenamento / MSC (`0x4002`)**: Montagem do cartão SD como drive USB no Windows/Linux via SDMMC de 4 vias, otimizado com buffers expandidos de 8 KB e DWC2 double-buffering.
+  * **Modo Armazenamento / MSC (`0x4002`)**: Montagem do cartão SD como drive USB no Windows/Linux via SDMMC de 4 vias (buffer de 8 KB com DWC2 double-buffering).
 
-### ⚡ Desempenho USB Mass Storage (MSC) & Limite Físico
+### 💾 Desempenho USB Mass Storage (MSC) e Limitações
 
-Medições reais realizadas na unidade montada via chamadas diretas de baixo nível da Win32 API (`FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH`) através de [`tests/benchmark_msc.py`](tests/benchmark_msc.py), eliminando qualquer interferência do cache de RAM do Windows:
+A PHY USB interna do ESP32-S3 é restrita ao padrão **USB 2.0 Full-Speed (12 Mbps nominal)**. Por esse motivo, as taxas de transferência são baixas em comparação com leitores dedicados, sendo indicada para cópias rápidas de álbuns pontuais sem necessidade de remover o cartão:
 
-| Configuração de Buffer | Escrita no SD | Leitura do SD | Ganho vs. Original |
-|---|:---:|:---:|:---:|
-| **Original (Buffer 512B)** | **38.2 KB/s** | **46.9 KB/s** | *Referência inicial (gargalo)* |
-| **Buffer 4 KB** | `395.6 KB/s` | `711.7 KB/s` | **+10.3x** escrita / **+15.2x** leitura |
-| **Buffer 8 KB + Double Buffering (Final)** | **`490.7 KB/s`** (~0.50 MB/s) | **`721.6 KB/s`** (~0.71 MB/s) | **+12.8x escrita / +15.4x leitura 🚀** |
+* **Leitura**: ~720 KB/s (~0.7 MB/s)
+* **Escrita**: ~490 KB/s (~0.5 MB/s)
 
-> **Por que chegamos ao limite físico do hardware?**  
-> A PHY USB interna do ESP32-S3 opera em **USB 2.0 Full-Speed (12 Mbps = 1.500 KB/s bruto)**. No padrão USB Full-Speed, o barramento transmite em quadros de 1 milissegundo (SOF a cada 1 ms) e o tamanho máximo de pacote Bulk é de **64 bytes**.  
-> Descontando o overhead obrigatório (tokens SOF, SYNC, PID, CRC, bit-stuffing, tempos de turnaround e wrappers SCSI CBW/CSW), o throughput útil prático gira entre **750 KB/s e 850 KB/s**. Os **~720 KB/s de leitura representam ~85% a 90% da capacidade física do silício**. A velocidade de gravação (~490 KB/s) é limitada pelos tempos internos de ciclo de programação das páginas Flash NAND do cartão MicroSD.
+> **Nota técnica**: O barramento Full-Speed opera em pacotes Bulk de até 64 bytes. Com os tempos de inter-packet, handshakes de barramento e encapsulamento SCSI, a taxa física útil fica limitada a cerca de 750–850 KB/s no barramento. A escrita sofre atraso adicional dos ciclos de programação da memória Flash do cartão MicroSD. Para grandes cargas iniciais de músicas, o uso de um leitor externo USB 3.0 no computador continua sendo muito mais prático.
 
 ### ❌ O Que Não Funciona ou Está Desativado Nesta Versão
 
