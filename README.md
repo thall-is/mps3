@@ -1,0 +1,224 @@
+# mps3 — Player de Áudio Digital Hi-Res (DAP) Dual-MCU com Transmissão Sony LDAC 24-bit / 96 kHz
+
+[![Dispositivo](https://img.shields.io/badge/Dispositivo-mps3-blue.svg)](#visao-geral)
+[![Hardware](https://img.shields.io/badge/Hardware-ESP32--S3%20%2B%20ESP32-darkblue.svg)](docs/WIRING.md)
+[![Hi-Res Audio](https://img.shields.io/badge/Hi--Res%20Audio-FLAC%2024--bit%20%2F%2096kHz%20Nativo-gold.svg)](#o-que-funciona-muito-bem)
+[![Bluetooth](https://img.shields.io/badge/Bluetooth-Sony%20LDAC%20(24b%2F96k%20%7C%20990kbps)%20%7C%20SBC-purple.svg)](#o-que-funciona-muito-bem)
+[![USB High Performance](https://img.shields.io/badge/USB%20Storage-720%20KB%2Fs%20(15.4x%20Boost)-brightgreen.svg)](#desempenho-usb-mass-storage-msc--limite-fisico)
+[![Licença](https://img.shields.io/badge/Licenca-MIT%20%2F%20Apache%202.0-green.svg)](LICENSE)
+
+O **mps3** é um player de áudio digital portátil de alta fidelidade (**Hi-Res Digital Audio Player / DAP**) de arquitetura aberta, construído em torno de **dois microcontroladores (Dual-MCU)** que trabalham em sincronia. O projeto foi projetado para entregar uma experiência sonora pura e sem perdas, reproduzindo músicas do cartão micro SD com resolução de estúdio tanto pela saída analógica cabeada (via DAC dedicado) quanto sem fio pelo Bluetooth com o codec audiófilo **Sony LDAC em 24-bit / 96 kHz** reais.
+
+A divisão de trabalho entre dois processadores independentes evita gargalos de desempenho e garante áudio fluido sem qualquer engasgo:
+
+1. **Placa Principal (ESP32-S3 N16R8)**:
+   Gerencia a leitura do cartão micro SD em alta velocidade (SDMMC 4 vias a 40 MHz), decodifica arquivos Hi-Res (**FLAC 24-bit / 96 kHz nativo**, MP3, WAV, AAC, M4A, OGG), processa a equalização paramétrica de 10 bandas, comanda a interface visual no display OLED com joystick de 5 direções e transmite o áudio digital PCM nativo (até 24-bit / 96 kHz) via barramento I2S tanto para o conversor DAC local quanto para o módulo Bluetooth.
+   Conta também com subsistema **USB TinyUSB nativo** em modos exclusivos (Serial CDC, USB DAC UAC2 e USB Mass Storage otimizado).
+
+2. **Co-Processador de Bluetooth (`bt_companion` — ESP32 Clássico)**:
+   Dedicado exclusivamente ao rádio sem fio. Recebe o áudio PCM digital vindo do S3 via I2S, processa a codificação em tempo real com **Sony LDAC 24-bit / 96 kHz** (com taxa dinâmica adaptativa entre 330 e 990 kbps) ou **SBC** de alta qualidade, além de sincronizar o volume absoluto do fone via AVRCP.
+
+3. **Receptor de Validação (`bt_audio_sink` — ESP32 Clássico)**:
+   Firmware auxiliar de bancada para receber, auditar e testar a integridade e latência dos pacotes transmitidos pelo `mps3`.
+
+---
+
+## ⚠️ Transparência do Projeto: O Que Funciona e Limitações Atuais
+
+Este projeto preza pela honestidade técnica e relata com clareza o estado real de cada funcionalidade comprovado em bancada:
+
+### ✅ O Que Funciona Muito Bem
+
+* **Áudio Hi-Res Real em 24-bit / 96 kHz de Ponta a Ponta**: Arquivos FLAC de 24 bits e 96.000 Hz são lidos do micro SD, decodificados sem nenhum truncamento para 16 bits e codificados pelo encoder Sony LDAC nativamente em 24-bit / 96 kHz, chegando ao conversor digital do fone sem perda de resolução ou dinâmica.
+* **Sony LDAC com Bitrate Adaptativo (ABR)**: Opera em até **990 kbps (qualidade máxima)**. Se houver interferência no sinal sem fio, o sistema ajusta temporariamente a taxa para 660 ou 330 kbps para manter o som contínuo sem estalos, retornando aos 990 kbps assim que o enlace estabilizar.
+* **SBC de Alta Fidelidade**: Garante compatibilidade imediata com qualquer fone ou caixa Bluetooth do mercado em 44.1 ou 48 kHz (Bitpool 53, estéreo de alta qualidade).
+* **Decodificação de Múltiplos Formatos no S3**: Suporte completo a **FLAC** (16 e 24 bits, até 96 kHz), **MP3** (CBR/VBR até 320 kbps), **WAV** (PCM 16 e 24 bits), **AAC / M4A** e **OGG Vorbis**.
+* **Leitura Rápida do Cartão SD (SDMMC 4-Bit 40 MHz)**: Barramento nativo de 4 vias a 40 MHz, permitindo navegar ágil pelas pastas e carregar arquivos pesados sem esvaziamento de buffer.
+* **Equalizador Paramétrico de 10 Bandas**: Filtros IIR biquad com ganho configurável de -12 dB a +12 dB. Possui **bypass automático inteligente acima de 48 kHz** para não introduzir distorções de fase nem sobrecarregar o processamento em faixas Hi-Res de 96 kHz.
+* **Interface Monocromática Fluida no OLED SSD1306**: Navegação intuitiva com joystick de 5 direções, menus em carrossel, visualização da biblioteca por pastas e arquivos, além da tela "Now Playing" com dados da faixa, formato, taxa de amostragem, profundidade de bits e tempo decorrido.
+* **Persistência de Estado (NVS)**: Grava e recupera automaticamente a última música tocada, o ponto exato onde a reprodução foi pausada, o volume atual e a preferência de codec.
+* **Gerenciador de Músicas via Wi-Fi (`mps3.local`)**: Ao ativar o modo Wi-Fi, o mps3 cria um servidor web acessível na rede local para upload de álbuns e faixas diretamente pelo navegador, dispensando a remoção física do cartão.
+* **Controle de Volume Bidirecional (AVRCP)**: Modificar o volume no joystick do mps3 atualiza o volume no fone, e os botões físicos do próprio fone também refletem instantaneamente no mps3 via UART.
+* **Modos USB Exclusivos (TinyUSB Device)**: Chaveamento limpo e isolado de perfis USB sem sobreposição de descritores:
+  * **Modo Flash / CDC (`0x4000`)**: Console CDC com interceptação DTR/RTS e 1200 bps touch para reboot automático no bootloader ROM da Espressif (flashing sem pressionar botões).
+  * **Modo DAC USB / UAC2 (`0x4001`)**: Placa de som USB estéreo de alta resolução assíncrona (48 kHz / 16-bit com EQ de 10 bandas, balanço L/R e controle multimídia HID).
+  * **Modo Armazenamento / MSC (`0x4002`)**: Montagem do cartão SD como drive USB no Windows/Linux via SDMMC de 4 vias, otimizado com buffers expandidos de 8 KB e DWC2 double-buffering.
+
+### ⚡ Desempenho USB Mass Storage (MSC) & Limite Físico
+
+Medições reais realizadas na unidade montada via chamadas diretas de baixo nível da Win32 API (`FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH`) através de [`tests/benchmark_msc.py`](tests/benchmark_msc.py), eliminando qualquer interferência do cache de RAM do Windows:
+
+| Configuração de Buffer | Escrita no SD | Leitura do SD | Ganho vs. Original |
+|---|:---:|:---:|:---:|
+| **Original (Buffer 512B)** | **38.2 KB/s** | **46.9 KB/s** | *Referência inicial (gargalo)* |
+| **Buffer 4 KB** | `395.6 KB/s` | `711.7 KB/s` | **+10.3x** escrita / **+15.2x** leitura |
+| **Buffer 8 KB + Double Buffering (Final)** | **`490.7 KB/s`** (~0.50 MB/s) | **`721.6 KB/s`** (~0.71 MB/s) | **+12.8x escrita / +15.4x leitura 🚀** |
+
+> **Por que chegamos ao limite físico do hardware?**  
+> A PHY USB interna do ESP32-S3 opera em **USB 2.0 Full-Speed (12 Mbps = 1.500 KB/s bruto)**. No padrão USB Full-Speed, o barramento transmite em quadros de 1 milissegundo (SOF a cada 1 ms) e o tamanho máximo de pacote Bulk é de **64 bytes**.  
+> Descontando o overhead obrigatório (tokens SOF, SYNC, PID, CRC, bit-stuffing, tempos de turnaround e wrappers SCSI CBW/CSW), o throughput útil prático gira entre **750 KB/s e 850 KB/s**. Os **~720 KB/s de leitura representam ~85% a 90% da capacidade física do silício**. A velocidade de gravação (~490 KB/s) é limitada pelos tempos internos de ciclo de programação das páginas Flash NAND do cartão MicroSD.
+
+### ❌ O Que Não Funciona ou Está Desativado Nesta Versão
+
+* **Codecs Qualcomm aptX e aptX HD no Bluetooth Companion**: **Não funcionam**. Embora as rotinas dos encoders e as descrições dos endpoints estejam presentes na árvore do projeto, o fluxo de empacotamento RTP e a negociação AVDTP falham na sincronização com fones comerciais. **A transmissão Bluetooth ocorre com estabilidade comprovada via Sony LDAC e SBC**.
+* **Decodificador Opus**: **Experimental**. Faixas Opus com taxas de compressão complexas demandam um tamanho de pilha FreeRTOS muito alto, podendo gerar instabilidades se a tarefa de áudio estiver com limites restritos de memória.
+
+---
+
+## 📐 Arquitetura do Sistema
+
+```text
++-----------------------------------------------------------------------------------------+
+|                                    mps3 (Placa Principal - ESP32-S3)                    |
+|                                                                                         |
+|  +--------------------+        +-----------------------+        +--------------------+  |
+|  | MicroSD (SDMMC 4b) | -----> |  Decodificador Hi-Res | -----> |   Equalizador IIR  |  |
+|  |  FLAC / MP3 / WAV  |        |  (Core 1 - 24b/96kHz) |        |   10 Bandas Biquad |  |
+|  +--------------------+        +-----------------------+        +--------------------+  |
+|                                                                            |            |
+|  +--------------------+        +-----------------------+                   v            |
+|  | Display OLED I2C   | <..... | Menu / GUI / Joystick |        +--------------------+  |
+|  | (SSD1306 128x64)   |        | (Core 0 - Interface)  |        |  Driver I2S Master |  |
+|  +--------------------+        +-----------------------+        |  DMA 32-bit Stereo |  |
+|                                            :                    +--------------------+  |
+|                                            : UART                          | I2S        |
++--------------------------------------------:-------------------------------:------------+
+                                             : (115200 8N1)                  |            |
+                                             v                               |            |
++--------------------------------------------------------------------+       |            |
+|                     ESP32 Clássico (Co-Processador bt_companion)   |       |            |
+|                                                                    |       |            |
+|  +--------------------+   +--------------------+   +-------------+ |       |            |
+|  | Controle UART Link |   |  Reamostrador 32.32|   |  I2S Slave  | <-------+            |
+|  | (Core 0 - Estado)  |   | (Pass-thru em 96k) |   | (PIN 26/25) | |       |            |
+|  +--------------------+   +--------------------+   +-------------+ |       |            |
+|             |                         |                            |       |            |
+|             v                         v                            |       |            |
+|  +--------------------+   +--------------------+                   |       |            |
+|  |  AVRCP Controller  |   | Sony LDAC Encoder  |                   |       |            |
+|  |  (Absolute Volume) |   | (24-bit / 96 kHz)  |                   |       |            |
+|  +--------------------+   +--------------------+                   |       |            |
+|             |                         |                            |       |            |
+|             +------------+------------+                            |       |            |
+|                          v                                         |       |            |
+|             +--------------------------+                           |       |            |
+|             | Pilha Bluedroid BT A2DP  |                           |       |            |
+|             | Multi-SEP (Vendor LDAC)  |                           |       |            |
+|             +--------------------------+                           |       |            |
+|                          |                                         |       |            |
++--------------------------:-----------------------------------------+       |            |
+                           : Bluetooth A2DP / AVRCP                          v            |
+                           v                                        +-------------------+ |
+               +-----------------------+                            |   DAC PCM5102A    | |
+               | Fone de Ouvido / Caixa|                            | (Saída P2 Fones)  | <+
+               | Bluetooth Sem Fio     |                            +-------------------+
+               +-----------------------+
+```
+
+---
+
+## 🗂️ Estrutura do Repositório
+
+O projeto adota o **ESP-IDF v6.0.1 puro** como *Single Source of Truth* para compilação e gravação:
+
+| Diretório / Arquivo | Finalidade |
+|---|---|
+| **[`espidf/`](espidf/)** | **Ponto de entrada oficial ESP-IDF**: `CMakeLists.txt`, `main/`, `sdkconfig.defaults` (configuração de 8KB USB MSC, PSRAM Octal 8MB, Flash 16MB QIO). |
+| **[`components/`](components/)** | Componentes modulares independentes: `audio_player`, `usb_manager`, `sd_card`, `oled_display`, `touch_input`, `eq`, `i2s_output`, `wifi_transfer`, etc. |
+| **[`tests/`](tests/)** | Scripts de bancada e automação: benchmark Win32 unbuffered de MSC (`benchmark_msc.py`), verificadores de áudio e validação de descritores USB. |
+| **[`docs/`](docs/)** | Diagramas de ligação elétrica ([WIRING.md](docs/WIRING.md)) e especificação do protocolo binário UART ([PROTOCOL.md](docs/PROTOCOL.md)). |
+| **[`tools/`](tools/)** | Utilitários de monitoramento de testbench em Python. |
+| **[`partitions.csv`](partitions.csv)** | Tabela de partições customizada (App de 4 MB com suporte a OTA e NVS). |
+
+---
+
+## 🔌 Tabela Geral de Pinagem e Conexões
+
+### 1. Barramento de Áudio Digital I2S (Compartilhado entre os chips)
+*O ESP32-S3 gera os sinais de sincronismo (Master). O DAC PCM5102A e o ESP32 Companion recebem os dados em paralelo.*
+
+| Sinal I2S | ESP32-S3 (Master TX) | ESP32 Companion (Slave RX) | DAC PCM5102A | Observações |
+|---|:---:|:---:|:---:|---|
+| **BCLK** (Bit Clock) | **GPIO 48** | **GPIO 26** | **BCK** | Clock de bits síncrono |
+| **LRCK / WS** (Word Select) | **GPIO 21** | **GPIO 25** | **LCK** | Frequência de amostragem da faixa (ex: 96 kHz) |
+| **DOUT / DIN** (Dados PCM) | **GPIO 47** | **GPIO 22** | **DIN** | Dados de áudio PCM estéreo |
+| **GND** | GND | GND | GND / SCK | **SCK do PCM5102A deve ser conectado ao GND** |
+
+### 2. Barramento de Controle UART (Comunicação S3 ↔ Companion)
+
+| Sinal | ESP32-S3 | ESP32 Companion | Parâmetros |
+|---|:---:|:---:|---|
+| **TX → RX** | **GPIO 14** (TXD1) | **GPIO 16** (RXD1) | 115200 bps, 8N1, binário com checksum |
+| **RX ← TX** | **GPIO 13** (RXD1) | **GPIO 17** (TXD1) | 115200 bps, 8N1, binário com checksum |
+| **RESET / EN** | **GPIO 12** | **EN / CHIP_PU** | Reset por hardware do co-processador |
+
+### 3. Periféricos da Placa Principal (ESP32-S3)
+
+| Periférico | Função | Pinos no ESP32-S3 |
+|---|---|---|
+| **Display OLED SSD1306** | I2C (128x64 monocromático) | **SDA: GPIO 10** \| **SCL: GPIO 9** (alimentação 3.3V) |
+| **Cartão micro SD** | Barramento SDMMC 4-Bit (Slot nativo) | **CLK: GPIO 5** \| **CMD: GPIO 6** \| **D0: GPIO 4** \| **D1: GPIO 17** \| **D2: GPIO 16** \| **D3: GPIO 7** |
+| **Joystick de 5 Vias** | Botões de navegação | **UP: GPIO 2** \| **LEFT: GPIO 39** \| **DOWN: GPIO 41** \| **RIGHT: GPIO 42** \| **CENTER: GPIO 40** |
+| **Monitor de Bateria & TP4056** | Divisor Li-Ion + status TP4056 | **ADC: GPIO 1** (Tensão Li-Ion) \| **CHRG: GPIO 11** (LED Carregando) |
+| **LED RGB WS2812** | Feedback visual on-board | **DIN: GPIO 38** |
+
+---
+
+## 📚 Fontes, Créditos e Referências de Código
+
+O desenvolvimento do mps3 utilizou componentes consolidados do ecossistema de áudio aberto:
+
+1. **Sony Corporation — Codificador LDAC**:
+   * O código fonte do codificador em ponto fixo (`components/ldac_enc/vendor/`) pertence à **Sony Corporation** e foi disponibilizado sob licença **Apache License, Version 2.0** no repositório do [Android Open Source Project (AOSP) - platform/external/libldac](https://android.googlesource.com/platform/external/libldac/).
+2. **Espressif Systems — Framework ESP-IDF e Codecs de Áudio**:
+   * O motor de decodificação no ESP32-S3 utiliza o componente [`espressif__esp_audio_codec`](https://components.espressif.com/components/espressif/esp_audio_codec), incorporando decodificadores otimizados de **libFLAC**, **Helix MP3**, **PVMP3** e **PVMP4**.
+   * A pilha Bluetooth deriva do framework **Bluedroid** da Espressif, customizada com patches para suportar múltiplos SEPs e codecs proprietários (`ESP_A2D_MCT_NON_A2DP`).
+3. **BlueZ Linux Bluetooth Subsystem — Codificador SBC**:
+   * A codificação SBC no `bt_companion` foi adaptada da implementação do Linux BlueZ, projetada para execução eficiente em microcontroladores.
+4. **Robert Bristow-Johnson — Audio EQ Cookbook**:
+   * O cálculo dos coeficientes dos filtros biquad do equalizador paramétrico de 10 bandas segue as formulações de domínio público de Robert Bristow-Johnson.
+
+---
+
+## 🚀 Como Compilar e Gravar o Firmware
+
+### Pré-requisitos
+* Computador com Windows 10/11 ou Linux.
+* **ESP-IDF v6.0.1 ou v6.2.0** instalado e configurado no terminal.
+* Cabo USB conectado ao ESP32-S3.
+
+### Compilando e Gravando a Placa Principal (ESP32-S3)
+```bash
+# 1. Acessar o subdiretório ESP-IDF oficial do projeto
+cd espidf
+
+# 2. Inicializar o ambiente do ESP-IDF (caso não esteja no PATH)
+# Exemplo Windows: C:\esp\v6.0.1\esp-idf\export.bat (ou export.ps1)
+
+# 3. Configurar target para ESP32-S3 (apenas na primeira compilação)
+idf.py set-target esp32s3
+
+# 4. Compilar
+idf.py build
+
+# 5. Gravar no ESP32-S3 (ajustar porta COM conforme seu sistema)
+idf.py -p COM7 flash
+
+# 6. Monitorar logs de execução
+idf.py -p COM7 monitor
+```
+
+### Executando o Benchmark de Velocidade USB MSC
+Com o player em modo USB Storage conectado ao computador (montado como letra `D:` ou equivalente):
+```bash
+python tests/benchmark_msc.py D
+```
+
+---
+
+## 📄 Licença
+
+O projeto **mps3** é distribuído sob a licença **MIT**, respeitando as licenças dos componentes de terceiros integrados:
+* O codificador Sony LDAC é licenciado sob **Apache License 2.0** pela Sony Corporation.
+* As bibliotecas de áudio e a pilha de rede pertencem à Espressif Systems sob licenças Apache 2.0 / Modified MIT.
+Consulte o arquivo [`LICENSE`](LICENSE) para o texto legal completo.

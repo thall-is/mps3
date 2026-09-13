@@ -1,0 +1,31 @@
+# ESP-IDF Build Artifacts & Generated Files
+build/
+**/build/
+sdkconfig
+sdkconfig.old
+**/sdkconfig
+**/sdkconfig.old
+dependencies.lock
+**/dependencies.lock
+managed_components/
+**/managed_components/
+
+# PlatformIO & Legacy Artifacts
+.pio/
+*.obj
+
+# Binaries & Executables
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Temporary & Test Artifacts
+*.tmp
+perf_test.tmp
+__pycache__/
+*.pyc
+
+# IDEs & Editor configs
+.vscode/
+.idea/

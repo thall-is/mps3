@@ -1,0 +1,19 @@
+dependencies:
+  # Fixado numa versao EXATA (nao "^2.6.1") de proposito: essa e' a
+  # versao cujo README oficial da Espressif eu confirmei conter (na
+  # tabela real de "Audio Container" da pagina do Component Registry,
+  # nao um resumo generico) os seguintes tipos usados por este projeto:
+  # AAC, MP3, WAV, FLAC, AMRNB, AMRWB, M4A, TS, e OPUS/PCM/ALAC "raw".
+  # NAO existe (e nunca existiu, em nenhuma versao) um container "OGG" no
+  # Simple Decoder - se voce ver alguma referencia a isso no projeto ou
+  # no historico de commits, e' um erro meu que foi corrigido.
+  #
+  # Fixar a versao exata (em vez de so' pedir "2.6.1 ou mais nova") tira
+  # a incerteza de qual conjunto de tipos vai estar disponivel de fato -
+  # se o `pio pkg`/`idf.py` insistir em resolver outra coisa mesmo assim
+  # (cache antigo, lockfile), rode uma limpeza completa da dependencia
+  # (ver README, secao "Formatos de audio suportados") antes de mexer em
+  # qualquer outra coisa.
+  espressif/esp_audio_codec:
+    version: "2.6.1"
+  espressif/esp_audio_effects: "^1.0.0"

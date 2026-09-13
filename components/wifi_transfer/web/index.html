@@ -1,0 +1,1539 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>mps3 - Web Player & Central</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 12px 14px 140px 14px; color: #222; background: #f4f6f9; transition: background 0.3s; line-height: 1.4; }
+        body.fullscreen-active { overflow: hidden; }
+        
+        h2 { margin: 12px 0 8px 0; display: flex; align-items: center; justify-content: space-between; font-size: 1.35em; color: #1a1a1a; }
+        
+        #header-status { background: #fff; padding: 12px 16px; border-radius: 10px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); font-size: 0.9em; border: 1px solid #e8ecef; }
+        .bat-info { color: #2e3842; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+        .sd-info { color: #505c68; text-align: right; font-weight: 600; }
+        
+        .search-box { width: 100%; padding: 10px 14px; border: 1px solid #d0d7de; border-radius: 8px; font-size: 0.95em; margin-bottom: 12px; background: #fff; outline: none; transition: border-color 0.2s, box-shadow 0.2s; }
+        .search-box:focus { border-color: #0077ff; box-shadow: 0 0 0 3px rgba(0,119,255,0.15); }
+
+        #crumbs { color: #606d7b; margin-bottom: 10px; word-break: break-all; font-size: 0.92em; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+        #crumbs a { color: #0077ff; text-decoration: none; cursor: pointer; font-weight: 600; padding: 2px 4px; border-radius: 4px; }
+        #crumbs a:hover { background: #e6f2ff; }
+        
+        table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid #e8ecef; }
+        td { padding: 10px 12px; border-bottom: 1px solid #f0f3f6; vertical-align: middle; }
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background: #fbfcfd; }
+        .name { cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
+        .name span { flex: 1; word-break: break-word; font-size: 0.94em; }
+        .dir .name { font-weight: 600; color: #0066cc; }
+        .file .name { color: #2a323c; }
+        
+        .actions { color: #788591; cursor: pointer; padding: 4px 8px; font-size: 1.25em; border-radius: 4px; transition: background 0.15s; }
+        .actions:hover { background: #eef2f6; color: #111; }
+        
+        /* Dropzone and Uploads */
+        #dropzone { border: 2px dashed #b8c7d9; border-radius: 10px; padding: 1.4em 1em; text-align: center; color: #4e5d6c; margin: 14px 0; background: #fff; cursor: pointer; transition: all 0.2s; font-size: 0.95em; }
+        #dropzone.dragover { border-color: #0077ff; background: #f0f7ff; color: #0077ff; }
+        .upload-btns { display: flex; gap: 10px; margin-bottom: 1.2em; }
+        .upload-btns button { flex: 1; min-height: 40px; padding: 8px 12px; border: 1px solid #ccd5df; border-radius: 8px; background: #fff; cursor: pointer; font-weight: 600; font-size: 0.9em; color: #333; transition: all 0.15s; }
+        .upload-btns button:hover { background: #f0f4f8; border-color: #b8c4d0; }
+
+        /* Modern Modals Backdrop */
+        .modal-backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.55); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 2500; padding: 12px; }
+        .modal-card { background: #fff; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); max-width: 580px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; padding: 18px 20px; border: 1px solid #eee; }
+        .btn-secondary { background: #eef2f6; border: 1px solid #ccd5df; color: #333; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.88em; }
+        .btn-secondary:hover { background: #e2e8f0; }
+        .btn-primary { background: #0077ff; border: none; color: #fff; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.88em; }
+        .btn-primary:hover { background: #0066dd; }
+
+        /* Folder Picker in Move Modal */
+        .folder-picker-list { border: 1px solid #dbe2ea; border-radius: 8px; max-height: 220px; overflow-y: auto; background: #fff; margin-bottom: 14px; }
+        .folder-picker-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #f0f3f6; cursor: pointer; transition: background 0.15s; font-size: 0.92em; color: #222; }
+        .folder-picker-item:last-child { border-bottom: none; }
+        .folder-picker-item:hover { background: #f0f7ff; color: #0066cc; }
+        .folder-picker-item.up-dir { background: #f8fafc; color: #0066cc; font-weight: bold; }
+
+        /* Vertical Equalizer Studio Console */
+        .eq-faders-wrapper { display: flex; justify-content: space-between; align-items: center; background: #14181c; border-radius: 10px; padding: 16px 8px; margin-bottom: 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; box-shadow: inset 0 2px 8px rgba(0,0,0,0.6); }
+        .eq-fader-col { display: flex; flex-direction: column; align-items: center; justify-content: space-between; height: 200px; min-width: 44px; flex: 1; position: relative; }
+        .eq-preamp-col { border-right: 1px solid rgba(255,255,255,0.12); padding-right: 8px; margin-right: 6px; min-width: 54px; }
+        .eq-fader-val { font-size: 0.72em; font-family: ui-monospace, SFMono-Regular, monospace; font-weight: bold; color: #4da3ff; min-height: 16px; text-align: center; margin-bottom: 4px; }
+        .eq-fader-track-wrap { position: relative; height: 135px; display: flex; align-items: center; justify-content: center; width: 32px; }
+        .eq-fader-zero-line { position: absolute; top: 50%; left: 4px; right: 4px; height: 1px; background: rgba(255,255,255,0.22); pointer-events: none; }
+        .v-fader { -webkit-appearance: slider-vertical; writing-mode: vertical-lr; direction: rtl; width: 22px; height: 130px; background: transparent; cursor: pointer; accent-color: #0077ff; }
+        .eq-fader-freq { font-size: 0.72em; font-weight: 600; color: #8fa0b0; margin-top: 6px; text-align: center; }
+        /* Upload Progress Bar */
+        #upload-status-box { display: none; background: #fff; border: 1px solid #06c; border-radius: 8px; padding: 12px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,102,204,0.15); }
+        .up-row { display: flex; justify-content: space-between; font-size: 0.85em; color: #333; margin-bottom: 4px; }
+        .up-bar-track { background: #eee; border-radius: 4px; height: 8px; overflow: hidden; margin-bottom: 6px; }
+        .up-bar-fill { height: 100%; background: #06c; width: 0%; transition: width 0.1s; }
+        .up-bar-fill.overall { background: #28a745; }
+        .up-stats { font-size: 0.8em; color: #666; display: flex; justify-content: space-between; }
+        
+        #queue { max-height: 120px; overflow-y: auto; font-size: 0.8em; border-top: 1px solid #eee; margin-top: 8px; padding-top: 4px; }
+        .q-item { display: flex; justify-content: space-between; padding: 3px 0; color: #666; }
+        .q-item.active { color: #06c; font-weight: bold; }
+        .q-item.done { color: #28a745; }
+        .q-item.error { color: #dc3545; }
+
+        /* Floating Mini Player */
+        #player-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; box-shadow: 0 -4px 15px rgba(0,0,0,0.12); padding: 10px 15px; display: flex; flex-direction: column; z-index: 1000; transform: translateY(100%); transition: transform 0.3s ease-out; border-top: 1px solid #eee; }
+        #player-bar.active { transform: translateY(0); }
+        .player-row { display: flex; align-items: center; justify-content: space-between; }
+        .track-info { display: flex; align-items: center; flex: 1; overflow: hidden; cursor: pointer; }
+        .album-art { width: 48px; height: 48px; border-radius: 6px; background: #eee; margin-right: 12px; object-fit: cover; flex-shrink: 0; box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
+        .track-text { display: flex; flex-direction: column; overflow: hidden; }
+        .track-title { font-weight: bold; font-size: 0.95em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #111; }
+        .track-artist { font-size: 0.82em; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+        .controls { display: flex; align-items: center; gap: 8px; margin-left: 8px; }
+        .btn-icon { background: none; border: none; font-size: 1.4em; color: #444; cursor: pointer; padding: 5px; }
+        .play-btn { width: 42px; height: 42px; border-radius: 50%; background: #06c; color: #fff; border: none; font-size: 1.1em; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        .progress-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 0.78em; color: #666; }
+        .progress-bar-container { flex: 1; height: 6px; background: #eee; border-radius: 3px; cursor: pointer; position: relative; }
+        .progress-bar-fill { height: 100%; background: #06c; border-radius: 3px; width: 0%; pointer-events: none; }
+        
+        /* Fullscreen Player */
+        #fs-player { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #111; z-index: 2000; display: flex; flex-direction: column; opacity: 0; pointer-events: none; transition: opacity 0.3s; color: #fff; }
+        #fs-player.active { opacity: 1; pointer-events: all; }
+        #fs-bg { position: absolute; top: -10%; left: -10%; right: -10%; bottom: -10%; background-size: cover; background-position: center; filter: blur(35px) brightness(0.35); z-index: -1; transition: background-image 0.5s; }
+        .fs-header { display: flex; justify-content: space-between; align-items: center; padding: 18px; font-size: 1.3em; }
+        .fs-close { cursor: pointer; padding: 8px 14px; font-size: 1.4em; }
+        .fs-art-container { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 10px 20px; position: relative; }
+        .fs-art { width: 100%; max-width: 280px; aspect-ratio: 1; object-fit: cover; border-radius: 12px; box-shadow: 0 12px 35px rgba(0,0,0,0.6); z-index: 2; }
+        
+        /* Audio Visualizer Canvas */
+        #visualizer { width: 100%; max-width: 320px; height: 50px; margin-top: 10px; z-index: 2; }
+
+        .fs-info { padding: 0 30px 10px 30px; text-align: center; }
+        .fs-title { font-size: 1.35em; font-weight: bold; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .fs-artist { font-size: 1em; color: #bbb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        
+        /* Equalizer Sliders */
+        .eq-panel { display: flex; justify-content: center; gap: 15px; margin: 5px 0 10px 0; font-size: 0.75em; color: #aaa; }
+        .eq-group { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .eq-group input[type=range] { width: 60px; accent-color: #1db954; }
+
+        .fs-controls-container { padding: 0 30px 30px 30px; }
+        .fs-controls { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
+        .fs-btn { background: none; border: none; color: #fff; font-size: 1.8em; cursor: pointer; padding: 6px; }
+        .fs-btn.small { font-size: 1.2em; color: #777; }
+        .fs-btn.active { color: #1db954; }
+        .fs-play { width: 56px; height: 56px; border-radius: 50%; background: #fff; color: #000; display: flex; align-items: center; justify-content: center; font-size: 1.4em; }
+        
+        .fs-progress-row { display: flex; align-items: center; gap: 12px; font-size: 0.82em; color: #aaa; margin-top: 6px;}
+        .fs-progress-cont { flex: 1; height: 7px; background: rgba(255,255,255,0.25); border-radius: 4px; cursor: pointer; position: relative;}
+        .fs-progress-fill { height: 100%; background: #fff; border-radius: 4px; width: 0%; pointer-events: none;}
+        
+        /* Dropdown Menu */
+        .dropdown { position: absolute; background: #fff; box-shadow: 0 4px 15px rgba(0,0,0,0.2); border-radius: 6px; z-index: 1500; display: none; flex-direction: column; overflow: hidden; border: 1px solid #eee; }
+        .dropdown.active { display: flex; }
+        .dropdown div { padding: 10px 18px; cursor: pointer; font-size: 0.88em; border-bottom: 1px solid #eee; color: #333; }
+        .dropdown div:hover { background: #f0f0f0; }
+        .dropdown div:last-child { border-bottom: none; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .loading-spin { animation: spin 1s linear infinite; opacity: 0.6; }
+    
+        .eq-curve-btn { background:#eee; border:1px solid #ddd; border-radius:4px; padding:4px 8px; font-size:0.75em; cursor:pointer; font-weight:500; }
+        .eq-curve-btn:hover { background:#06c; color:#fff; border-color:#06c; }
+        .band-card { background:#fafafa; border:1px solid #eee; border-radius:6px; padding:6px 4px; text-align:center; display:flex; flex-direction:column; align-items:center; gap:4px; }
+        .band-card span.freq { font-size:0.75em; font-weight:bold; color:#444; }
+        .band-card span.val { font-size:0.72em; color:#06c; font-weight:600; min-height:14px; }
+        .band-card input[type=range] { width:100%; accent-color:#06c; }
+    </style>
+</head>
+<body>
+    
+    
+    <div id="header-status" style="display:flex; flex-direction:column; gap:8px;">
+        <div style="display:flex; align-items:center; justify-content:space-between;">
+            <div id="batInfo" style="display:flex; align-items:center; gap:6px; color:#444; font-weight:bold;">🔋 --</div>
+            <div id="sdInfoText" style="color:#555; font-size:0.9em; font-weight:bold;">SD: --</div>
+        </div>
+        <div style="width:100%; background:#eee; height:6px; border-radius:3px; overflow:hidden;">
+            <div id="sdBar" style="height:100%; width:0%; background:#06c; transition: width 0.3s;"></div>
+        </div>
+    </div>
+
+    <!-- Upload Status Box -->
+    <div id="upload-status-box">
+        <div class="up-row">
+            <strong id="upFileName">Enviando arquivo...</strong>
+            <span id="upFilePct">0%</span>
+        </div>
+        <div class="up-bar-track"><div id="upFileBar" class="up-bar-fill"></div></div>
+        
+        <div class="up-row" style="font-size:0.78em; color:#666;">
+            <span id="upOverallLabel">Geral (0/0)</span>
+            <span id="upOverallPct">0%</span>
+        </div>
+        <div class="up-bar-track"><div id="upOverallBar" class="up-bar-fill overall"></div></div>
+        
+        <div class="up-stats">
+            <span id="upSpeed">0 KB/s</span>
+            <span id="upEta">--</span>
+        </div>
+        <div id="queue"></div>
+    </div>
+
+    <h2>Arquivos 
+        <div style="display:flex; gap:6px; margin-left:auto;">
+            <button id="eqBtn" style="background:#f0f0f0;font-size:.85em;padding:.3em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">🎚️ Equalizador</button>
+            <button id="mkdirBtn" style="background:#f0f0f0;font-size:.85em;padding:.3em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">📁 Nova Pasta</button>
+            <button id="configBtn" style="background:#f0f0f0;font-size:.85em;padding:.3em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">⚙️ Config</button>
+        </div>
+    </h2>
+    <input type="text" id="filterInput" class="search-box" placeholder="🔍 Filtrar músicas e pastas...">
+    
+    <div id="crumbs">/</div>
+    <table><tbody id="tbody"></tbody></table>
+
+    <div id="dropzone">
+        📁 <strong>Arraste arquivos ou pastas de música aqui</strong>
+    </div>
+    <div class="upload-btns">
+        <button onclick="el.inpFiles.click()">+ Selecionar Arquivos</button>
+        <button onclick="el.inpFolder.click()">+ Selecionar Pasta</button>
+        <input type="file" id="inpFiles" multiple style="display:none">
+        <input type="file" id="inpFolder" webkitdirectory multiple style="display:none">
+    </div>
+
+    <!-- Mini Player -->
+    <div id="player-bar">
+        <audio id="audioEl" style="display:none" crossorigin="anonymous"></audio>
+        <div class="player-row">
+            <div class="track-info" onclick="toggleFullscreen()">
+                <img id="albumArt" class="album-art" src="">
+                <div class="track-text">
+                    <div id="trackTitle" class="track-title">Selecione uma música</div>
+                    <div id="trackArtist" class="track-artist">...</div>
+                </div>
+            </div>
+            <div class="controls">
+                <button class="btn-icon" onclick="prevTrack()"><svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
+                <button id="playBtn" class="play-btn" onclick="togglePlay()"><svg fill="currentColor" viewBox="0 0 24 24" width="20" height="20"><path d="M8 5v14l11-7z"/></svg></button>
+                <button class="btn-icon" onclick="nextTrack()"><svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
+            </div>
+        </div>
+        <div class="progress-row">
+            <span id="timeCur">0:00</span>
+            <div id="progressCont" class="progress-bar-container" onclick="seek(event, this)">
+                <div id="progressFill" class="progress-bar-fill"></div>
+            </div>
+            <span id="timeTot">0:00</span>
+        </div>
+    </div>
+    
+    <!-- Fullscreen Player -->
+    <div id="fs-player">
+        <div id="fs-bg"></div>
+        <div class="fs-header">
+            <div class="fs-close" onclick="toggleFullscreen()"><svg fill="currentColor" viewBox="0 0 24 24" width="28" height="28"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg></div>
+            <div style="font-size:0.9em; font-weight:bold; letter-spacing:1px; text-transform:uppercase;">Tocando agora</div>
+            <div style="width:30px"></div>
+        </div>
+        <div class="fs-art-container">
+            <img id="fsArt" class="fs-art" src="">
+            <canvas id="visualizer"></canvas>
+        </div>
+        <div class="fs-info">
+            <div id="fsTitle" class="fs-title">Title</div>
+            <div id="fsArtist" class="fs-artist">Artist</div>
+        </div>
+
+        <!-- Equalizer -->
+        <div class="eq-panel">
+            <div class="eq-group">
+                <span>Grave</span>
+                <input type="range" id="eqBass" min="-10" max="15" value="0" step="1">
+            </div>
+            <div class="eq-group">
+                <span>Médio</span>
+                <input type="range" id="eqMid" min="-10" max="10" value="0" step="1">
+            </div>
+            <div class="eq-group">
+                <span>Agudo</span>
+                <input type="range" id="eqTreble" min="-10" max="12" value="0" step="1">
+            </div>
+        </div>
+
+        <div class="fs-controls-container">
+            <div class="fs-progress-row">
+                <span id="fsTimeCur">0:00</span>
+                <div id="fsProgressCont" class="fs-progress-cont" onclick="seek(event, this)">
+                    <div id="fsProgressFill" class="fs-progress-fill"></div>
+                </div>
+                <span id="fsTimeTot">0:00</span>
+            </div>
+            <div class="fs-controls">
+                <button id="btnShuffle" class="fs-btn small" onclick="toggleShuffle()"><svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg></button>
+                <button class="fs-btn" onclick="prevTrack()"><svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
+                <button id="fsPlayBtn" class="fs-play" onclick="togglePlay()"><svg fill="currentColor" viewBox="0 0 24 24" width="30" height="30"><path d="M8 5v14l11-7z"/></svg></button>
+                <button class="fs-btn" onclick="nextTrack()"><svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
+                <button id="btnRepeat" class="fs-btn small" onclick="toggleRepeat()"><svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg></button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Context Menu -->
+    <div id="ctxMenu" class="dropdown">
+        <div id="ctxNext">🎵 Tocar a seguir</div>
+        <div id="ctxQueue">➕ Adicionar à fila</div>
+        <div id="ctxDownload">⬇️ Baixar arquivo</div>
+        <div id="ctxRename">✏️ Renomear</div>
+        <div id="ctxMove">📁 Mover para...</div>
+        <div id="ctxDel" style="color:#c33">🗑️ Excluir</div>
+    </div>
+
+    
+    
+    
+    
+    <!-- MODAL DE MOVER ARQUIVO / EXPLORADOR DE PASTAS -->
+    <div id="moveModal" class="modal-backdrop" style="display:none;">
+        <div class="modal-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:12px;">
+                <h3 style="margin:0;font-size:1.1em;display:flex;align-items:center;gap:8px;">
+                    <span>📁 Mover:</span>
+                    <span id="moveItemName" style="color:#0077ff;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                </h3>
+                <button type="button" onclick="closeMoveModal()" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:#888;padding:0 4px;">✕</button>
+            </div>
+
+            <div style="background:#edf2f7;padding:8px 12px;border-radius:6px;margin-bottom:10px;display:flex;align-items:center;gap:6px;font-size:0.88em;">
+                <strong style="color:#4a5568;">Destino:</strong>
+                <span id="moveCurrentPath" style="font-family:monospace;color:#1a202c;word-break:break-all;">/</span>
+            </div>
+
+            <div style="display:flex;gap:8px;margin-bottom:10px;">
+                <button type="button" id="btnMoveNewFolder" class="btn-secondary" style="display:flex;align-items:center;gap:6px;">
+                    📁 + Nova Pasta Aqui
+                </button>
+            </div>
+
+            <div id="moveFolderList" class="folder-picker-list">
+                <!-- Pastas inseridas dinamicamente -->
+            </div>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #eee;padding-top:12px;">
+                <button type="button" class="btn-secondary" onclick="closeMoveModal()">Cancelar</button>
+                <button type="button" id="btnConfirmMove" class="btn-primary">✓ Mover para esta pasta</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE CONFIGURAÇÃO -->
+    <div id='configModal' style='display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border:1px solid #ccc;border-radius:10px;padding:20px;box-shadow:0 4px 20px rgba(0,0,0,0.3);z-index:2000;max-width:320px;width:90%'>
+        <h3 style='margin-top:0'>Redes WiFi conhecidas</h3>
+        <ul id='netList' style='list-style:none;margin:.4em 0;padding:0;max-height:140px;overflow-y:auto;border:1px solid #eee;border-radius:4px'></ul>
+        <div id='netEmpty' style='display:none;color:#999;font-size:.85em;padding:.4em 0'>Nenhuma rede salva ainda.</div>
+        <label>Adicionar rede:</label><br>
+        <input type='text' id='cfgSSID' placeholder='Nome da rede (SSID)' style='width:100%;padding:6px;margin:4px 0;border:1px solid #ccc;border-radius:4px'><br>
+        <input type='password' id='cfgPass' placeholder='Senha' style='width:100%;padding:6px;margin:4px 0;border:1px solid #ccc;border-radius:4px'><br>
+        <div class='btn-row' style='display:flex;justify-content:space-between;margin-top:12px'>
+            <button id='btnSaveCfg' style='padding:.5em 1em;border:1px solid #ccc;border-radius:6px;cursor:pointer'>+ Adicionar</button>
+            <button id='btnCloseCfg' style='padding:.5em 1em;border:1px solid #ccc;border-radius:6px;cursor:pointer'>Fechar</button>
+        </div>
+        <div id='cfgStatus' style='margin-top:8px;font-size:.85em;color:#2a7'></div>
+    </div>
+
+
+    <!-- MODAL DE EQUALIZADOR (10 BANDAS) -->
+    <div id='eqModal' style='display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border:1px solid #ccc;border-radius:12px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,0.3);z-index:2000;max-width:560px;width:95%;max-height:90vh;overflow-y:auto;'>
+        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:14px;">
+            <h3 style="margin:0;display:flex;align-items:center;gap:8px;">🎚️ Equalizador de 10 Bandas</h3>
+            <div style="display:flex;align-items:center;gap:12px;">
+                <label style="cursor:pointer;display:flex;align-items:center;gap:5px;font-size:0.9em;font-weight:bold;">
+                    <input type="checkbox" id="eqMasterEnable" style="cursor:pointer;width:16px;height:16px;"> EQ Ativado
+                </label>
+                <button id="btnCloseEq" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:#888;padding:0 4px;">✕</button>
+            </div>
+        </div>
+
+        <!-- Seleção de Preset e Nome -->
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;background:#f7f9fa;padding:10px;border-radius:8px;">
+            <label style="font-size:0.85em;font-weight:bold;">Preset:</label>
+            <select id="eqPresetSelect" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-weight:bold;"></select>
+            <input type="text" id="eqPresetName" placeholder="Nome do Preset" maxlength="15" style="flex:1;min-width:110px;padding:6px 10px;border:1px solid #ccc;border-radius:6px;">
+            <button id="btnActivatePreset" style="padding:6px 12px;background:#06c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85em;font-weight:bold;">Ativar no MPS3</button>
+        </div>
+
+        <!-- Curvas Rápidas (Templates) -->
+        <div style="margin-bottom:14px;">
+            <div style="font-size:0.8em;color:#666;margin-bottom:6px;font-weight:bold;">Carregar Curva Pronta:</div>
+            <div style="display:flex;flex-wrap:wrap;gap:5px;">
+                <button class="eq-curve-btn" onclick="applyEqCurve('flat')">Flat</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('rock')">Rock / Metal</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('pop')">Pop</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('dance')">Dance</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('jazz')">Jazz / Blues</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('classica')">Clássica</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('vocal')">Vocal</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('bass')">Bass Boost</button>
+            </div>
+        </div>
+
+        <!-- Equalizador no Eixo Y (Mesa de Som) -->
+        <div class="eq-faders-wrapper">
+            <!-- Preamp (Ganho Geral) -->
+            <div class="eq-fader-col eq-preamp-col">
+                <span class="eq-fader-val" id="eqOverallVal">0.0 dB</span>
+                <div class="eq-fader-track-wrap">
+                    <div class="eq-fader-zero-line"></div>
+                    <input type="range" id="eqOverallSlider" class="v-fader" min="-30" max="30" step="0.5" value="0">
+                </div>
+                <span class="eq-fader-freq">PREAMP</span>
+            </div>
+
+            <!-- 10 Faders de Frequência -->
+            <div id="eqBandsContainer" style="display:flex;flex:1;justify-content:space-between;align-items:center;"></div>
+        </div>
+
+        <!-- Rodapé do Modal -->
+        <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #eee;padding-top:12px;">
+            <div id="eqStatusMsg" style="font-size:0.85em;color:#28a745;font-weight:bold;"></div>
+            <button id="btnSaveEq" style="padding:8px 18px;background:#28a745;color:#fff;border:none;border-radius:6px;font-weight:bold;cursor:pointer;">💾 Salvar no MPS3</button>
+        </div>
+    </div>
+
+    <script>
+
+        
+        
+        function showLoginModal() {
+            document.getElementById('loginModal').style.display = 'flex';
+            document.getElementById('djPass').value = '';
+            document.getElementById('djPass').focus();
+        }
+        function hideLoginModal() {
+            document.getElementById('loginModal').style.display = 'none';
+        }
+        function submitLogin() {
+            let pwd = document.getElementById('djPass').value;
+            if (pwd === "1234") { // Temporary hardcoded password for Phase 1
+                localStorage.setItem('mps3_admin', 'true');
+                isAdmin = true;
+                hideLoginModal();
+                applyRoles();
+            } else {
+                alert("Senha incorreta");
+            }
+        }
+        
+        let radioAudio = new Audio();
+        
+        const el={
+            tbody:document.getElementById('tbody'), crumbs:document.getElementById('crumbs'), filter:document.getElementById('filterInput'),
+            batInfo:document.getElementById('batInfo'), sdInfoText:document.getElementById('sdInfoText'), sdBar:document.getElementById('sdBar'),
+            playerBar:document.getElementById('player-bar'), audio:document.getElementById('audioEl'),
+            art:document.getElementById('albumArt'), title:document.getElementById('trackTitle'), artist:document.getElementById('trackArtist'),
+            playBtn:document.getElementById('playBtn'), cur:document.getElementById('timeCur'), tot:document.getElementById('timeTot'),
+            prog:document.getElementById('progressFill'),
+            
+            fs:document.getElementById('fs-player'), fsBg:document.getElementById('fs-bg'),
+            fsArt:document.getElementById('fsArt'), fsTitle:document.getElementById('fsTitle'), fsArtist:document.getElementById('fsArtist'),
+            fsCur:document.getElementById('fsTimeCur'), fsTot:document.getElementById('fsTimeTot'),
+            fsProg:document.getElementById('fsProgressFill'), fsPlay:document.getElementById('fsPlayBtn'),
+            btnShuf:document.getElementById('btnShuffle'), btnRep:document.getElementById('btnRepeat'),
+            canvas:document.getElementById('visualizer'),
+            eqBass:document.getElementById('eqBass'), eqMid:document.getElementById('eqMid'), eqTreble:document.getElementById('eqTreble'),
+            
+            dropzone:document.getElementById('dropzone'), inpFiles:document.getElementById('inpFiles'), inpFolder:document.getElementById('inpFolder'),
+            upBox:document.getElementById('upload-status-box'), upFileName:document.getElementById('upFileName'), upFilePct:document.getElementById('upFilePct'),
+            upFileBar:document.getElementById('upFileBar'), upOverallLabel:document.getElementById('upOverallLabel'), upOverallPct:document.getElementById('upOverallPct'),
+            upOverallBar:document.getElementById('upOverallBar'), upSpeed:document.getElementById('upSpeed'), upEta:document.getElementById('upEta'),
+            queue:document.getElementById('queue'),
+            
+            ctx:document.getElementById('ctxMenu')
+        };
+        
+        let curDir='/';
+        let dirCache = {};
+        let originalPlaylist = [];
+        let playlist = [];
+        let playIndex = -1;
+        let isShuffle = false;
+        let repeatMode = 0; // 0=no, 1=all, 2=one
+        let currentCtxItem = null;
+        let isUploading = false;
+        let queueItems = [];
+        let queueId = 0;
+        let currentEntries = [];
+
+        const defaultCover = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23333'/><text x='50' y='55' font-family='sans-serif' font-size='40' text-anchor='middle' fill='%23777'>🎵</text></svg>";
+
+        function fmtSize(b){ return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB'; }
+        function fmtTime(s) { if(isNaN(s)) return '0:00'; let m=Math.floor(s/60); let ss=Math.floor(s%60); return m+':'+(ss<10?'0':'')+ss; }
+        function fmtEta(s){if(s<0||!isFinite(s))return '';if(s>=60)return '~'+Math.floor(s/60)+'m'+String(Math.round(s%60)).padStart(2,'0')+'s';return '~'+Math.round(s)+'s';}
+        function joinPath(a,b){ return a==='/' ? '/'+b : a+'/'+b; }
+
+        // --- 1. INDEXEDDB CACHE (OFFLOAD ESP32) ---
+        let dbPromise = new Promise((resolve) => {
+            let req = indexedDB.open('mps3_meta_cache', 1);
+            req.onupgradeneeded = (e) => { e.target.result.createObjectStore('metadata', { keyPath: 'path' }); };
+            req.onsuccess = (e) => resolve(e.target.result);
+            req.onerror = () => resolve(null);
+        });
+
+        async function getCachedMetadata(path) {
+            let db = await dbPromise;
+            if (!db) return null;
+            return new Promise((res) => {
+                let tx = db.transaction('metadata', 'readonly');
+                let store = tx.objectStore('metadata');
+                let req = store.get(path);
+                req.onsuccess = () => res(req.result);
+                req.onerror = () => res(null);
+            });
+        }
+
+        async function setCachedMetadata(path, tags) {
+            let db = await dbPromise;
+            if (!db) return;
+            let tx = db.transaction('metadata', 'readwrite');
+            tx.objectStore('metadata').put({ path: path, ...tags });
+        }
+
+        // --- 2. WEB AUDIO API EQUALIZER & VISUALIZER ---
+        let audioCtx, analyser, bassFilter, midFilter, trebleFilter, isAudioInitialized = false;
+
+        function initWebAudio() {
+            if (isAudioInitialized) return;
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                let source = audioCtx.createMediaElementSource(el.audio);
+                
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 64;
+
+                bassFilter = audioCtx.createBiquadFilter();
+                bassFilter.type = 'lowshelf';
+                bassFilter.frequency.value = 250;
+
+                midFilter = audioCtx.createBiquadFilter();
+                midFilter.type = 'peaking';
+                midFilter.frequency.value = 1500;
+                midFilter.Q.value = 1;
+
+                trebleFilter = audioCtx.createBiquadFilter();
+                trebleFilter.type = 'highshelf';
+                trebleFilter.frequency.value = 4000;
+
+                source.connect(bassFilter);
+                bassFilter.connect(midFilter);
+                midFilter.connect(trebleFilter);
+                trebleFilter.connect(analyser);
+                analyser.connect(audioCtx.destination);
+
+                el.eqBass.oninput = (e) => { bassFilter.gain.value = e.target.value; };
+                el.eqMid.oninput = (e) => { midFilter.gain.value = e.target.value; };
+                el.eqTreble.oninput = (e) => { trebleFilter.gain.value = e.target.value; };
+
+                isAudioInitialized = true;
+                drawVisualizer();
+            } catch(e) {}
+        }
+
+        function drawVisualizer() {
+            requestAnimationFrame(drawVisualizer);
+            if (!analyser || !el.fs.classList.contains('active')) return;
+            
+            let canvas = el.canvas, ctx = canvas.getContext('2d');
+            canvas.width = canvas.clientWidth * window.devicePixelRatio;
+            canvas.height = canvas.clientHeight * window.devicePixelRatio;
+            
+            let bufferLength = analyser.frequencyBinCount;
+            let dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            let barWidth = (canvas.width / bufferLength) * 1.5;
+            let x = 0;
+            
+            for (let i = 0; i < bufferLength; i++) {
+                let barHeight = (dataArray[i] / 255) * canvas.height;
+                ctx.fillStyle = `rgba(29, 185, 84, ${0.4 + (dataArray[i]/255)*0.6})`;
+                ctx.fillRect(x, canvas.height - barHeight, barWidth - 2, barHeight);
+                x += barWidth;
+            }
+        }
+
+        // --- 3. MEDIASESSION API (LOCK SCREEN & BLUETOOTH KEYS) ---
+        function updateMediaSession(title, artist, coverUrl) {
+            if ('mediaSession' in navigator) {
+                navigator.mediaSession.metadata = new MediaMetadata({
+                    title: title,
+                    artist: artist || 'mps3 Player',
+                    album: 'Cartão SD',
+                    artwork: coverUrl ? [{ src: coverUrl, sizes: '512x512', type: 'image/png' }] : []
+                });
+                navigator.mediaSession.setActionHandler('play', () => togglePlay());
+                navigator.mediaSession.setActionHandler('pause', () => togglePlay());
+                navigator.mediaSession.setActionHandler('previoustrack', () => prevTrack());
+                navigator.mediaSession.setActionHandler('nexttrack', () => nextTrack());
+                navigator.mediaSession.setActionHandler('seekto', (details) => {
+                    if (details.seekTime) el.audio.currentTime = details.seekTime;
+                });
+            }
+        }
+
+        // --- SYSTEM STATUS & DIRECTORY RENDER ---
+        async function fetchStatus(){
+            try{
+                let r=await fetch('/api/status'), j=await r.json();
+                el.sdInfoText.textContent = 'SD: '+fmtSize(j.total-j.free)+' / '+fmtSize(j.total);
+                if (j.total > 0) el.sdBar.style.width = ((j.total-j.free)/j.total*100) + '%';
+                el.batInfo.innerHTML = '🔋 ' + j.battery_percent + '% <span style="color:#888;font-size:0.85em;font-weight:normal;">(' + (j.battery_mv/1000).toFixed(2) + 'V)</span>' + (j.battery_time_left>0?' <span style="font-size:0.8em;color:#666;font-weight:normal">~'+Math.floor(j.battery_time_left/60)+'h '+j.battery_time_left%60+'m</span>':'');
+            }catch(e){}
+        }
+
+        function renderTable(entries) {
+            let filter = el.filter.value.toLowerCase().trim();
+            el.tbody.innerHTML='';
+            if(curDir!=='/'){
+                let tr=document.createElement('tr'); tr.innerHTML='<td class="name dir"><span>📁 ..</span></td>';
+                tr.querySelector('span').onclick=()=>{ curDir=curDir.split('/').slice(0,-1).join('/')||'/'; load(); };
+                el.tbody.appendChild(tr);
+            }
+            let filtered = entries.filter(e => e.name.toLowerCase().includes(filter));
+            if (!filtered.length) {
+                el.tbody.innerHTML += '<tr><td style="text-align:center; color:#888; padding:1.5em;">Nenhum arquivo encontrado</td></tr>';
+                return;
+            }
+            filtered.forEach(e=>{
+                let tr=document.createElement('tr');
+                let isAudio = !e.dir && ['mp3','flac','wav','m4a'].includes(e.name.toLowerCase().split('.').pop());
+                
+                tr.innerHTML = `
+                    <td class="name ${e.dir?'dir':'file'}">
+                        <span>${e.dir?'📁 ':'🎵 '}${e.name}</span>
+                        <div class="actions">⋮</div>
+                    </td>
+                `;
+                
+                let span = tr.querySelector('span');
+                if(e.dir) span.onclick = ()=>{ curDir=joinPath(curDir,e.name); el.filter.value=''; load(); };
+                else if(isAudio) span.onclick = ()=>playFromFolder(e.name);
+                
+                let act = tr.querySelector('.actions');
+                if(act) {
+                    act.onclick = (ev)=>{
+                        ev.stopPropagation();
+                        currentCtxItem = { name: e.name, path: joinPath(curDir, e.name), isAudio: isAudio, isDir: e.dir };
+                        document.getElementById('ctxNext').style.display = isAudio ? 'block' : 'none';
+                        document.getElementById('ctxQueue').style.display = isAudio ? 'block' : 'none';
+                        document.getElementById('ctxDownload').style.display = e.dir ? 'none' : 'block';
+                        el.ctx.style.left = Math.min(ev.pageX - 120, window.innerWidth - 160) + 'px';
+                        el.ctx.style.top = ev.pageY + 'px';
+                        el.ctx.classList.add('active');
+                    };
+                }
+                el.tbody.appendChild(tr);
+            });
+        }
+
+        el.filter.oninput = () => renderTable(currentEntries);
+
+        async function load(){
+            let parts=curDir.split('/').filter(x=>x), html="<a data-p='/'>raiz</a>", acc='';
+            for(let p of parts){ acc=joinPath(acc,p); html+=' / <a data-p="'+acc.replace(/"/g,'&quot;')+'">'+p+'</a>'; }
+            el.crumbs.innerHTML=html;
+            el.crumbs.querySelectorAll('a').forEach(a=>a.onclick=()=>{curDir=a.dataset.p; el.filter.value=''; load();});
+            
+            if (dirCache[curDir]) {
+                currentEntries = dirCache[curDir];
+                renderTable(currentEntries);
+            } else {
+                el.tbody.innerHTML = '<tr><td colspan="2" style="text-align:center; padding: 2em; color: #888;"><div style="display:inline-block; animation: spin 1s linear infinite;">⏳</div> Carregando pasta...</td></tr>';
+            }
+            
+            try{
+                let r=await fetch('/api/list?path='+encodeURIComponent(curDir));
+                let files=(await r.json()).entries || [];
+                files.sort((a,b)=>a.dir!==b.dir ? (a.dir?-1:1) : a.name.localeCompare(b.name));
+                dirCache[curDir] = files;
+                currentEntries = files;
+                renderTable(currentEntries);
+            }catch(e){ 
+                if (!dirCache[curDir]) el.tbody.innerHTML='<tr><td colspan=2>Erro ao ler pasta</td></tr>'; 
+            }
+        }
+
+        document.onclick = ()=>el.ctx.classList.remove('active');
+
+        // --- PLAYLIST LOGIC & MUTEX ---
+        function getFolderAudios() {
+            let items = [];
+            currentEntries.forEach(e => {
+                if(!e.dir && ['mp3','flac','wav','m4a'].includes(e.name.toLowerCase().split('.').pop())) {
+                    items.push({ name: e.name, path: joinPath(curDir, e.name) });
+                }
+            });
+            return items;
+        }
+
+        function playFromFolder(targetName) {
+            if (isUploading) {
+                alert('Upload em andamento! Aguarde o envio terminar.');
+                return;
+            }
+            initWebAudio();
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
+            let items = getFolderAudios();
+            originalPlaylist = [...items];
+            playlist = [...items];
+            playIndex = playlist.findIndex(x=>x.name === targetName);
+            
+            if(isShuffle) {
+                let curr = playlist[playIndex];
+                playlist.sort(()=>Math.random()-0.5);
+                playIndex = playlist.indexOf(curr);
+            }
+            loadTrack();
+        }
+
+        async function loadTrack() {
+        if (isUploading) {
+            if (el.audio) el.audio.pause();
+            return;
+        }
+        if(playIndex < 0 || playIndex >= playlist.length) return;
+        let trk = playlist[playIndex];
+        
+        // --- 1. UI DE CARREGAMENTO ANIMADO ---
+        el.playerBar.classList.add('active');
+        el.title.textContent = el.fsTitle.textContent = "⏳ Extraindo Capa...";
+        el.artist.textContent = el.fsArtist.textContent = trk.name;
+        el.art.src = el.fsArt.src = defaultCover;
+        el.fsBg.style.backgroundImage = 'none';
+        
+        el.art.classList.add('loading-spin');
+        el.fsArt.classList.add('loading-spin');
+
+        let url = '/api/download?path=' + encodeURIComponent(trk.path);
+        
+        // --- 2. EXTRAIR METADATA E CAPA *PRIMEIRO* ---
+        let cached = await getCachedMetadata(trk.path);
+        let title = trk.name;
+        let artist = 'Desconhecido';
+        let picture = null;
+        
+        if (cached) {
+            title = cached.title || trk.name;
+            artist = cached.artist || 'Desconhecido';
+            picture = cached.picture;
+        } else {
+            try {
+                let t = await extractMetadata(url);
+                title = t.title || trk.name;
+                artist = t.artist || 'Desconhecido';
+                picture = t.picture;
+                setCachedMetadata(trk.path, { title: title, artist: artist, picture: picture });
+            } catch(e) {}
+        }
+        
+        // --- 3. ATUALIZAR UI COM OS DADOS ---
+        el.title.textContent = el.fsTitle.textContent = title;
+        el.artist.textContent = el.fsArtist.textContent = artist;
+        if (picture) {
+            el.art.src = el.fsArt.src = picture;
+            el.fsBg.style.backgroundImage = 'url("'+picture+'")';
+        }
+        updateMediaSession(title, artist, picture);
+        
+        el.art.classList.remove('loading-spin');
+        el.fsArt.classList.remove('loading-spin');
+        
+        // --- 4. TOCAR AUDIO DEPOIS QUE A REDE ESTA LIVRE ---
+        el.audio.src = url;
+        el.audio.play().catch(()=>{});
+        updatePlayBtn(true);
+    }function togglePlay() {
+            if (isUploading) {
+                alert('Upload em andamento! Aguarde o envio terminar.');
+                return;
+            }
+            initWebAudio();
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+            if(el.audio.paused) el.audio.play();
+            else el.audio.pause();
+        }
+        const svgPlay = '<svg fill="currentColor" viewBox="0 0 24 24" width="20" height="20"><path d="M8 5v14l11-7z"/></svg>';
+        const svgPause = '<svg fill="currentColor" viewBox="0 0 24 24" width="20" height="20"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>';
+        const svgPlayFs = '<svg fill="currentColor" viewBox="0 0 24 24" width="30" height="30"><path d="M8 5v14l11-7z"/></svg>';
+        const svgPauseFs = '<svg fill="currentColor" viewBox="0 0 24 24" width="30" height="30"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>';
+        function updatePlayBtn(playing) {
+            el.playBtn.innerHTML = playing ? svgPause : svgPlay;
+            el.fsPlay.innerHTML = playing ? svgPauseFs : svgPlayFs;
+        }
+        el.audio.onplay = ()=>updatePlayBtn(true);
+        el.audio.onpause = ()=>updatePlayBtn(false);
+        el.audio.onended = ()=>nextTrack();
+        
+        el.audio.ontimeupdate = ()=>{
+            el.cur.textContent = el.fsCur.textContent = fmtTime(el.audio.currentTime);
+            el.tot.textContent = el.fsTot.textContent = fmtTime(el.audio.duration);
+            let p = (el.audio.currentTime / el.audio.duration)*100 || 0;
+            el.prog.style.width = el.fsProg.style.width = p+'%';
+        };
+
+        function seek(ev, cont) {
+            let rect = cont.getBoundingClientRect();
+            el.audio.currentTime = ((ev.clientX - rect.left) / rect.width) * el.audio.duration;
+        }
+
+        function nextTrack() {
+            if(repeatMode === 2) { el.audio.currentTime=0; el.audio.play(); return; }
+            playIndex++;
+            if(playIndex >= playlist.length) {
+                if(repeatMode === 1) playIndex = 0;
+                else { playIndex--; return; }
+            }
+            loadTrack();
+        }
+        function prevTrack() {
+            if(el.audio.currentTime > 3) { el.audio.currentTime=0; return; }
+            playIndex--;
+            if(playIndex < 0) playIndex = playlist.length-1;
+            loadTrack();
+        }
+
+        function toggleShuffle() {
+            isShuffle = !isShuffle;
+            el.btnShuf.classList.toggle('active', isShuffle);
+            if(!playlist.length) return;
+            let curr = playlist[playIndex];
+            if(isShuffle) {
+                playlist.sort(()=>Math.random()-0.5);
+            } else {
+                playlist = [...originalPlaylist];
+            }
+            playIndex = playlist.indexOf(curr);
+        }
+        function toggleRepeat() {
+            repeatMode = (repeatMode + 1) % 3;
+            el.btnRep.classList.toggle('active', repeatMode > 0);
+            // using same SVG but changing opacity or color via CSS class 'active', or swapping icon.
+            if (repeatMode === 2) {
+                // Repeat ONE icon
+                el.btnRep.innerHTML = '<svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zm-4-2V9h-1l-2 1v1h1.5v4L13 15z"/></svg>';
+            } else {
+                // Repeat ALL icon
+                el.btnRep.innerHTML = '<svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>';
+            }
+        }
+        function toggleFullscreen() {
+            el.fs.classList.toggle('active');
+            document.body.classList.toggle('fullscreen-active');
+            if (el.fs.classList.contains('active')) {
+                initWebAudio();
+                if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+            }
+        }
+
+        // --- Context Menu Actions ---
+        document.getElementById('ctxNext').onclick = ()=>{
+            if(!currentCtxItem || !currentCtxItem.isAudio) return;
+            if(playIndex === -1) { playlist=[currentCtxItem]; playIndex=0; loadTrack(); }
+            else { playlist.splice(playIndex+1, 0, currentCtxItem); }
+        };
+        document.getElementById('ctxQueue').onclick = ()=>{
+            if(!currentCtxItem || !currentCtxItem.isAudio) return;
+            if(playIndex === -1) { playlist=[currentCtxItem]; playIndex=0; loadTrack(); }
+            else { playlist.push(currentCtxItem); }
+        };
+        document.getElementById('ctxDownload').onclick = ()=>{
+            if(!currentCtxItem || currentCtxItem.isDir) return;
+            window.location.href = '/api/download?path=' + encodeURIComponent(currentCtxItem.path);
+        };
+
+        document.getElementById('ctxRename').onclick = async ()=>{
+            if(!currentCtxItem) return;
+            let newName = prompt('Novo nome para ' + currentCtxItem.name + ':', currentCtxItem.name);
+            if(newName && newName.trim() && newName.trim() !== currentCtxItem.name) {
+                newName = newName.trim();
+                let newPath = joinPath(curDir, newName);
+                let res = await fetch('/api/rename', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ old_path: currentCtxItem.path, new_path: newPath })
+                });
+                if(res.ok) { load(); } else { alert('Erro ao renomear'); }
+            }
+        };
+
+        
+        // --- Navegação e Seleção de Pastas para Mover Arquivos ---
+        let moveTargetItem = null;
+        let moveCurrentDir = '/';
+
+        async function openMoveModal(item) {
+            moveTargetItem = item;
+            moveCurrentDir = curDir || '/';
+            document.getElementById('moveItemName').textContent = item.name;
+            document.getElementById('moveModal').style.display = 'flex';
+            await renderMoveFolderList();
+        }
+
+        function closeMoveModal() {
+            document.getElementById('moveModal').style.display = 'none';
+            moveTargetItem = null;
+        }
+
+        async function renderMoveFolderList() {
+            const pathSpan = document.getElementById('moveCurrentPath');
+            pathSpan.textContent = moveCurrentDir;
+            const list = document.getElementById('moveFolderList');
+            list.innerHTML = '<div style="padding:14px;color:#888;text-align:center;font-size:0.9em;">Carregando pastas...</div>';
+            
+            try {
+                const res = await fetch('/api/list?path=' + encodeURIComponent(moveCurrentDir));
+                if(!res.ok) throw new Error();
+                const data = await res.json();
+                list.innerHTML = '';
+                
+                // Se não estiver na raiz, adiciona item para subir pasta "📁 .."
+                if (moveCurrentDir !== '/' && moveCurrentDir !== '') {
+                    const upDiv = document.createElement('div');
+                    upDiv.className = 'folder-picker-item up-dir';
+                    upDiv.innerHTML = '<span style="font-size:1.15em;">📁</span> <strong>.. (Subir uma pasta)</strong>';
+                    upDiv.onclick = async () => {
+                        let parts = moveCurrentDir.replace(/\/$/, '').split('/');
+                        parts.pop();
+                        moveCurrentDir = parts.join('/') || '/';
+                        await renderMoveFolderList();
+                    };
+                    list.appendChild(upDiv);
+                }
+
+                // Apenas pastas (exclui a própria pasta selecionada caso seja uma pasta)
+                const dirs = (data.files || []).filter(f => f.dir && (!moveTargetItem || !moveTargetItem.isDir || f.name !== moveTargetItem.name));
+                
+                if (dirs.length === 0) {
+                    const emptyDiv = document.createElement('div');
+                    emptyDiv.style.padding = '12px 14px';
+                    emptyDiv.style.color = '#888';
+                    emptyDiv.style.fontSize = '0.9em';
+                    emptyDiv.textContent = 'Nenhuma subpasta aqui.';
+                    list.appendChild(emptyDiv);
+                } else {
+                    dirs.forEach(d => {
+                        const itemDiv = document.createElement('div');
+                        itemDiv.className = 'folder-picker-item';
+                        itemDiv.innerHTML = `<span style="font-size:1.15em;">📁</span> <span>${d.name}</span>`;
+                        itemDiv.onclick = async () => {
+                            moveCurrentDir = joinPath(moveCurrentDir, d.name);
+                            await renderMoveFolderList();
+                        };
+                        list.appendChild(itemDiv);
+                    });
+                }
+            } catch(e) {
+                list.innerHTML = '<div style="padding:14px;color:#c33;text-align:center;font-size:0.9em;">Erro ao carregar pastas.</div>';
+            }
+        }
+
+        document.getElementById('btnMoveNewFolder').onclick = async () => {
+            let name = prompt('Nome da nova pasta em ' + moveCurrentDir + ':');
+            if (!name || !name.trim()) return;
+            name = name.trim();
+            let newDirPath = joinPath(moveCurrentDir, name);
+            try {
+                let res = await fetch('/api/mkdir', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ path: newDirPath })
+                });
+                if (res.ok) {
+                    await renderMoveFolderList();
+                } else {
+                    alert('Erro ao criar pasta');
+                }
+            } catch(e) {
+                alert('Falha na requisição');
+            }
+        };
+
+        document.getElementById('btnConfirmMove').onclick = async () => {
+            if (!moveTargetItem) return;
+            let newPath = joinPath(moveCurrentDir, moveTargetItem.name);
+            if (newPath === moveTargetItem.path) {
+                alert('O item já está nesta pasta.');
+                return;
+            }
+            try {
+                let res = await fetch('/api/move', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ old_path: moveTargetItem.path, new_path: newPath })
+                });
+                if (res.ok) {
+                    closeMoveModal();
+                    load();
+                } else {
+                    alert('Erro ao mover');
+                }
+            } catch(e) {
+                alert('Falha na requisição ao mover');
+            }
+        };
+
+        document.getElementById('ctxMove').onclick = () => {
+            if(!currentCtxItem) return;
+            document.getElementById('ctxMenu').classList.remove('active');
+            openMoveModal(currentCtxItem);
+        };
+
+        document.getElementById('ctxDel').onclick = async ()=>{
+            if(!currentCtxItem) return;
+            let msg = currentCtxItem.isDir ? 
+                'Tem certeza que deseja excluir a pasta "' + currentCtxItem.name + '" e todos os seus arquivos recursivamente?' : 
+                'Excluir "' + currentCtxItem.name + '"?';
+            if(confirm(msg)) {
+                let res = await fetch('/api/delete?path='+encodeURIComponent(currentCtxItem.path), {method:'DELETE'});
+                if(res.ok) { load(); } else { alert('Erro ao excluir'); }
+            }
+        };
+
+        document.getElementById('mkdirBtn').onclick = async ()=>{
+            let name = prompt('Nome da nova pasta:');
+            if(name && name.trim()) {
+                name = name.trim();
+                let path = joinPath(curDir, name);
+                let res = await fetch('/api/mkdir', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ path: path })
+                });
+                if(res.ok) { load(); } else { alert('Erro ao criar pasta'); }
+            }
+        };
+
+        // --- UPLOAD ENGINE (WITH MUTEX & QUEUE) ---
+        function renderQueue() {
+            if(!queueItems.length) { el.queue.innerHTML=''; return; }
+            let html = '';
+            for(let q of queueItems) {
+                let cls = q.status==='done'?'done':(q.status==='error'?'error':(q.status==='active'?'active':''));
+                let icon = q.status==='done'?'✓':(q.status==='error'?'✕':(q.status==='active'?'⏳':'⋯'));
+                html += `<div class="q-item ${cls}"><span>${q.name}</span><span>${icon}</span></div>`;
+            }
+            el.queue.innerHTML = html;
+            el.queue.scrollTop = el.queue.scrollHeight;
+        }
+
+        async function getFilesFromEntry(entry, basePath = '') {
+            const files = [];
+            if (entry.isFile) {
+                return new Promise((res) => {
+                    entry.file((f) => { f.relativePath = basePath ? basePath + '/' + f.name : f.name; res([f]); });
+                });
+            } else if (entry.isDirectory) {
+                const reader = entry.createReader();
+                const entries = await new Promise((res) => {
+                    let results = [];
+                    const readBatch = () => {
+                        reader.readEntries((b) => {
+                            if (!b.length) res(results);
+                            else { results = results.concat(b); readBatch(); }
+                        });
+                    };
+                    readBatch();
+                });
+                const subPath = basePath ? basePath + '/' + entry.name : entry.name;
+                for (const sub of entries) {
+                    const subFiles = await getFilesFromEntry(sub, subPath);
+                    files.push(...subFiles);
+                }
+                return files;
+            }
+            return files;
+        }
+
+        function uploadOne(relPath, file, idx, count, batchTotal, qid) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                const url = '/api/upload?path=' + encodeURIComponent(joinPath(curDir, relPath)) +
+                    '&idx=' + idx + '&count=' + count + '&batchTotal=' + batchTotal;
+                xhr.open('PUT', url, true);
+                xhr.timeout = 300000;
+                let t0 = performance.now(), lastProgress = t0, lastBytes = 0;
+
+                xhr.upload.onprogress = (ev) => {
+                    if (!ev.lengthComputable) return;
+                    const now = performance.now();
+                    const pct = Math.round(ev.loaded * 100 / ev.total);
+                    const deltaTime = (now - lastProgress) / 1000;
+                    const deltaBytes = ev.loaded - lastBytes;
+                    const kbps = deltaTime > 0.05 ? (deltaBytes / 1024) / deltaTime : 0;
+                    lastBytes = ev.loaded; lastProgress = now;
+
+                    el.upFileBar.style.width = pct + '%';
+                    el.upFilePct.textContent = pct + '%';
+                    const etaSec = kbps > 0.05 ? ((ev.total - ev.loaded) / 1024) / kbps : -1;
+                    el.upSpeed.textContent = kbps >= 1024 ? (kbps / 1024).toFixed(1) + ' MB/s' : Math.round(kbps) + ' KB/s';
+                    el.upEta.textContent = etaSec >= 0 ? fmtEta(etaSec) : '';
+
+                    if (count > 1) {
+                        const overallDone = window.__batchDoneBefore + ev.loaded;
+                        const opct = batchTotal > 0 ? Math.round(overallDone * 100 / batchTotal) : 0;
+                        el.upOverallBar.style.width = opct + '%';
+                        el.upOverallPct.textContent = opct + '%';
+                        el.upOverallLabel.textContent = 'Geral (' + idx + '/' + count + ')';
+                    }
+                };
+
+                xhr.onload = () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        let q = queueItems.find(x=>x.id===qid); if(q) q.status='done';
+                        renderQueue(); resolve();
+                    } else {
+                        let q = queueItems.find(x=>x.id===qid); if(q) q.status='error';
+                        renderQueue(); reject(new Error('HTTP ' + xhr.status));
+                    }
+                };
+                xhr.onerror = () => { let q = queueItems.find(x=>x.id===qid); if(q) q.status='error'; renderQueue(); reject(new Error('Falha de rede')); };
+                xhr.ontimeout = () => { let q = queueItems.find(x=>x.id===qid); if(q) q.status='error'; renderQueue(); reject(new Error('Timeout')); };
+
+                xhr.send(file);
+            });
+        }
+
+        async function uploadBatch(files) {
+            const list = Array.from(files);
+            if (!list.length) return;
+
+            // MUTEX: Pausar reprodução imediatamente
+            if (el.audio) el.audio.pause();
+            isUploading = true;
+
+            queueItems = [];
+            for (const f of list) {
+                const relPath = f.relativePath || f.webkitRelativePath || f.name;
+                queueItems.push({ id: ++queueId, name: relPath, size: f.size, status: 'waiting' });
+            }
+            renderQueue();
+
+            const batchTotal = list.reduce((s, f) => s + f.size, 0);
+            const count = list.length;
+
+            el.upBox.style.display = 'block';
+            el.upOverallBar.style.width = '0%';
+            el.upOverallPct.textContent = '0%';
+            el.upFileBar.style.width = '0%';
+            el.upFilePct.textContent = '0%';
+            el.upSpeed.textContent = '0 KB/s';
+            el.upEta.textContent = '--';
+            el.upOverallLabel.textContent = 'Geral (0/' + count + ')';
+            window.__batchDoneBefore = 0;
+
+            let errored = false;
+            for (let i = 0; i < list.length; i++) {
+                const f = list[i];
+                const relPath = f.relativePath || f.webkitRelativePath || f.name;
+                const q = queueItems[i];
+                q.status = 'active';
+                renderQueue();
+                el.upFileName.textContent = relPath;
+
+                try {
+                    await uploadOne(relPath, f, i + 1, count, batchTotal, q.id);
+                } catch (e) {
+                    errored = true;
+                    alert('Falha ao enviar ' + relPath + ': ' + e.message);
+                    break;
+                }
+                window.__batchDoneBefore += f.size;
+            }
+
+            isUploading = false;
+            fetchStatus();
+            load();
+            setTimeout(() => {
+                el.upBox.style.display = 'none';
+                queueItems = [];
+                renderQueue();
+            }, 4000);
+        }
+
+        // --- DRAG & DROP & INPUTS ---
+        ['dragenter','dragover','dragleave','drop'].forEach(evt => {
+            el.dropzone.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); });
+        });
+        el.dropzone.addEventListener('dragover', () => el.dropzone.classList.add('dragover'));
+        el.dropzone.addEventListener('dragleave', () => el.dropzone.classList.remove('dragover'));
+        el.dropzone.addEventListener('drop', async (e) => {
+            el.dropzone.classList.remove('dragover');
+            const dt = e.dataTransfer;
+            let files = [];
+            if (dt.items && dt.items.length && dt.items[0].webkitGetAsEntry) {
+                for (let i = 0; i < dt.items.length; i++) {
+                    const entry = dt.items[i].webkitGetAsEntry();
+                    if (entry) {
+                        const entryFiles = await getFilesFromEntry(entry);
+                        files.push(...entryFiles);
+                    }
+                }
+            } else if (dt.files) {
+                files = Array.from(dt.files);
+            }
+            if (files.length) uploadBatch(files);
+        });
+
+        el.inpFiles.onchange = (e) => { if (e.target.files.length) uploadBatch(e.target.files); e.target.value = ''; };
+        el.inpFolder.onchange = (e) => { if (e.target.files.length) uploadBatch(e.target.files); e.target.value = ''; };
+
+        // --- METADATA EXTRACTION (SAFE NON-BLOCKING) ---
+        async function extractMetadata(url) {
+            try {
+                let res = await fetch(url, { headers: { 'Range': 'bytes=0-2097151' } });
+                if (!res.ok && res.status !== 206) return {};
+                let buf = await res.arrayBuffer();
+                let u8 = new Uint8Array(buf);
+                let view = new DataView(buf);
+                if (u8[0]===0x49 && u8[1]===0x44 && u8[2]===0x33) return parseID3(u8, view);
+                if (u8[0]===0x66 && u8[1]===0x4C && u8[2]===0x61 && u8[3]===0x43) return parseFLAC(u8, view);
+            } catch(e) {}
+            return {};
+        }
+
+        function parseFLAC(u8, view) {
+            let offset = 4, tags = { title: null, artist: null, picture: null };
+            while(offset < u8.length - 4) {
+                let header = view.getUint32(offset), isLast = (header & 0x80000000) !== 0;
+                let type = (header >> 24) & 0x7F, length = header & 0xFFFFFF;
+                offset += 4;
+                if (offset + length > u8.length) break;
+                if (type === 4) {
+                    let vOffset = offset + 4 + view.getUint32(offset, true);
+                    let listLen = view.getUint32(vOffset, true); vOffset += 4;
+                    for(let i=0; i<listLen; i++) {
+                        let strLen = view.getUint32(vOffset, true); vOffset += 4;
+                        let str = new TextDecoder('utf-8').decode(u8.subarray(vOffset, vOffset+strLen));
+                        vOffset += strLen;
+                        let idx = str.indexOf('=');
+                        if (idx > 0) {
+                            let k = str.substring(0, idx).toUpperCase(), v = str.substring(idx+1);
+                            if (k === 'TITLE') tags.title = v;
+                            if (k === 'ARTIST') tags.artist = v;
+                        }
+                    }
+                } else if (type === 6) {
+                    let pOffset = offset + 4;
+                    let mimeLen = view.getUint32(pOffset); pOffset += 4;
+                    let mime = new TextDecoder('ascii').decode(u8.subarray(pOffset, pOffset+mimeLen));
+                    pOffset += mimeLen;
+                    let descLen = view.getUint32(pOffset); pOffset += 4 + descLen + 16;
+                    let picLen = view.getUint32(pOffset); pOffset += 4;
+                    let imgData = u8.subarray(pOffset, pOffset+picLen);
+                    let binary = '', chunk = 8192;
+                    for(let i=0; i<imgData.length; i+=chunk) binary += String.fromCharCode.apply(null, imgData.subarray(i, i+chunk));
+                    if (!mime || mime.toLowerCase() === 'jpg') mime = 'image/jpeg';
+                    tags.picture = 'data:' + mime + ';base64,' + btoa(binary);
+                }
+                offset += length;
+                if (isLast) break;
+            }
+            return tags;
+        }
+
+        function parseID3(u8, view) {
+            let version = u8[3], size = (u8[6]<<21) | (u8[7]<<14) | (u8[8]<<7) | u8[9];
+            let offset = 10 + (((u8[5] & 0x40)!==0) ? (version===3 ? 4+view.getUint32(10) : (u8[10]<<21)|(u8[11]<<14)|(u8[12]<<7)|u8[13]) : 0);
+            let tags = { title: null, artist: null, picture: null };
+            while (offset < size && offset < u8.length - 10) {
+                let id = String.fromCharCode(u8[offset], u8[offset+1], u8[offset+2], u8[offset+3]);
+                let fsize = version===3 ? view.getUint32(offset+4) : (u8[offset+4]<<21)|(u8[offset+5]<<14)|(u8[offset+6]<<7)|u8[offset+7];
+                if (id === '\0\0\0\0' || fsize === 0) break;
+                offset += 10;
+                if (offset + fsize > u8.length) break;
+                
+                if (id === 'TIT2') tags.title = decodeString(u8.subarray(offset, offset+fsize));
+                if (id === 'TPE1') tags.artist = decodeString(u8.subarray(offset, offset+fsize));
+                if (id === 'APIC') {
+                    let pBuf = u8.subarray(offset, offset+fsize);
+                    let pOff=1, mimeStart=pOff;
+                    while(pOff < pBuf.length && pBuf[pOff]!==0) pOff++;
+                    let mime = new TextDecoder('ascii').decode(pBuf.subarray(mimeStart, pOff));
+                    pOff++;
+                    if(mime !== '-->') {
+                        pOff++;
+                        if(pBuf[0]===1 || pBuf[0]===2) {
+                            while(pOff < pBuf.length-1) { if(pBuf[pOff]===0 && pBuf[pOff+1]===0) break; pOff++; }
+                            pOff += 2;
+                        } else {
+                            while(pOff < pBuf.length && pBuf[pOff]!==0) pOff++; pOff++;
+                        }
+                        let iData = pBuf.subarray(pOff);
+                        let binary = '', chunk = 8192;
+                        for(let i=0; i<iData.length; i+=chunk) binary += String.fromCharCode.apply(null, iData.subarray(i, i+chunk));
+                        if(!mime||mime.toLowerCase()==='jpg') mime='image/jpeg';
+                        tags.picture = 'data:'+mime+';base64,'+btoa(binary);
+                    }
+                }
+                offset += fsize;
+            }
+            return tags;
+        }
+
+        function decodeString(b) {
+            if(b.length<2) return '';
+            let e=b[0];
+            return (e===0||e===3) ? new TextDecoder('iso-8859-1').decode(b.subarray(1)).replace(/\0/g,'') : new TextDecoder('utf-16').decode(b.subarray(1)).replace(/\0/g,'');
+        }
+
+        
+
+        const configBtn = document.getElementById('configBtn');
+        const configModal = document.getElementById('configModal');
+        const cfgSSID = document.getElementById('cfgSSID');
+        const cfgPass = document.getElementById('cfgPass');
+        const cfgStatus = document.getElementById('cfgStatus');
+        const btnSaveCfg = document.getElementById('btnSaveCfg');
+        const btnCloseCfg = document.getElementById('btnCloseCfg');
+        const netList = document.getElementById('netList');
+        const netEmpty = document.getElementById('netEmpty');
+
+        function loadNetworks() {
+            fetch('/api/wifi/networks')
+            .then(r => r.json())
+            .then(d => renderNetworks((d.networks || []).map(n => n.ssid)))
+            .catch(() => renderNetworks([]));
+        }
+
+        async function deleteNetwork(ssid) {
+            try {
+                const r = await fetch('/api/wifi/networks', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ssid })
+                });
+                if (r.ok) loadNetworks();
+                else cfgStatus.textContent = 'Erro ao remover.';
+            } catch(e) {
+                cfgStatus.textContent = 'Erro ao remover.';
+            }
+        }
+
+        function renderNetworks(arr) {
+            netList.innerHTML = '';
+            if (arr.length === 0) {
+                netEmpty.style.display = 'block';
+            } else {
+                netEmpty.style.display = 'none';
+                arr.forEach(s => {
+                    let li = document.createElement('li');
+                    li.style.display = 'flex'; li.style.justifyContent = 'space-between'; li.style.padding = '4px 6px'; li.style.borderBottom = '1px solid #eee';
+                    li.textContent = s;
+                    let del = document.createElement('span');
+                    del.textContent = '✕';
+                    del.style.color = '#c33'; del.style.cursor = 'pointer';
+                    del.onclick = () => deleteNetwork(s);
+                    li.appendChild(del);
+                    netList.appendChild(li);
+                });
+            }
+        }
+
+        configBtn.onclick = () => {
+            configModal.style.display = 'block';
+            loadNetworks();
+        };
+
+        btnCloseCfg.onclick = () => { configModal.style.display = 'none'; cfgStatus.textContent = ''; };
+
+        btnSaveCfg.onclick = async () => {
+            const ssid = cfgSSID.value.trim();
+            const pass = cfgPass.value;
+            if (!ssid) { cfgStatus.textContent = 'SSID não pode ficar vazio.'; return; }
+            try {
+                const r = await fetch('/api/wifi/networks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ssid, pass })
+                });
+                if (r.ok) {
+                    cfgStatus.textContent = 'Rede salva! Conectando...';
+                    cfgSSID.value = '';
+                    cfgPass.value = '';
+                    loadNetworks();
+                    setTimeout(() => { cfgStatus.textContent = ''; }, 2500);
+                } else {
+                    cfgStatus.textContent = 'Erro ao salvar.';
+                }
+            } catch(e) {
+                cfgStatus.textContent = 'Erro de conexão.';
+            }
+        };
+
+        
+        // ================= EQUALIZADOR DE 10 BANDAS =================
+        let eqConfig = null;
+        let selectedPresetIdx = 0;
+        const EQ_FREQS = ["31Hz", "62Hz", "125Hz", "250Hz", "500Hz", "1kHz", "2kHz", "4kHz", "8kHz", "16kHz"];
+        const EQ_CURVES = {
+            'flat': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            'rock': [5, 4, 3, 1, -1, -1, 1, 2, 3, 4],
+            'pop': [-1, -1, 2, 3, 4, 4, 2, 1, -1, -2],
+            'dance': [6, 5, 2, 0, -1, -1, 0, 2, 4, 5],
+            'jazz': [3, 2, 1, 2, -1, -1, 0, 1, 2, 3],
+            'classica': [4, 3, 2, 1, 1, 1, 2, 3, 4, 4],
+            'vocal': [-2, -1, 1, 3, 4, 4, 3, 1, 0, -1],
+            'bass': [6, 5, 4, 2, 1, 0, 0, 0, 0, 0]
+        };
+
+        function renderEqBands() {
+            const container = document.getElementById('eqBandsContainer');
+            container.innerHTML = '';
+            for(let b = 0; b < 10; b++) {
+                const col = document.createElement('div');
+                col.className = 'eq-fader-col';
+                col.innerHTML = `
+                    <span class="eq-fader-val" id="eqBandVal${b}">0.0 dB</span>
+                    <div class="eq-fader-track-wrap">
+                        <div class="eq-fader-zero-line"></div>
+                        <input type="range" id="eqBandSlider${b}" class="v-fader" min="-15" max="15" step="0.5" value="0">
+                    </div>
+                    <span class="eq-fader-freq">${EQ_FREQS[b]}</span>
+                `;
+                container.appendChild(col);
+                const slider = col.querySelector('input');
+                slider.oninput = (e) => {
+                    const val = parseFloat(e.target.value);
+                    document.getElementById(`eqBandVal${b}`).textContent = (val > 0 ? '+' : '') + val.toFixed(1) + ' dB';
+                    if(eqConfig && eqConfig.presets && eqConfig.presets[selectedPresetIdx]) {
+                        eqConfig.presets[selectedPresetIdx].band_gains[b] = val;
+                    }
+                };
+            }
+        }
+
+        async function loadEq() {
+            try {
+                const res = await fetch('/api/eq');
+                if(res.ok) {
+                    eqConfig = await res.json();
+                    selectedPresetIdx = eqConfig.active_preset_idx || 0;
+                    populatePresetSelect();
+                    updateEqUI();
+                }
+            } catch(e) {
+                console.error("Erro ao carregar EQ:", e);
+            }
+        }
+
+        function populatePresetSelect() {
+            const sel = document.getElementById('eqPresetSelect');
+            sel.innerHTML = '';
+            for(let p = 0; p < (eqConfig.presets ? eqConfig.presets.length : 10); p++) {
+                const opt = document.createElement('option');
+                opt.value = p;
+                const name = (eqConfig.presets && eqConfig.presets[p] && eqConfig.presets[p].name) ? eqConfig.presets[p].name : `Preset ${p+1}`;
+                opt.textContent = `${p+1}: ${name}`;
+                if(p === selectedPresetIdx) opt.selected = true;
+                sel.appendChild(opt);
+            }
+        }
+
+        function updateEqUI() {
+            if(!eqConfig || !eqConfig.presets) return;
+            document.getElementById('eqMasterEnable').checked = !!eqConfig.enabled;
+            const p = eqConfig.presets[selectedPresetIdx];
+            if(!p) return;
+
+            document.getElementById('eqPresetName').value = p.name || `Preset ${selectedPresetIdx+1}`;
+            
+            const ovr = p.overall_gain || 0;
+            document.getElementById('eqOverallSlider').value = ovr;
+            document.getElementById('eqOverallVal').textContent = (ovr > 0 ? '+' : '') + ovr.toFixed(1) + ' dB';
+
+            for(let b = 0; b < 10; b++) {
+                const g = (p.band_gains && p.band_gains[b] !== undefined) ? p.band_gains[b] : 0;
+                const sl = document.getElementById(`eqBandSlider${b}`);
+                if(sl) sl.value = g;
+                const lbl = document.getElementById(`eqBandVal${b}`);
+                if(lbl) lbl.textContent = (g > 0 ? '+' : '') + g.toFixed(1) + ' dB';
+            }
+        }
+
+        function applyEqCurve(name) {
+            const curve = EQ_CURVES[name];
+            if(!curve || !eqConfig || !eqConfig.presets) return;
+            const p = eqConfig.presets[selectedPresetIdx];
+            if(!p) return;
+            for(let b = 0; b < 10; b++) {
+                p.band_gains[b] = curve[b];
+            }
+            updateEqUI();
+        }
+
+        async function saveEq() {
+            if(!eqConfig) return;
+            const nameInput = document.getElementById('eqPresetName').value.trim();
+            if(nameInput && eqConfig.presets && eqConfig.presets[selectedPresetIdx]) {
+                eqConfig.presets[selectedPresetIdx].name = nameInput;
+            }
+            eqConfig.enabled = document.getElementById('eqMasterEnable').checked;
+
+            const st = document.getElementById('eqStatusMsg');
+            st.textContent = 'Enviando...';
+            try {
+                const res = await fetch('/api/eq', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(eqConfig)
+                });
+                if(res.ok) {
+                    st.textContent = 'Salvo no MPS3 com sucesso!';
+                    populatePresetSelect();
+                    setTimeout(()=>{ st.textContent = ''; }, 3000);
+                } else {
+                    st.textContent = 'Erro ao salvar.';
+                }
+            } catch(e) {
+                st.textContent = 'Erro de rede.';
+            }
+        }
+
+        async function activatePreset() {
+            if(!eqConfig) return;
+            eqConfig.active_preset_idx = selectedPresetIdx;
+            eqConfig.enabled = true;
+            document.getElementById('eqMasterEnable').checked = true;
+            await saveEq();
+        }
+
+        document.getElementById('eqBtn').onclick = () => {
+            renderEqBands();
+            document.getElementById('eqModal').style.display = 'block';
+            loadEq();
+        };
+
+        document.getElementById('btnCloseEq').onclick = () => {
+            document.getElementById('eqModal').style.display = 'none';
+            document.getElementById('eqStatusMsg').textContent = '';
+        };
+
+        document.getElementById('eqPresetSelect').onchange = (e) => {
+            selectedPresetIdx = parseInt(e.target.value);
+            updateEqUI();
+        };
+
+        document.getElementById('eqOverallSlider').oninput = (e) => {
+            const val = parseFloat(e.target.value);
+            document.getElementById('eqOverallVal').textContent = (val > 0 ? '+' : '') + val.toFixed(1) + ' dB';
+            if(eqConfig && eqConfig.presets && eqConfig.presets[selectedPresetIdx]) {
+                eqConfig.presets[selectedPresetIdx].overall_gain = val;
+            }
+        };
+
+        document.getElementById('btnSaveEq').onclick = saveEq;
+        document.getElementById('btnActivatePreset').onclick = activatePreset;
+
+        fetchStatus(); setInterval(fetchStatus, 8000); load();
+    </script>
+</body>
+</html>

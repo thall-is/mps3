@@ -1,0 +1,5 @@
+## idf_component.yml — componente eq
+## Declaracao de metadados para o ESP Component Manager.
+## As dependencias de build (nvs_flash, heap) estao no CMakeLists.txt.
+version: "1.0.0"
+description: "Equalizador de 5 bandas com filtros biquad IIR"
