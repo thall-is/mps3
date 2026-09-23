@@ -1,5 +1,0 @@
-﻿Versao: mps3_20260913_060459
-Data: 2026-09-13 06:04:59
-Branch: develop
-Commit: c41a141
-Tamanho mps3.bin: 2078720 bytes

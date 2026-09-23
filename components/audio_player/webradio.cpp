@@ -14,13 +14,6 @@ static const char *TAG = "webradio";
 
 #define INBUF_SIZE (64 * 1024)
 
-static float volume_to_gain(int percent)
-{
-    if (percent <= 0) return 0.0f;
-    float db = -40.0f * (1.0f - (percent / 100.0f));
-    return powf(10.0f, db / 20.0f);
-}
-
 void play_web_radio(const char *url)
 {
     ESP_LOGI(TAG, "Iniciando Radio Web: %s", url);
@@ -127,9 +120,8 @@ void play_web_radio(const char *url)
             outbuf = (int32_t*)heap_caps_malloc(out_cap * sizeof(int32_t), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
             sample_rate = decoder->sample_rate();
             channels = decoder->channels();
-            i2s_output_set_rate(sample_rate);
-            eq_set_sample_rate(sample_rate);
-            eq_reset_state();
+            audio_dsp_flush();
+            audio_dsp_set_rate(sample_rate);
 
             state_lock();
             s_state.track_loaded = true;
@@ -147,58 +139,22 @@ void play_web_radio(const char *url)
         }
 
         if (samples_decoded > 0 && outbuf && channels > 0) {
-            static int s_cached_radio_vol = -1;
-            static int s_cached_radio_bal = 999;
-            static int32_t s_cached_radio_final_L = 32768;
-            static int32_t s_cached_radio_final_R = 32768;
-
-            int vol = s_volume_percent;
-            int bal = audio_player_get_balance();
-            if (vol != s_cached_radio_vol || bal != s_cached_radio_bal) {
-                s_cached_radio_vol = vol;
-                s_cached_radio_bal = bal;
-
-                float vol_gain = volume_to_gain(vol);
-                int32_t vol_mult = (int32_t)(vol_gain * 32768.0f + 0.5f);
-                if (vol_mult > 32768) vol_mult = 32768;
-                if (vol_mult < 0) vol_mult = 0;
-
-                int pct_L = 100;
-                int pct_R = 100;
-                if (bal < 0) {
-                    pct_R = 100 + bal;
-                } else if (bal > 0) {
-                    pct_L = 100 - bal;
-                }
-                if (pct_L < 0) pct_L = 0;
-                if (pct_R < 0) pct_R = 0;
-                if (pct_L > 100) pct_L = 100;
-                if (pct_R > 100) pct_R = 100;
-
-                int32_t bal_mult_L = (pct_L <= 0) ? 0 : ((pct_L >= 100) ? 32768 : (int32_t)(((int64_t)pct_L * pct_L * 32768) / 10000));
-                int32_t bal_mult_R = (pct_R <= 0) ? 0 : ((pct_R >= 100) ? 32768 : (int32_t)(((int64_t)pct_R * pct_R * 32768) / 10000));
-
-                s_cached_radio_final_L = (int32_t)(((int64_t)vol_mult * bal_mult_L) >> 15);
-                s_cached_radio_final_R = (int32_t)(((int64_t)vol_mult * bal_mult_R) >> 15);
-            }
-
-            int32_t final_L = s_cached_radio_final_L;
-            int32_t final_R = s_cached_radio_final_R;
-
-            if (final_L < 32768 || final_R < 32768) {
-                for (size_t i = 0; i < samples_decoded; i += 2) {
-                    outbuf[i] = (int32_t)(((int64_t)outbuf[i] * final_L) >> 15);
-                    if (i + 1 < samples_decoded) {
-                        outbuf[i + 1] = (int32_t)(((int64_t)outbuf[i + 1] * final_R) >> 15);
+            if (channels == 1) {
+                int32_t *stereo = ensure_stereo_scratch(samples_decoded * 2);
+                if (stereo) {
+                    for (size_t i = 0; i < samples_decoded; i++) {
+                        stereo[2 * i]     = outbuf[i];
+                        stereo[2 * i + 1] = outbuf[i];
                     }
+                    audio_dsp_send_pcm(stereo, samples_decoded * 2, sample_rate);
                 }
+            } else {
+                audio_dsp_send_pcm(outbuf, samples_decoded, sample_rate);
             }
-            eq_process(outbuf, samples_decoded);
-            size_t bw = 0;
-            i2s_output_write(outbuf, samples_decoded, &bw);
         }
     }
 
+    audio_dsp_drain();
     if (outbuf) heap_caps_free(outbuf);
     delete decoder;
     heap_caps_free(inbuf);

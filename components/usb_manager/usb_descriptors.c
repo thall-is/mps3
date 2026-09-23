@@ -12,7 +12,7 @@
 #define USB_VID           0x303A // Espressif VID
 #define USB_PID_CDC       0x4000 // Modo 0: Serial CDC / Flash Puro (Standby/Player)
 #define USB_PID_MSC       0x4002 // Modo 1: Armazenamento USB Puro
-#define USB_PID_DAC       0x4004 // Modo 2: USB DAC de Mesa Puro
+#define USB_PID_DAC       0x4006 // Modo 2: USB DAC de Mesa Puro
 
 // -----------------------------------------------------------------------------
 // DESCRITOR HID (Media Control / Consumer)
@@ -172,7 +172,7 @@ const tusb_desc_device_t desc_device_dac =
 
 #define AUDIO_BYTES_PER_SAMPLE    4 // 24-bit em subslot de 32 bits
 #define AUDIO_BITS_PER_SAMPLE     24 // resolucao de 24 bits
-#define AUDIO_EP_OUT_SIZE         384 // Max 48kHz * 2 ch * 4 bytes = 384 bytes/ms
+#define AUDIO_EP_OUT_SIZE         384 // Max 48kHz * 2 ch * 4 bytes = 384 bytes/ms (cabe no DFIFO do ESP32-S3)
 
 #define CONFIG_DAC_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + \
                                TUD_AUDIO20_SPEAKER_STEREO_DESC_LEN + \

@@ -122,19 +122,31 @@ static void recalculate_coeffs(EqState *eq, const eq_config_t *cfg, float sr)
     int p = cfg->active_preset_idx;
     if (p < 0 || p >= EQ_MAX_PRESETS) p = 0;
     bool flat = true;
+    float max_boost = 0.0f;
     for (int b = 0; b < EQ_BANDS; b++) {
-        compute_peaking_biquad(BAND_FREQ[b], BAND_Q, cfg->presets[p].band_gains[b], sr, &eq->coeffs[b]);
-        if (cfg->presets[p].band_gains[b] != 0.0f) flat = false;
+        float gain = cfg->presets[p].band_gains[b];
+        compute_peaking_biquad(BAND_FREQ[b], BAND_Q, gain, sr, &eq->coeffs[b]);
+        if (gain != 0.0f) flat = false;
+        if (gain > max_boost) max_boost = gain;
     }
     float o = cfg->presets[p].overall_gain;
     if (o != 0.0f) flat = false;
-    eq->overall_gain = (o == 0.0f) ? 1.0f : powf(10.0f, o / 20.0f);
+
+    // Compensação automática de ganho (Auto Pre-cut):
+    // Se a resposta de pico teórica (soma do maior boost das bandas e do ganho geral) exceder
+    // 0 dBFS (peak_gain > 0), reduz o ganho geral efetivo pelo excesso exato (pre_cut_db = peak_gain)
+    // para garantir que nenhuma frequência ultrapasse 0 dBFS, prevenindo ceifamento digital rígido (hard clipping).
+    // Se o ganho geral já possuir atenuação suficiente para acomodar o boost das bandas, nenhum corte adicional é feito.
+    float peak_gain = o + ((max_boost > 0.0f) ? max_boost : 0.0f);
+    float pre_cut_db = (peak_gain > 0.0f) ? peak_gain : 0.0f;
+    float net_overall_db = o - pre_cut_db;
+    eq->overall_gain = powf(10.0f, net_overall_db / 20.0f);
     eq->enabled = cfg->enabled;
-    eq->is_flat = flat;
+    eq->is_flat = flat && (pre_cut_db == 0.0f) && (o == 0.0f);
 }
 
 // Aplica UM filtro biquad a UMA amostra (estado por canal embutido)
-static inline float biquad_process(const BiquadCoeffs *c, BiquadState *s, float x)
+static inline __attribute__((always_inline)) float biquad_process(const BiquadCoeffs *c, BiquadState *s, float x)
 {
     // Forma direta II transposta: numericamente mais estável que DF-I
     float y = c->b0 * x + s->z1;
@@ -161,9 +173,14 @@ void eq_init(void)
     if (s_active_eq) return;
 
     s_eq_pool[0] = (EqState *)heap_caps_calloc(1, sizeof(EqState),
-                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                                               MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     s_eq_pool[1] = (EqState *)heap_caps_calloc(1, sizeof(EqState),
-                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                                               MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!s_eq_pool[0] || !s_eq_pool[1]) {
+        ESP_LOGW(TAG, "Falha ao alocar EqState em SRAM interna, tentando alocador padrao...");
+        if (!s_eq_pool[0]) s_eq_pool[0] = (EqState *)calloc(1, sizeof(EqState));
+        if (!s_eq_pool[1]) s_eq_pool[1] = (EqState *)calloc(1, sizeof(EqState));
+    }
     if (!s_eq_pool[0] || !s_eq_pool[1]) {
         ESP_LOGE(TAG, "Sem memoria para o equalizador");
         return;
@@ -225,14 +242,18 @@ void eq_set_sample_rate(uint32_t sample_rate)
     int next_idx = 1 - s_active_idx;
     EqState *next_eq = s_eq_pool[next_idx];
     if (next_eq) {
+        // Ao alterar a taxa de amostragem, os estados de delay z1 e z2 anteriores
+        // tornam-se fisicamente invalidos para a nova frequencia. Zera ambos os pools
+        // para prevenir transientes DC ou estalos na troca de faixa.
+        memset(next_eq->states, 0, sizeof(next_eq->states));
         EqState *cur_eq = s_eq_pool[s_active_idx];
         if (cur_eq) {
-            memcpy(next_eq->states, cur_eq->states, sizeof(next_eq->states));
+            memset(cur_eq->states, 0, sizeof(cur_eq->states));
         }
         recalculate_coeffs(next_eq, &s_config, s_sample_rate);
         s_active_eq = next_eq;
         s_active_idx = next_idx;
-        ESP_LOGI(TAG, "EQ: coeficientes recalculados para %u Hz", (unsigned)sample_rate);
+        ESP_LOGI(TAG, "EQ: coeficientes recalculados para %u Hz (Auto Pre-cut ativo)", (unsigned)sample_rate);
     }
 }
 
@@ -305,7 +326,9 @@ void eq_reset_to_defaults(void)
 
 void eq_process(int32_t *buffer, size_t samples)
 {
-    if (s_sample_rate > 48000) return;
+    // Faixas Hi-Res (> 48 kHz como 88.2k, 96k, 176.4k, 192k) passam em Bit-Perfect direto
+    // para fidelidade de audio de estudio e alivio de CPU no Core 0.
+    if (s_sample_rate > 48000.0f) return;
 
     EqState *eq = s_active_eq;
     if (!eq || !eq->enabled || eq->is_flat || !buffer || samples == 0) return;
@@ -314,19 +337,21 @@ void eq_process(int32_t *buffer, size_t samples)
     // com 2 canais (o mono já foi expandido para stereo antes desta
     // chamada em audio_player.cpp). Processamos par a par.
     size_t num_pairs = samples / 2; // pares L+R
+    static const float INV_2_31 = 1.0f / 2147483648.0f;
+    static const float SCALE_2_31_M1 = 2147483647.0f;
 
     for (size_t i = 0; i < num_pairs; i++) {
         for (int ch = 0; ch < 2; ch++) {
-            // Normaliza int32 left-justified para float [-1.0, 1.0]
-            float x = (float)buffer[i * 2 + ch] / 2147483648.0f; // 2^31
+            // Normaliza int32 left-justified para float [-1.0, 1.0] (multiplicador rapido de 1 ciclo)
+            float x = (float)buffer[i * 2 + ch] * INV_2_31;
 
-            // Aplica as 5 bandas em cascata
+            // Aplica as 10 bandas em cascata
             for (int b = 0; b < EQ_BANDS; b++) {
                 x = biquad_process(&eq->coeffs[b],
                                    (BiquadState *)&eq->states[b][ch], x);
             }
 
-            // Aplica ganho geral
+            // Aplica ganho geral (com Auto Pre-cut embutido)
             x *= eq->overall_gain;
 
             // Clamp para evitar overflow ao converter de volta
@@ -334,7 +359,7 @@ void eq_process(int32_t *buffer, size_t samples)
             if (x < -1.0f) x = -1.0f;
 
             // Devolve como int32 left-justified
-            buffer[i * 2 + ch] = (int32_t)(x * 2147483647.0f); // 2^31 - 1
+            buffer[i * 2 + ch] = (int32_t)(x * SCALE_2_31_M1);
         }
     }
 }

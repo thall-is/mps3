@@ -64,8 +64,12 @@ static void send_get_status(void)
 
 static void on_i2s_rate_change(uint32_t rate)
 {
+    // O co-processador Bluetooth (A2DP / LDAC) suporta no maximo 96 kHz.
+    // Em reproducao nativa com fio em 192 kHz ou 176.4 kHz, limita o aviso ao Companion
+    // para evitar que seu receptor I2S slave ou encoder entre em overflow.
+    uint32_t bt_rate = (rate > 96000) ? 96000 : rate;
     uint8_t payload[4];
-    memcpy(payload, &rate, 4);
+    memcpy(payload, &bt_rate, 4);
     uart_ctrl_send(UART_CMD_SET_SAMPLE_RATE, payload, sizeof(payload));
 }
 

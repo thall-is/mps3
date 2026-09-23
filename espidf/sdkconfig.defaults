@@ -60,3 +60,7 @@ CONFIG_LWIP_MAX_ACTIVE_TCP=8
 # --- mDNS ---
 CONFIG_MDNS_ENABLED=y
 
+# --- Task Watchdog: Desativa checagem de IDLE na CPU 0 (Core 0 dedicado exclusivamente ao DSP de áudio Hi-Res) ---
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
+CONFIG_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
+

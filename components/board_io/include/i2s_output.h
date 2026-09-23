@@ -10,13 +10,17 @@ extern "C" {
 #endif
 
 // Inicializa o canal I2S em modo STD, 32 bits por slot, estereo,
-// usando os pinos definidos em pinos.h. O PCM5102 nao usa MCLK
-// (pino SCK do modulo deve estar aterrado para usar o PLL interno).
+// usando os pinos definidos em pinos.h. O PCM5102A opera em modo 4 fios
+// com Master Clock dedicado no GPIO 8 (pino SCK do DAC), desligando a PLL
+// analógica interna do DAC e garantindo reprodução bit-perfect até 192 kHz / 24-bit.
+// Clock source configurado para PLL_240M com multiplicador inteligente
+// (128 fs para >= 176.4 kHz; 256 fs para <= 96 kHz, mantendo MCLK <= 24.576 MHz),
+// e buffer DMA ampliado de 24x512 frames (98 KB / 64 ms a 192 kHz).
 esp_err_t i2s_output_init(void);
 
-// Reconfigura a taxa de amostragem do canal (chamado ao trocar de faixa
-// se o sample rate for diferente do anterior). E' uma operacao "cara"
-// (desabilita e reabilita o canal), por isso so' faz algo se a taxa mudou.
+// Reconfigura a taxa de amostragem do canal (suporta de 8 kHz ate 192 kHz).
+// E' uma operacao "cara" (desabilita e reabilita o canal), por isso so'
+// faz algo se a taxa mudou. Usa clock source PLL_240M.
 esp_err_t i2s_output_set_rate(uint32_t sample_rate);
 uint32_t  i2s_output_get_rate(void);
 

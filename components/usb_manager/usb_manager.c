@@ -31,6 +31,7 @@ static int16_t s_volume[3] = { 0, 0, 0 }; // master, ch1, ch2 (0 dB em 1/256 dB)
 static uint8_t s_mute[3] = { 0, 0, 0 };
 static volatile uint32_t s_usb_pkt_count = 0;
 static volatile int32_t s_usb_last_sample = 0;
+static volatile int64_t s_last_packet_time_us = 0;
 
 uint32_t usb_manager_get_sample_rate(void)
 {
@@ -45,6 +46,18 @@ uint32_t usb_manager_get_pkt_count(void)
 int32_t usb_manager_get_last_sample(void)
 {
     return s_usb_last_sample;
+}
+
+bool usb_manager_is_streaming(void)
+{
+    if (s_current_mode != USB_MODE_DAC) {
+        return false;
+    }
+    if (s_last_packet_time_us == 0) {
+        return false;
+    }
+    int64_t diff = esp_timer_get_time() - s_last_packet_time_us;
+    return (diff >= 0 && diff <= 250000); // 250 ms timeout
 }
 
 // Forca reboot imediato no modo de download (ROM bootloader para gravacao via esptool)
@@ -138,6 +151,7 @@ static void usb_audio_task(void *arg)
             uint32_t read = 0;
 
             while ((read = tud_audio_read(usb_rx_buf, sizeof(usb_rx_buf))) > 0) {
+                s_last_packet_time_us = esp_timer_get_time();
                 pkt_count++;
 
                 if (pkt_count == 1 || pkt_count % 1000 == 0) {
@@ -164,29 +178,31 @@ static void usb_audio_task(void *arg)
                 bool mute_L = (s_mute[0] != 0) || (s_mute[1] != 0);
                 bool mute_R = (s_mute[0] != 0) || (s_mute[2] != 0);
                 int vol = audio_player_get_volume(); // 0 a 100%
-                if (vol <= 0) {
-                    vol = 100; // Fallback de protecao no modo DAC
-                }
 
-                if (mute_L && mute_R) {
+                if ((mute_L && mute_R) || vol <= 0) {
                     memset(i2s_buf, 0, num_samples * sizeof(int32_t));
                 } else {
-                    // Ganho de volume do DAP: 0 a 100% (1.0f em 100% para nivel padrao de linha e bit-perfect)
-                    float dap_gain = (vol >= 100) ? 1.0f : powf(10.0f, (-50.0f * (1.0f - (float)vol / 100.0f)) / 20.0f);
+                    // Ganho de volume do DAP: 0 a 100% (1.0f em 100% para nivel padrao de linha e bit-perfect).
+                    // Como tud_audio_set_req_entity_cb mapeia s_volume do Host para audio_player_set_volume(),
+                    // dap_gain atua como o ganho master unico (evita atenuacao duplicada ao quadrado).
+                    float dap_gain = (vol >= 100) ? 1.0f : (vol <= 0 ? 0.0f : powf(10.0f, (-50.0f * (1.0f - (float)vol / 100.0f)) / 20.0f));
 
-                    // Ganho UAC2 do Host USB (0 a -50 dB, s_volume em passos de 1/256 dB)
-                    int16_t uac_vol_L = (s_volume[0] < 0 ? s_volume[0] : 0) + (s_volume[1] < 0 ? s_volume[1] : 0);
-                    int16_t uac_vol_R = (s_volume[0] < 0 ? s_volume[0] : 0) + (s_volume[2] < 0 ? s_volume[2] : 0);
-                    float uac_gain_L = (uac_vol_L <= -12800) ? 0.05f : powf(10.0f, ((float)uac_vol_L / 256.0f) / 20.0f);
-                    float uac_gain_R = (uac_vol_R <= -12800) ? 0.05f : powf(10.0f, ((float)uac_vol_R / 256.0f) / 20.0f);
-
-                    // Balanco L/R (-100 a +100)
+                    // Balanco L/R configurado no DAP (-100 a +100)
                     int bal = audio_player_get_balance();
                     float bal_L = (bal > 0) ? ((float)(100 - bal) / 100.0f) : 1.0f;
                     float bal_R = (bal < 0) ? ((float)(100 + bal) / 100.0f) : 1.0f;
 
-                    float gL = mute_L ? 0.0f : (dap_gain * uac_gain_L * bal_L);
-                    float gR = mute_R ? 0.0f : (dap_gain * uac_gain_R * bal_R);
+                    // Balanco L/R eventual do Host (se o mixer do Host tiver canais L e R dessincronizados)
+                    float host_bal_L = 1.0f;
+                    float host_bal_R = 1.0f;
+                    if (s_volume[1] < s_volume[2]) {
+                        host_bal_L = powf(10.0f, ((float)(s_volume[1] - s_volume[2]) / 256.0f) / 20.0f);
+                    } else if (s_volume[2] < s_volume[1]) {
+                        host_bal_R = powf(10.0f, ((float)(s_volume[2] - s_volume[1]) / 256.0f) / 20.0f);
+                    }
+
+                    float gL = mute_L ? 0.0f : (dap_gain * bal_L * host_bal_L);
+                    float gR = mute_R ? 0.0f : (dap_gain * bal_R * host_bal_R);
 
                     // Multiplica apenas se houver atenuacao para preservar fidelidade bit-perfect
                     if (gL < 0.9999f || gR < 0.9999f) {
@@ -221,7 +237,7 @@ static void usb_audio_task(void *arg)
 // -----------------------------------------------------------------------------
 esp_err_t usb_manager_init(void)
 {
-    ESP_LOGI(TAG, "Iniciando usb_manager (Modos Exclusivos: CDC 0x4000 / MSC 0x4002 / DAC 0x4001)");
+    ESP_LOGI(TAG, "Iniciando usb_manager (Modos Exclusivos: CDC 0x4000 / MSC 0x4002 / DAC 0x4006)");
 
     // Habilita Double Buffering de hardware no controlador Synopsys DWC2 para os endpoints Bulk (MSC / CDC)
     const tud_configure_dwc2_t dwc2_cfg = {
@@ -328,6 +344,8 @@ void usb_manager_set_mode(usb_mode_t mode)
         audio_player_reacquire_sd_after_usb();
     } else if (prev_mode == USB_MODE_DAC && mode != USB_MODE_DAC) {
         ESP_LOGI(TAG, "Saindo do MODO EXCLUSIVO: USB DAC. Retomando player local...");
+        s_usb_pkt_count = 0;
+        s_last_packet_time_us = 0;
         tud_audio_clear_ep_out_ff();
         i2s_output_disable();
         audio_player_reacquire_sd_after_usb();
@@ -395,7 +413,9 @@ void usb_manager_set_mode(usb_mode_t mode)
         ESP_LOGI(TAG, "USB MSC Puro re-enumerado no Host");
 
     } else if (mode == USB_MODE_DAC) {
-        ESP_LOGI(TAG, "Entrando no MODO EXCLUSIVO: USB DAC Puro (PID 0x4001 com EQ e Balanco)");
+        ESP_LOGI(TAG, "Entrando no MODO EXCLUSIVO: USB DAC Puro (PID 0x4006 com EQ e Balanco)");
+        s_usb_pkt_count = 0;
+        s_last_packet_time_us = 0;
         // 1. Garante que o player_task liberou o SD e esta em espera passiva
         audio_player_release_sd_for_usb();
         tud_audio_clear_ep_out_ff();
@@ -467,12 +487,16 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
     uint8_t const itf = tu_u16_low(p_request->wIndex);
     uint8_t const alt = tu_u16_low(p_request->wValue);
     ESP_LOGI(TAG, "UAC2 Set Interface %d Alt %d", itf, alt);
+    if (alt == 0) {
+        s_last_packet_time_us = 0;
+    }
     return true;
 }
 
 bool tud_audio_set_itf_close_ep_cb(uint8_t rhport, tusb_control_request_t const *p_request)
 {
     (void)rhport; (void)p_request;
+    s_last_packet_time_us = 0;
     return true;
 }
 
@@ -519,6 +543,11 @@ bool tud_audio_get_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
                 return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &range_vol, sizeof(range_vol));
             } else if (p_request->bRequest == AUDIO20_CS_REQ_CUR) {
                 uint8_t ch_idx = (ch < 3) ? ch : 0;
+                int vol = audio_player_get_volume();
+                int16_t cur_dap_v = (vol >= 100) ? 0 : (int16_t)(((int32_t)vol * 12800) / 100 - 12800);
+                if (ch_idx == 0 && s_volume[0] != cur_dap_v) {
+                    s_volume[0] = cur_dap_v;
+                }
                 audio20_control_cur_2_t cur_vol = { .bCur = tu_htole16(s_volume[ch_idx]) };
                 return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &cur_vol, sizeof(cur_vol));
             }
@@ -556,6 +585,20 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
             } else if (ctrl_sel == AUDIO20_FU_CTRL_VOLUME) {
                 uint8_t ch_idx = (ch < 3) ? ch : 0;
                 s_volume[ch_idx] = (int16_t)(buf[0] | (buf[1] << 8));
+                if (ch_idx == 0 || ch_idx == 1) {
+                    int16_t v = s_volume[ch_idx];
+                    int pct;
+                    if (v >= 0) {
+                        pct = 100;
+                    } else if (v <= -12800) {
+                        pct = 0;
+                    } else {
+                        pct = (int)(((int32_t)(v + 12800) * 100) / 12800);
+                        if (pct < 0) pct = 0;
+                        if (pct > 100) pct = 100;
+                    }
+                    audio_player_set_volume(pct);
+                }
                 return true;
             }
         }
@@ -568,7 +611,7 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
 // -----------------------------------------------------------------------------
 void usb_manager_send_hid(int command)
 {
-    if (!s_connected || s_current_mode != USB_MODE_DAC) return;
+    if ((!s_connected && !tud_mounted()) || s_current_mode != USB_MODE_DAC) return;
     
     uint16_t key = 0;
     switch(command) {
@@ -580,8 +623,22 @@ void usb_manager_send_hid(int command)
         default: return;
     }
 
+    int wait_retry = 25;
+    while (!tud_hid_ready() && wait_retry-- > 0) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    if (!tud_hid_ready()) {
+        ESP_LOGW(TAG, "HID endpoint ocupado ou nao pronto (cmd=%d)", command);
+        return;
+    }
+
     tud_hid_report(0, &key, 2);
     vTaskDelay(pdMS_TO_TICKS(10));
+
+    wait_retry = 25;
+    while (!tud_hid_ready() && wait_retry-- > 0) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
     key = 0;
     tud_hid_report(0, &key, 2);
 }

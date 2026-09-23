@@ -179,8 +179,8 @@ void audio_player_toggle_play_pause(void)
     // "preso" sem conseguir parar.
     s_seek_pending = false;
 
-    s_paused = !s_paused;
-    if (s_paused) {
+    if (!s_paused) {
+        s_paused = true;
         i2s_output_disable(); // silencio real, nao so' para de escrever amostras
         // Salva a posicao ao pausar - momento provavel de "vou desligar
         // daqui a pouco", entao vale capturar aqui alem do save periodico.
@@ -196,6 +196,7 @@ void audio_player_toggle_play_pause(void)
         }
     } else {
         i2s_output_enable();
+        s_paused = false;
     }
     ESP_LOGI(TAG, "%s", s_paused ? "Pausado" : "Tocando");
 }
@@ -274,6 +275,276 @@ static float volume_to_gain(int percent)
     return powf(10.0f, db / 20.0f);
 }
 
+// =============================================================================
+// PIPELINE DUAL-CORE / BOOST: Core 0 (DSP & I2S Output)
+// =============================================================================
+#define DSP_BLOCK_FRAMES  512 // 512 quadros stereo = 1024 amostras int32_t (4096 bytes)
+#define DSP_BLOCK_SAMPLES (DSP_BLOCK_FRAMES * 2)
+#define DSP_NUM_BLOCKS    16  // 16 blocos individuais (64 KB total) em SRAM interna
+
+typedef struct {
+    int32_t samples[DSP_BLOCK_SAMPLES];
+    size_t  sample_count; // Amostras int32_t validas (sempre par)
+    uint32_t sample_rate; // Taxa de amostragem deste bloco
+    bool    is_flush;     // Solicitacao de reset/limpeza de filtros biquad
+} dsp_block_t;
+
+static QueueHandle_t s_dsp_free_queue = NULL;
+static QueueHandle_t s_dsp_ready_queue = NULL;
+static TaskHandle_t s_audio_dsp_task_handle = NULL;
+static dsp_block_t *s_dsp_blocks[DSP_NUM_BLOCKS] = {NULL};
+static volatile uint32_t s_dsp_current_rate = 44100;
+static size_t s_dsp_fade_in_total = 0;
+static size_t s_dsp_fade_in_remaining = 0;
+
+void audio_dsp_trigger_fade_in(uint32_t sample_rate)
+{
+    size_t total = (sample_rate * FADE_IN_MS / 1000) * 2;
+    s_dsp_fade_in_total = total;
+    s_dsp_fade_in_remaining = total;
+}
+
+void audio_dsp_set_rate(uint32_t rate)
+{
+    if (rate == 0) return;
+    if (s_dsp_current_rate != rate) {
+        s_dsp_current_rate = 0; // Força reconfiguração sincronizada no Core 0 pela audio_dsp_task
+    }
+}
+
+void audio_dsp_flush(void)
+{
+    if (!s_dsp_ready_queue || !s_dsp_free_queue) return;
+    dsp_block_t *blk = NULL;
+    while (xQueueReceive(s_dsp_ready_queue, &blk, 0) == pdTRUE) {
+        if (blk) {
+            xQueueSend(s_dsp_free_queue, &blk, 0);
+        }
+    }
+    eq_reset_state();
+}
+
+void audio_dsp_drain(void)
+{
+    if (!s_dsp_ready_queue) return;
+    if (s_pending_cmd != PLAYER_CMD_NONE || s_usb_takeover_requested) {
+        audio_dsp_flush();
+        return;
+    }
+    for (int i = 0; i < 50 && uxQueueMessagesWaiting(s_dsp_ready_queue) > 0; i++) {
+        if (s_pending_cmd != PLAYER_CMD_NONE || s_usb_takeover_requested) {
+            audio_dsp_flush();
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+esp_err_t audio_dsp_send_pcm(const int32_t *samples, size_t count, uint32_t rate)
+{
+    if (!samples || count == 0) return ESP_OK;
+
+    while (count > 0) {
+        if (s_usb_takeover_requested || s_pending_cmd != PLAYER_CMD_NONE) {
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        dsp_block_t *blk = NULL;
+        if (xQueueReceive(s_dsp_free_queue, &blk, pdMS_TO_TICKS(50)) != pdTRUE) {
+            if (s_usb_takeover_requested || s_pending_cmd != PLAYER_CMD_NONE) {
+                return ESP_ERR_INVALID_STATE;
+            }
+            continue;
+        }
+
+        size_t to_copy = (count > DSP_BLOCK_SAMPLES) ? DSP_BLOCK_SAMPLES : count;
+        to_copy &= ~1UL; // Amostras sempre em pares stereo completos
+        if (to_copy == 0) {
+            xQueueSend(s_dsp_free_queue, &blk, 0);
+            break;
+        }
+
+        memcpy(blk->samples, samples, to_copy * sizeof(int32_t));
+        blk->sample_count = to_copy;
+        blk->sample_rate = rate;
+        blk->is_flush = false;
+
+        if (xQueueSend(s_dsp_ready_queue, &blk, pdMS_TO_TICKS(100)) != pdTRUE) {
+            xQueueSend(s_dsp_free_queue, &blk, 0);
+            return ESP_FAIL;
+        }
+
+        samples += to_copy;
+        count -= to_copy;
+    }
+    return ESP_OK;
+}
+
+static void audio_dsp_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "audio_dsp_task iniciada no Core %d (prioridade %d)",
+             xPortGetCoreID(), (int)uxTaskPriorityGet(NULL));
+
+    static int s_cached_vol = -1;
+    static int s_cached_bal = 999;
+    static int32_t s_cached_final_L = 32768;
+    static int32_t s_cached_final_R = 32768;
+
+    while (true) {
+        if (s_usb_takeover_requested) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        if (s_paused) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+
+        dsp_block_t *blk = NULL;
+        if (xQueueReceive(s_dsp_ready_queue, &blk, pdMS_TO_TICKS(20)) != pdTRUE) {
+            continue;
+        }
+
+        if (!blk) continue;
+
+        if (blk->is_flush) {
+            eq_reset_state();
+            xQueueSend(s_dsp_free_queue, &blk, 0);
+            taskYIELD();
+            continue;
+        }
+
+        size_t samples_to_write = blk->sample_count;
+        int32_t *to_write = blk->samples;
+
+        if (samples_to_write > 0) {
+            // Sincronizacao dinamica de clock I2S e EQ
+            if (blk->sample_rate > 0 && blk->sample_rate != s_dsp_current_rate) {
+                s_dsp_current_rate = blk->sample_rate;
+                i2s_output_set_rate(s_dsp_current_rate);
+                eq_set_sample_rate(s_dsp_current_rate);
+            }
+
+            // Volume e Balanço
+            int vol = s_volume_percent;
+            int bal = s_balance;
+            if (vol != s_cached_vol || bal != s_cached_bal) {
+                s_cached_vol = vol;
+                s_cached_bal = bal;
+
+                float vol_gain = volume_to_gain(vol);
+                int32_t vol_mult = (int32_t)(vol_gain * 32768.0f + 0.5f);
+                if (vol_mult > 32768) vol_mult = 32768;
+                if (vol_mult < 0) vol_mult = 0;
+
+                int pct_L = 100;
+                int pct_R = 100;
+                if (bal < 0) {
+                    pct_R = 100 + bal;
+                } else if (bal > 0) {
+                    pct_L = 100 - bal;
+                }
+                if (pct_L < 0) pct_L = 0;
+                if (pct_R < 0) pct_R = 0;
+                if (pct_L > 100) pct_L = 100;
+                if (pct_R > 100) pct_R = 100;
+
+                int32_t bal_mult_L = (pct_L <= 0) ? 0 : ((pct_L >= 100) ? 32768 : (int32_t)(((int64_t)pct_L * pct_L * 32768) / 10000));
+                int32_t bal_mult_R = (pct_R <= 0) ? 0 : ((pct_R >= 100) ? 32768 : (int32_t)(((int64_t)pct_R * pct_R * 32768) / 10000));
+
+                s_cached_final_L = (int32_t)(((int64_t)vol_mult * bal_mult_L) >> 15);
+                s_cached_final_R = (int32_t)(((int64_t)vol_mult * bal_mult_R) >> 15);
+            }
+
+            int32_t final_L = s_cached_final_L;
+            int32_t final_R = s_cached_final_R;
+
+            // Fade-in suave de transição
+            if (s_dsp_fade_in_remaining > 0) {
+                for (size_t i = 0; i < samples_to_write; i += 2) {
+                    float fade = (s_dsp_fade_in_total > 0)
+                        ? 1.0f - ((float)s_dsp_fade_in_remaining / (float)s_dsp_fade_in_total)
+                        : 1.0f;
+                    int32_t fade_q15 = (int32_t)(fade * 32768.0f + 0.5f);
+                    if (fade_q15 > 32768) fade_q15 = 32768;
+                    if (fade_q15 < 0) fade_q15 = 0;
+                    int32_t f_L = (int32_t)(((int64_t)final_L * fade_q15) >> 15);
+                    int32_t f_R = (int32_t)(((int64_t)final_R * fade_q15) >> 15);
+                    to_write[i]     = (int32_t)(((int64_t)to_write[i]     * f_L) >> 15);
+                    if (i + 1 < samples_to_write) {
+                        to_write[i + 1] = (int32_t)(((int64_t)to_write[i + 1] * f_R) >> 15);
+                    }
+                    if (s_dsp_fade_in_remaining > 0) s_dsp_fade_in_remaining--;
+                }
+            } else if (final_L < 32768 || final_R < 32768) {
+                for (size_t i = 0; i < samples_to_write; i += 2) {
+                    to_write[i]     = (int32_t)(((int64_t)to_write[i]     * final_L) >> 15);
+                    if (i + 1 < samples_to_write) {
+                        to_write[i + 1] = (int32_t)(((int64_t)to_write[i + 1] * final_R) >> 15);
+                    }
+                }
+            }
+
+            // Equalizador gráfico de 10 bandas executado inteiramente no Core 0
+            eq_process(to_write, samples_to_write);
+
+            // Transmissão direta aos descritores DMA do I2S
+            size_t written = 0;
+            i2s_output_write(to_write, samples_to_write, &written);
+        }
+
+        xQueueSend(s_dsp_free_queue, &blk, portMAX_DELAY);
+        taskYIELD();
+    }
+}
+
+static esp_err_t audio_dsp_init(void)
+{
+    if (s_dsp_free_queue != NULL) return ESP_OK;
+
+    s_dsp_free_queue = xQueueCreate(DSP_NUM_BLOCKS, sizeof(dsp_block_t *));
+    s_dsp_ready_queue = xQueueCreate(DSP_NUM_BLOCKS, sizeof(dsp_block_t *));
+    if (!s_dsp_free_queue || !s_dsp_ready_queue) {
+        ESP_LOGE(TAG, "Falha ao criar filas do audio_dsp");
+        return ESP_ERR_NO_MEM;
+    }
+
+    int internal_count = 0;
+    for (int i = 0; i < DSP_NUM_BLOCKS; i++) {
+        s_dsp_blocks[i] = (dsp_block_t *)heap_caps_calloc(1, sizeof(dsp_block_t),
+                                                          MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (s_dsp_blocks[i]) {
+            internal_count++;
+        } else {
+            ESP_LOGW(TAG, "SRAM interna esgotada no bloco %d, tentando SPIRAM", i);
+            s_dsp_blocks[i] = (dsp_block_t *)heap_caps_calloc(1, sizeof(dsp_block_t),
+                                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (!s_dsp_blocks[i]) {
+                s_dsp_blocks[i] = (dsp_block_t *)calloc(1, sizeof(dsp_block_t));
+            }
+        }
+        if (!s_dsp_blocks[i]) {
+            ESP_LOGE(TAG, "Sem memoria para bloco DSP %d", i);
+            return ESP_ERR_NO_MEM;
+        }
+        dsp_block_t *blk = s_dsp_blocks[i];
+        xQueueSend(s_dsp_free_queue, &blk, 0);
+    }
+
+    BaseType_t ret = xTaskCreatePinnedToCore(audio_dsp_task, "audio_dsp",
+                                             4096, NULL, 5, &s_audio_dsp_task_handle, 0);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Falha ao criar audio_dsp_task no Core 0");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Pipeline Dual-Core inicializado: audio_dsp no Core 0, player no Core 1 (%d blocos de %u B; %d em SRAM interna)",
+             DSP_NUM_BLOCKS, (unsigned)sizeof(dsp_block_t), internal_count);
+    return ESP_OK;
+}
+
 // --- Comandos de navegacao pedidos pela UI -----------------------------
 
 
@@ -315,32 +586,42 @@ void audio_player_stop_url(void) {
 // depender so' da velocidade do cartao SD, nao da distancia pulada.
 void audio_player_seek_forward(uint32_t seconds)
 {
-    uint32_t base = s_forced_restart_pending ? s_forced_restart_target_sec : s_last_elapsed_sec;
-    uint32_t target = base + seconds;
-
-    // Nao deixa o alvo passar do fim conhecido da faixa - sem isso, um
-    // fseek pra' perto/alem do fim do arquivo faz a faixa simplesmente
-    // parar de tocar sem aviso (poucos ou nenhum frame decodificavel
-    // depois desse ponto).
     state_lock();
+    uint32_t current = s_state.elapsed_sec;
     uint32_t total = s_state.total_sec;
-    state_unlock();
+
+    uint32_t base = s_forced_restart_pending ? s_forced_restart_target_sec : current;
+    uint32_t target = base + seconds;
     if (total > 0 && target >= total) {
         target = (total > 1) ? total - 1 : 0;
     }
-
     s_forced_restart_target_sec = target;
     s_forced_restart_pending = true;
+    s_state.elapsed_sec = target;
+    s_last_elapsed_sec = target;
     s_pending_cmd = PLAYER_CMD_RESTART;
+    state_unlock();
+
+    ESP_LOGI(TAG, "Seek Forward: base=%u s + %u s -> target=%u s (total=%u s)",
+             (unsigned)base, (unsigned)seconds, (unsigned)target, (unsigned)total);
 }
 
 void audio_player_seek_backward(uint32_t seconds)
 {
-    uint32_t base = s_forced_restart_pending ? s_forced_restart_target_sec : s_last_elapsed_sec;
+    state_lock();
+    uint32_t current = s_state.elapsed_sec;
+
+    uint32_t base = s_forced_restart_pending ? s_forced_restart_target_sec : current;
     uint32_t target = (seconds >= base) ? 0 : (base - seconds);
     s_forced_restart_target_sec = target;
     s_forced_restart_pending = true;
+    s_state.elapsed_sec = target;
+    s_last_elapsed_sec = target;
     s_pending_cmd = PLAYER_CMD_RESTART;
+    state_unlock();
+
+    ESP_LOGI(TAG, "Seek Backward: base=%u s - %u s -> target=%u s",
+             (unsigned)base, (unsigned)seconds, (unsigned)target);
 }
 
 int audio_player_get_file_count(void)
@@ -501,6 +782,7 @@ void audio_player_select_entry(int index)
 void audio_player_release_sd_for_usb(void)
 {
     s_usb_takeover_requested = true;
+    audio_dsp_flush();
     // Espera o player_task realmente soltar os arquivos (com um teto de
     // seguranca de 5s, pra' nao travar pra sempre se algo der errado).
     for (int i = 0; i < 50 && !s_usb_takeover_active; i++) {
@@ -526,10 +808,18 @@ void audio_player_suspend(void)
         ESP_LOGI("audio_player", "Suspendendo player_task para modo exclusivo USB");
         vTaskSuspend(s_player_task_handle);
     }
+    if (s_audio_dsp_task_handle != NULL) {
+        ESP_LOGI("audio_player", "Suspendendo audio_dsp_task para modo exclusivo USB");
+        vTaskSuspend(s_audio_dsp_task_handle);
+    }
 }
 
 void audio_player_resume(void)
 {
+    if (s_audio_dsp_task_handle != NULL) {
+        ESP_LOGI("audio_player", "Retomando audio_dsp_task apos modo exclusivo USB");
+        vTaskResume(s_audio_dsp_task_handle);
+    }
     if (s_player_task_handle != NULL) {
         ESP_LOGI("audio_player", "Retomando player_task apos modo exclusivo USB");
         vTaskResume(s_player_task_handle);
@@ -793,7 +1083,7 @@ static uint32_t s_boot_resume_elapsed = 0;
 static int32_t *s_stereo_scratch = nullptr;
 static size_t s_stereo_scratch_capacity = 0;
 
-static int32_t *ensure_stereo_scratch(size_t needed_samples)
+int32_t *ensure_stereo_scratch(size_t needed_samples)
 {
     if (s_stereo_scratch_capacity < needed_samples) {
         if (s_stereo_scratch) heap_caps_free(s_stereo_scratch);
@@ -1866,11 +2156,52 @@ static size_t seek_and_prime_inbuf(FILE *fp, uint8_t *inbuf, uint64_t file_size,
     if (fmt == mps3::AudioFormat::Flac) {
         fseek(fp, 0, SEEK_SET);
         prefix_len = skip_leading_metadata(fp, fmt, flac_prefix);
+        uint64_t audio_start = 0;
         if (prefix_len > 0) {
-            uint64_t audio_start = (uint64_t)ftell(fp); // logo apos o STREAMINFO = 1o frame real
+            audio_start = (uint64_t)ftell(fp); // logo apos o STREAMINFO = 1o frame real
             if (fast_seek_offset < audio_start) fast_seek_offset = audio_start;
         }
         memcpy(inbuf, flac_prefix, prefix_len);
+
+        // Procura o proximo cabecalho de frame FLAC valido (syncword 0xFF 0xF8) a partir do offset estimado
+        if (fast_seek_offset > audio_start && fast_seek_offset < file_size) {
+            uint64_t scan_pos = fast_seek_offset;
+            size_t max_scan = 32768; // varre ate 32KB a frente procurando frame sync
+            if (scan_pos + max_scan > file_size) max_scan = (size_t)(file_size - scan_pos);
+            fseek(fp, (long)scan_pos, SEEK_SET);
+            uint8_t scan[4096];
+            bool found = false;
+            size_t total_scanned = 0;
+            while (total_scanned < max_scan && !found) {
+                size_t to_read = sizeof(scan);
+                if (total_scanned + to_read > max_scan) to_read = max_scan - total_scanned;
+                size_t nscan = fread(scan, 1, to_read, fp);
+                if (nscan < 4) break;
+                for (size_t i = 0; i + 4 <= nscan; i++) {
+                    if (scan[i] == 0xFF && (scan[i+1] & 0xFE) == 0xF8) {
+                        uint8_t bs = scan[i+2] >> 4;
+                        uint8_t sr = scan[i+2] & 0x0F;
+                        uint8_t ch = scan[i+3] >> 4;
+                        uint8_t ss = (scan[i+3] >> 1) & 0x07;
+                        if (bs != 0 && bs != 0x0F && sr != 0x0F && ch <= 0x0A && ss != 0x03 && (scan[i+3] & 0x01) == 0) {
+                            fast_seek_offset = scan_pos + total_scanned + i;
+                            found = true;
+                            ESP_LOGI(TAG, "FLAC seek alinhado: delta=%zu bytes -> offset %llu",
+                                     total_scanned + i, (unsigned long long)fast_seek_offset);
+                            break;
+                        }
+                    }
+                }
+                if (!found) {
+                    if (nscan > 3) {
+                        total_scanned += (nscan - 3);
+                        fseek(fp, (long)(scan_pos + total_scanned), SEEK_SET);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
     } else if (fmt == mps3::AudioFormat::Ogg) {
         // Ogg Vorbis/Opus precisa das paginas de cabecalho (BOS/codebooks)
         fseek(fp, 0, SEEK_SET);
@@ -2173,9 +2504,6 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
     uint32_t num_channels = 2;
     uint64_t elapsed_samples = 0;
 
-    uint32_t fade_in_total_samples = 0;
-    uint32_t fade_in_remaining = 0;
-
     state_lock();
     strncpy(s_state.filename, display_name, sizeof(s_state.filename) - 1);
     s_state.filename[sizeof(s_state.filename) - 1] = '\0';
@@ -2210,8 +2538,12 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
     s_state.playing = true;
     s_state.track_loaded = false;
     state_unlock();
-    s_last_elapsed_sec = 0;
+    s_last_elapsed_sec = resume_elapsed_sec;
     eq_reset_state();
+
+    bool prebuffer_done = false;
+    size_t prebuffered_frames = 0;
+    size_t prebuffer_target_frames = 0;
 
     s_seek_pending = false;
     if (resume_elapsed_sec > 0) {
@@ -2238,7 +2570,13 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
             continue;
         }
 
-        if (valid_end == INBUF_SIZE && data_start > 0) {
+        // Otimizacao da janela deslizante do inbuf:
+        // Em vez de memmove a cada bloco decodificado, so compacta (memmove em PSRAM)
+        // e recarrega do SD quando o consumo atingir pelo menos metade do buffer (INBUF_SIZE / 2)
+        // ou quando os bytes restantes no buffer nao forem suficientes para o proximo frame (< 24576).
+        // Isso elimina ~70% das copias em PSRAM e chamadas fread(), alcancando ~1.35x tempo real.
+        if (!use_webm_demux && data_start > 0 &&
+            (data_start >= (INBUF_SIZE / 2) || (valid_end - data_start) < 24576)) {
             size_t remaining = valid_end - data_start;
             memmove(inbuf, inbuf + data_start, remaining);
             data_start = 0;
@@ -2351,7 +2689,10 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
                 num_channels = decoder->channels();
                 output_capacity_samples = decoder->recommended_output_capacity_samples();
                 if (output_buf) heap_caps_free(output_buf);
-                output_buf = (int32_t *)heap_caps_malloc(output_capacity_samples * sizeof(int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                output_buf = (int32_t *)heap_caps_malloc(output_capacity_samples * sizeof(int32_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+                if (!output_buf) {
+                    output_buf = (int32_t *)heap_caps_malloc(output_capacity_samples * sizeof(int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                }
                 if (!output_buf) {
                     output_buf = (int32_t *)malloc(output_capacity_samples * sizeof(int32_t));
                 }
@@ -2378,15 +2719,17 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
                 char label[8];
                 decoder->format_label(label, sizeof(label));
 
-                i2s_output_set_rate(sample_rate);
+                uint32_t i2s_rate = sample_rate;
+                ESP_LOGI(TAG, "Saida I2S configurada para taxa nativa: %u Hz (Dual-Core: Core 1 decodifica, Core 0 processa DSP/I2S)", (unsigned)i2s_rate);
+                audio_dsp_flush();
+                audio_dsp_set_rate(i2s_rate);
+                audio_dsp_trigger_fade_in(i2s_rate);
 
-                // Informa a taxa de amostragem real ao equalizador para
-                // recalcular os coeficientes biquad (a SR muda entre faixas
-                // e afeta as frequencias centrais de cada banda).
-                eq_set_sample_rate(sample_rate);
-
-                fade_in_total_samples = (sample_rate * FADE_IN_MS / 1000) * num_channels;
-                fade_in_remaining = fade_in_total_samples;
+                uint32_t target_pb = (i2s_rate > 0) ? ((i2s_rate * 100) / 1000) : 9600;
+                // Ring buffer DMA tem 24 descritores x 512 frames = 12.288 frames no maximo
+                prebuffer_target_frames = (target_pb > 12288) ? 12288 : target_pb;
+                prebuffered_frames = 0;
+                prebuffer_done = false;
 
                 state_lock();
                 s_state.total_sec = total_sec;
@@ -2429,17 +2772,6 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
             case mps3::DecodeStatus::Success: {
                 if (!header_ready || samples_decoded == 0) break;
 
-                if (!prefetched_next) {
-                    prefetched_next = true;
-                    scan_lock();
-                    int count_for_prefetch = s_playback_scan.audio_count;
-                    scan_unlock();
-                    if (count_for_prefetch > 1) {
-                        int next_index = (index + 1) % count_for_prefetch;
-                        prefetch_next_file(next_index);
-                    }
-                }
-
                 elapsed_samples += samples_decoded / num_channels;
                 uint32_t elapsed_sec = (sample_rate > 0)
                     ? (uint32_t)(elapsed_samples / sample_rate) : 0;
@@ -2454,7 +2786,10 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
                 }
                 if (s_seek_pending) {
                     s_seek_pending = false;
-                    fade_in_remaining = fade_in_total_samples;
+                    audio_dsp_flush();
+                    audio_dsp_trigger_fade_in(sample_rate);
+                    prebuffered_frames = 0;
+                    prebuffer_done = false;
                 }
 
                 int32_t *to_write = output_buf;
@@ -2472,98 +2807,57 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
                     }
                 }
 
-                static int s_cached_vol = -1;
-                static int s_cached_bal = 999;
-                static int32_t s_cached_final_L = 32768;
-                static int32_t s_cached_final_R = 32768;
-
-                int vol = s_volume_percent;
-                int bal = s_balance;
-                if (vol != s_cached_vol || bal != s_cached_bal) {
-                    s_cached_vol = vol;
-                    s_cached_bal = bal;
-
-                    float vol_gain = volume_to_gain(vol);
-                    int32_t vol_mult = (int32_t)(vol_gain * 32768.0f + 0.5f);
-                    if (vol_mult > 32768) vol_mult = 32768;
-                    if (vol_mult < 0) vol_mult = 0;
-
-                    int pct_L = 100;
-                    int pct_R = 100;
-                    if (bal < 0) {
-                        pct_R = 100 + bal;
-                    } else if (bal > 0) {
-                        pct_L = 100 - bal;
-                    }
-                    if (pct_L < 0) pct_L = 0;
-                    if (pct_R < 0) pct_R = 0;
-                    if (pct_L > 100) pct_L = 100;
-                    if (pct_R > 100) pct_R = 100;
-
-                    // Curva acústica quadrática (pan taper natural de console de áudio):
-                    // Em 100%: ganho 1.0 (0 dB, mult 32768)
-                    // Em  50%: ganho 0.25 (-12 dB, perceptualmente metade do volume)
-                    // Em   0%: ganho 0.0 (-inf dB, silêncio absoluto)
-                    int32_t bal_mult_L = (pct_L <= 0) ? 0 : ((pct_L >= 100) ? 32768 : (int32_t)(((int64_t)pct_L * pct_L * 32768) / 10000));
-                    int32_t bal_mult_R = (pct_R <= 0) ? 0 : ((pct_R >= 100) ? 32768 : (int32_t)(((int64_t)pct_R * pct_R * 32768) / 10000));
-
-                    s_cached_final_L = (int32_t)(((int64_t)vol_mult * bal_mult_L) >> 15);
-                    s_cached_final_R = (int32_t)(((int64_t)vol_mult * bal_mult_R) >> 15);
+                // Envia para o Core 0 (audio_dsp_task) para processar Volume/Balanço/EQ e gravar no I2S DMA
+                if (samples_to_write > 0) {
+                    audio_dsp_send_pcm(to_write, samples_to_write, sample_rate);
                 }
 
-                int32_t final_L = s_cached_final_L;
-                int32_t final_R = s_cached_final_R;
-
-                if (fade_in_remaining > 0) {
-                    for (size_t i = 0; i < samples_to_write; i += 2) {
-                        float fade = (fade_in_total_samples > 0)
-                            ? 1.0f - ((float)fade_in_remaining / (float)fade_in_total_samples)
-                            : 1.0f;
-                        int32_t fade_q15 = (int32_t)(fade * 32768.0f + 0.5f);
-                        if (fade_q15 > 32768) fade_q15 = 32768;
-                        if (fade_q15 < 0) fade_q15 = 0;
-                        int32_t f_L = (int32_t)(((int64_t)final_L * fade_q15) >> 15);
-                        int32_t f_R = (int32_t)(((int64_t)final_R * fade_q15) >> 15);
-                        to_write[i] = (int32_t)(((int64_t)to_write[i] * f_L) >> 15);
-                        if (i + 1 < samples_to_write) {
-                            to_write[i + 1] = (int32_t)(((int64_t)to_write[i + 1] * f_R) >> 15);
-                        }
-                        if (fade_in_remaining > 0) fade_in_remaining--;
-                    }
-                } else if (final_L < 32768 || final_R < 32768) {
-                    for (size_t i = 0; i < samples_to_write; i += 2) {
-                        to_write[i] = (int32_t)(((int64_t)to_write[i] * final_L) >> 15);
-                        if (i + 1 < samples_to_write) {
-                            to_write[i + 1] = (int32_t)(((int64_t)to_write[i + 1] * final_R) >> 15);
-                        }
+                if (!prebuffer_done) {
+                    prebuffered_frames += (samples_to_write / 2);
+                    if (prebuffered_frames >= prebuffer_target_frames) {
+                        prebuffer_done = true;
                     }
                 }
 
-                // Aplica o equalizador ao buffer PCM estereo antes de
-                // enviar pro I2S. O EQ e' aplicado DEPOIS do volume/fade
-                // (ja' com ganho < 1.0) pra reduzir risco de overflow em
-                // bandas com boost positivo.
-                eq_process(to_write, samples_to_write);
+                // So inicia o prefetch da proxima faixa e a contagem/reproducao livre
+                // apos o pre-buffering da DMA (~100 ms) estar concluido.
+                if (prebuffer_done) {
+                    if (!prefetched_next) {
+                        prefetched_next = true;
+                        scan_lock();
+                        int count_for_prefetch = s_playback_scan.audio_count;
+                        scan_unlock();
+                        if (count_for_prefetch > 1) {
+                            int next_index = (index + 1) % count_for_prefetch;
+                            prefetch_next_file(next_index);
+                        }
+                    }
 
-                size_t written = 0;
-                i2s_output_write(to_write, samples_to_write, &written);
+                    state_lock();
+                    s_state.elapsed_sec = elapsed_sec;
+                    state_unlock();
+                    s_last_elapsed_sec = elapsed_sec;
 
-                state_lock();
-                s_state.elapsed_sec = elapsed_sec;
-                state_unlock();
-                s_last_elapsed_sec = elapsed_sec;
-
-                if (elapsed_sec >= last_saved_elapsed + 30) {
-                    last_saved_elapsed = elapsed_sec;
-                    char rel[PATH_LEN];
-                    build_relative_path(s_playback_dir, display_name, rel, sizeof(rel));
-                    save_resume_state(rel, elapsed_sec);
+                    if (elapsed_sec >= last_saved_elapsed + 30) {
+                        last_saved_elapsed = elapsed_sec;
+                        char rel[PATH_LEN];
+                        build_relative_path(s_playback_dir, display_name, rel, sizeof(rel));
+                        save_resume_state(rel, elapsed_sec);
+                    }
                 }
                 break;
             }
 
             case mps3::DecodeStatus::NeedMoreData:
-                if (valid_end == INBUF_SIZE && data_start == 0) {
+                if (data_start > 0) {
+                    // O decoder precisa de mais dados, mas o final do buffer ja alcancou INBUF_SIZE
+                    // ou nao atingiu o limiar normal de compactacao. Compacta imediatamente os
+                    // bytes restantes para a origem a fim de abrir espaco para fread() no proximo ciclo.
+                    size_t remaining = valid_end - data_start;
+                    memmove(inbuf, inbuf + data_start, remaining);
+                    data_start = 0;
+                    valid_end = remaining;
+                } else if (valid_end == INBUF_SIZE) {
                     // Buffer de entrada cheio e o decoder nao conseguiu
                     // consumir nem 1 byte - com skip_leading_metadata()
                     // ja' pulando ID3v2/blocos FLAC antes do loop
@@ -2587,6 +2881,8 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
                 break;
         }
     }
+
+    audio_dsp_drain();
 
     if (output_buf) heap_caps_free(output_buf);
     if (pending_m4a_prefix) free(pending_m4a_prefix);
@@ -2664,8 +2960,10 @@ static void player_task(void *arg)
         } else if (s_forced_restart_pending) {
             // audio_player_seek_backward() pediu pra' reiniciar a faixa E
             // ja' avancar rapido ate' essa posicao, nao comecar do zero.
+            state_lock();
             target_elapsed = s_forced_restart_target_sec;
             s_forced_restart_pending = false;
+            state_unlock();
         } else if (reselect_resume_pending) {
             // O usuario re-selecionou (na lista, ou voltando pra' tela de
             // reproducao) a MESMA faixa que ja' estava carregada/pausada -
@@ -2720,9 +3018,15 @@ static void player_task(void *arg)
         switch (cmd) {
             case PLAYER_CMD_NEXT:
                 current_index = (current_index + 1) % count_for_switch;
+                state_lock();
+                s_forced_restart_pending = false;
+                state_unlock();
                 break;
             case PLAYER_CMD_PREV:
                 current_index = (current_index - 1 + count_for_switch) % count_for_switch;
+                state_lock();
+                s_forced_restart_pending = false;
+                state_unlock();
                 break;
             case PLAYER_CMD_RESTART:
                 break; // mesmo indice: play_track vai tocar do zero
@@ -2800,18 +3104,21 @@ esp_err_t audio_player_start(const char *music_dir)
                                              2048, NULL, 2, NULL);
     if (volume_task_ok != pdPASS) return ESP_ERR_NO_MEM;
 
-    // DIAGNOSTICO CONFIRMADO EM HARDWARE (ver AUDIO_FORMATS_PLAN.md): 16384
-    // bytes bastava pra AAC/MP3/FLAC/WAV/M4A/Vorbis-via-OGG, mas nao pra
-    // Opus-via-OGG - o proprio ESP-IDF detectou e reportou explicitamente
-    // "A stack overflow in task player_task has been detected" ao tentar
-    // tocar um .opus (decoders Opus tem chamadas bem mais profundas/
-    // pesadas em pilha que Vorbis/AAC/MP3, por causa do hibrido SILK+CELT).
-    // Dobrado pra 32768 - ha' bastante RAM interna livre pra isso (~229KiB
-    // no log de boot). Se AINDA faltar (outro overflow, agora em ponto
-    // diferente), e' seguro so' aumentar mais este numero - nao ha' nada
-    // de errado na logica, so' precisa de mais espaco.
+    esp_err_t dsp_err = audio_dsp_init();
+    if (dsp_err != ESP_OK) return dsp_err;
+
+    ESP_LOGI(TAG, "Heap interno livre antes do player_task: %u bytes (maior bloco: %u bytes)",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+
     BaseType_t ok = xTaskCreatePinnedToCore(player_task, "player_task",
-                                             32768, NULL, 5, &s_player_task_handle, 1);
+                                             24576, NULL, 5, &s_player_task_handle, 1);
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "Falha ao criar player_task no Core 1 (ok=%d, free_internal=%u, largest_block=%u)",
+                 (int)ok,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    }
     return ok == pdPASS ? ESP_OK : ESP_FAIL;
 }
 

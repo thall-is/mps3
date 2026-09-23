@@ -49,6 +49,16 @@ function Get-EsptoolCmd {
 function Invoke-FlashDir($DirToFlash, $Port) {
     Ensure-IdfEnv
     if (-not $Port) { $Port = $DefaultPort }
+    $availPorts = [System.IO.Ports.SerialPort]::GetPortNames()
+    if ($Port -and ($availPorts -notcontains $Port)) {
+        if ($availPorts -contains $DefaultPort) {
+            Write-Host "[*] Porta $Port nao disponivel. Usando porta conectada: $DefaultPort" -ForegroundColor Yellow
+            $Port = $DefaultPort
+        } elseif ($availPorts.Count -gt 0) {
+            Write-Host "[*] Porta $Port nao disponivel. Usando primeira porta conectada: $($availPorts[0])" -ForegroundColor Yellow
+            $Port = $availPorts[0]
+        }
+    }
     if (-not (Test-Path $DirToFlash)) {
         Write-Host "[!] ERRO: Pasta $DirToFlash nao existe!" -ForegroundColor Red
         return

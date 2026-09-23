@@ -21,15 +21,26 @@ managed_components/
 *.dll
 *.so
 *.dylib
-versionamento/binarios/**/*.bin
-versionamento/binarios/**/*.json
+versionamento/binarios/*
+!versionamento/binarios/.gitkeep
 
 # Temporary & Test Artifacts
 *.tmp
 perf_test.tmp
 __pycache__/
 *.pyc
+tools/read_*.py
 
 # IDEs & Editor configs
 .vscode/
 .idea/
+
+# Documentacao Pessoal e Ferramentas Remotas (Privadas / Nao versionadas)
+documentacao/
+diario_de_bordo.md
+walkthrough.md
+planos/
+remote_*.py
+sync_to_remote.ps1
+test_*.py
+

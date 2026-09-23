@@ -53,6 +53,8 @@ esp_err_t oled_display_init(void)
                                             u8g2_hal_byte_cb, u8g2_hal_gpio_and_delay_cb);
     u8g2_InitDisplay(&s_u8g2);
     u8g2_SetPowerSave(&s_u8g2, 0);
+    u8g2_SetBitmapMode(&s_u8g2, 1);
+    u8g2_SetFontMode(&s_u8g2, 1);
     u8g2_ClearBuffer(&s_u8g2);
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);
@@ -424,7 +426,7 @@ void oled_display_show_now_playing(const playback_state_t *state)
         u8g2_DrawStr(&s_u8g2, tx, 28, safe_title);
     } else {
         u8g2_SetClipWindow(&s_u8g2, 0, 12, 128, 31);
-        draw_marquee(&s_now_playing_marquee, safe_title, 0, 28, 2);
+        draw_marquee(&s_now_playing_marquee, safe_title, 0, 28, 1);
         u8g2_SetMaxClipWindow(&s_u8g2);
     }
 
@@ -592,6 +594,7 @@ void oled_display_show_list(const char **names, int count, int cursor, const pla
         }
         
         // --- Textos em XOR mode ---
+        u8g2_SetFontMode(&s_u8g2, 1);
         u8g2_SetDrawColor(&s_u8g2, 2);
         
         char elapsed_str[8], total_str[8];
@@ -690,7 +693,7 @@ void oled_display_show_list(const char **names, int count, int cursor, const pla
             if (tw <= 122) {
                 u8g2_DrawStr(&s_u8g2, 1, y_text, safe_name);
             } else {
-                draw_marquee(&s_list_cursor_marquee, safe_name, 1, y_text, 2);
+                draw_marquee(&s_list_cursor_marquee, safe_name, 1, y_text, 1);
             }
             u8g2_SetMaxClipWindow(&s_u8g2);
             u8g2_SetDrawColor(&s_u8g2, 1);
@@ -1658,9 +1661,8 @@ static const uint8_t* const hourglass_frames[] = {
 void oled_display_show_loading(void) {
     if (!s_ready) return;
     
-    static int call_count = 0;
-    call_count++;
-    int frame = (call_count / 3) % 8; // Muda a cada 3 chamadas (150ms) pra nÃ£o ficar rÃ¡pido demais
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    int frame = (int)((now_ms / 125) % 8); // Muda de frame a cada 125ms perfeitamente ritmado
     
     u8g2_ClearBuffer(&s_u8g2);
     
@@ -1711,6 +1713,7 @@ void oled_display_show_sd_error(void) {
 }
 
 extern uint32_t usb_manager_get_pkt_count(void);
+extern bool usb_manager_is_streaming(void);
 
 void oled_display_show_usb_dac(void)
 {
@@ -1742,9 +1745,9 @@ void oled_display_show_usb_dac(void)
     u8g2_DrawHLine(&s_u8g2, 0, 14, 128);
 
     // 2. Status de Streaming (Linha 2, y=24)
-    uint32_t pkts = usb_manager_get_pkt_count();
+    bool streaming = usb_manager_is_streaming();
     u8g2_SetFont(&s_u8g2, u8g2_font_5x8_tf);
-    if (pkts > 0) {
+    if (streaming) {
         u8g2_DrawDisc(&s_u8g2, 3, 21, 2, U8G2_DRAW_ALL); // Indicador solido
         u8g2_DrawStr(&s_u8g2, 9, 24, "STREAMING ATIVO");
     } else {
@@ -1866,40 +1869,63 @@ void oled_display_show_top_screen(int volume, const void *eq_cfg, int eq_focus, 
     u8g2_SetFontMode(&s_u8g2, 1);
 
     // =========================================================================
-    // 1o Item (Topo, y=0..20): VOLUME (cursor == 0)
+    // 1o Item (Topo, y=0..20): BATERIA (cursor == 2)
     // =========================================================================
     u8g2_SetDrawColor(&s_u8g2, 1);
-    u8g2_DrawFrame(&s_u8g2, 0, 0, 127, 21);
-    if (cursor == 0) u8g2_DrawBox(&s_u8g2, 0, 0, 21, 21);
+    u8g2_DrawFrame(&s_u8g2, 0, 0, 128, 21);
+    if (cursor == 2) u8g2_DrawBox(&s_u8g2, 0, 0, 21, 21);
     else u8g2_DrawFrame(&s_u8g2, 0, 0, 21, 21);
     u8g2_DrawLine(&s_u8g2, 20, 0, 20, 21);
 
-    u8g2_SetDrawColor(&s_u8g2, 2); // XOR para icone
-    u8g2_DrawXBM(&s_u8g2, 3, 3, 16, 16, image_Speaker_bits);
+    u8g2_SetDrawColor(&s_u8g2, 2);
+    u8g2_DrawXBM(&s_u8g2, 3, 3, 16, 16, image_Battery_bits);
     u8g2_SetDrawColor(&s_u8g2, 1);
 
-    if (volume < 0) volume = 0;
-    if (volume > 100) volume = 100;
+    bool is_charging = battery_is_charging();
+    bool is_full = battery_is_full();
 
-    // Barra de volume
-    int vol_w = (volume * 64) / 100;
-    if (vol_w > 0) {
-        u8g2_DrawBox(&s_u8g2, 24, 5, vol_w, 11);
+    char pct_str[16];
+    if (is_full) {
+        snprintf(pct_str, sizeof(pct_str), "100%%");
+    } else if (percentage < 0) {
+        snprintf(pct_str, sizeof(pct_str), "--%%");
+    } else {
+        int safe_pct = percentage > 100 ? 100 : percentage;
+        snprintf(pct_str, sizeof(pct_str), "%d%%", safe_pct);
     }
-    if (cursor == 0) {
-        u8g2_DrawFrame(&s_u8g2, 23, 4, 66, 13);
-    }
-
-    char vol_str[8];
-    snprintf(vol_str, sizeof(vol_str), "%d%%", volume);
     u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
-    u8g2_SetDrawColor(&s_u8g2, 1);
-    u8g2_DrawStr(&s_u8g2, 93, 14, vol_str);
+    u8g2_DrawStr(&s_u8g2, 25, 15, pct_str);
+
+    u8g2_DrawLine(&s_u8g2, 53, 0, 53, 21);
+
+    char v_str[16];
+    snprintf(v_str, sizeof(v_str), "%.2fV", voltage);
+    u8g2_DrawStr(&s_u8g2, 55, 15, v_str);
+
+    u8g2_DrawLine(&s_u8g2, 88, 0, 88, 21);
+
+    char time_str[16];
+    if (is_full) {
+        snprintf(time_str, sizeof(time_str), "CHEIA");
+    } else if (is_charging) {
+        if (time_left_mins > 0) {
+            snprintf(time_str, sizeof(time_str), "+%dh%02dm", time_left_mins / 60, time_left_mins % 60);
+        } else {
+            snprintf(time_str, sizeof(time_str), "CARGA");
+        }
+    } else {
+        if (time_left_mins >= 0) {
+            snprintf(time_str, sizeof(time_str), "%dh%02dm", time_left_mins / 60, time_left_mins % 60);
+        } else {
+            snprintf(time_str, sizeof(time_str), "--h--");
+        }
+    }
+    u8g2_DrawStr(&s_u8g2, 90, 15, time_str);
 
     // =========================================================================
     // 2o Item (Meio, y=21..42): PRESETS DO EQUALIZADOR (cursor == 1)
     // =========================================================================
-    u8g2_DrawFrame(&s_u8g2, 0, 21, 127, 21);
+    u8g2_DrawFrame(&s_u8g2, 0, 21, 128, 21);
     if (cursor == 1) u8g2_DrawBox(&s_u8g2, 0, 21, 21, 21);
     else u8g2_DrawFrame(&s_u8g2, 0, 21, 21, 21);
     u8g2_DrawLine(&s_u8g2, 20, 21, 20, 42);
@@ -1939,54 +1965,35 @@ void oled_display_show_top_screen(int volume, const void *eq_cfg, int eq_focus, 
     u8g2_DrawXBM(&s_u8g2, 122, 28, 4, 7, image_ButtonRight_bits);
 
     // =========================================================================
-    // 3o Item (Base, y=42..63): BATERIA (cursor == 2)
+    // 3o Item (Base, y=42..63): VOLUME (cursor == 0)
     // =========================================================================
-    u8g2_DrawFrame(&s_u8g2, 0, 42, 127, 22);
-    if (cursor == 2) u8g2_DrawBox(&s_u8g2, 0, 42, 21, 22);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_DrawFrame(&s_u8g2, 0, 42, 128, 22);
+    if (cursor == 0) u8g2_DrawBox(&s_u8g2, 0, 42, 21, 22);
     else u8g2_DrawFrame(&s_u8g2, 0, 42, 21, 22);
     u8g2_DrawLine(&s_u8g2, 20, 42, 20, 63);
 
-    u8g2_SetDrawColor(&s_u8g2, 2);
-    u8g2_DrawXBM(&s_u8g2, 3, 45, 16, 16, image_Battery_bits);
+    u8g2_SetDrawColor(&s_u8g2, 2); // XOR para icone
+    u8g2_DrawXBM(&s_u8g2, 3, 45, 16, 16, image_Speaker_bits);
     u8g2_SetDrawColor(&s_u8g2, 1);
 
-    bool is_charging = battery_is_charging();
-    bool is_full = battery_is_full();
+    if (volume < 0) volume = 0;
+    if (volume > 100) volume = 100;
 
-    char pct_str[8];
-    if (is_full) {
-        snprintf(pct_str, sizeof(pct_str), "100%%");
-    } else {
-        snprintf(pct_str, sizeof(pct_str), "%d%%", percentage);
+    // Barra de volume
+    int vol_w = (volume * 64) / 100;
+    if (vol_w > 0) {
+        u8g2_DrawBox(&s_u8g2, 24, 47, vol_w, 11);
     }
+    if (cursor == 0) {
+        u8g2_DrawFrame(&s_u8g2, 23, 46, 66, 13);
+    }
+
+    char vol_str[16];
+    snprintf(vol_str, sizeof(vol_str), "%d%%", volume);
     u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
-    u8g2_DrawStr(&s_u8g2, 25, 57, pct_str);
-
-    u8g2_DrawLine(&s_u8g2, 53, 42, 53, 63);
-
-    char v_str[8];
-    snprintf(v_str, sizeof(v_str), "%.2fV", voltage);
-    u8g2_DrawStr(&s_u8g2, 55, 57, v_str);
-
-    u8g2_DrawLine(&s_u8g2, 88, 42, 88, 63);
-
-    char time_str[16];
-    if (is_full) {
-        snprintf(time_str, sizeof(time_str), "CHEIA");
-    } else if (is_charging) {
-        if (time_left_mins > 0) {
-            snprintf(time_str, sizeof(time_str), "+%dh%02dm", time_left_mins / 60, time_left_mins % 60);
-        } else {
-            snprintf(time_str, sizeof(time_str), "CARGA");
-        }
-    } else {
-        if (time_left_mins >= 0) {
-            snprintf(time_str, sizeof(time_str), "%dh%02dm", time_left_mins / 60, time_left_mins % 60);
-        } else {
-            snprintf(time_str, sizeof(time_str), "--h--");
-        }
-    }
-    u8g2_DrawStr(&s_u8g2, 90, 57, time_str);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_DrawStr(&s_u8g2, 93, 56, vol_str);
 
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);

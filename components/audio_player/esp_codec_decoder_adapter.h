@@ -167,7 +167,9 @@ public:
         // scratch_capacity_ (em bytes) pra amostras usando o tamanho de
         // amostra REAL do stream (ver bytes_per_source_sample()).
         size_t cap = scratch_capacity_ ? scratch_capacity_ : INITIAL_SCRATCH_BYTES;
-        return cap / bytes_per_source_sample();
+        size_t ch = channels_ ? channels_ : 2;
+        size_t smp = cap / bytes_per_source_sample();
+        return smp - (smp % ch);
     }
 
     void format_label(char *out, size_t out_len) const override
@@ -200,7 +202,17 @@ private:
         size_t bytes_per_sample = bytes_per_source_sample();
         size_t bytes_avail = pending_bytes_ - pending_offset_;
         size_t samples_avail = bytes_avail / bytes_per_sample;
+        size_t ch = channels_ ? channels_ : 2;
+        if (samples_avail < ch) {
+            // Menos de 1 frame completo disponivel (ou bytes fracionarios residuais < bytes_per_sample):
+            // descarta e encerra pending_ para evitar loop infinito ou desalinhamento.
+            pending_bytes_ = 0;
+            pending_offset_ = 0;
+            return 0;
+        }
+
         size_t n = samples_avail < output_capacity_samples ? samples_avail : output_capacity_samples;
+        n -= (n % ch);
 
         uint32_t bps = bits_per_sample_ ? bits_per_sample_ : 16;
         int shift = (bps < 32) ? (int)(32 - bps) : 0;

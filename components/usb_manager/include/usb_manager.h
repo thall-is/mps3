@@ -39,6 +39,9 @@ uint32_t usb_manager_get_sample_rate(void);
 uint32_t usb_manager_get_pkt_count(void);
 int32_t  usb_manager_get_last_sample(void);
 
+// Retorna true se houver streaming ativo de audio do Host (pacotes recebidos recentemente)
+bool usb_manager_is_streaming(void);
+
 #ifdef __cplusplus
 }
 #endif

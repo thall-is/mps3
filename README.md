@@ -1,18 +1,19 @@
-# mps3 — Player de Áudio Digital Hi-Res (DAP) Dual-MCU com Transmissão Sony LDAC 24-bit / 96 kHz
+# mps3 — Player de Áudio Digital Hi-Res (DAP) Dual-MCU com DAC 24-bit / 192 kHz e Transmissão Sony LDAC 24-bit / 96 kHz
 
 [![Dispositivo](https://img.shields.io/badge/Dispositivo-mps3-blue.svg)](#visao-geral)
 [![Hardware](https://img.shields.io/badge/Hardware-ESP32--S3%20%2B%20ESP32-darkblue.svg)](docs/WIRING.md)
-[![Hi-Res Audio](https://img.shields.io/badge/Hi--Res%20Audio-FLAC%2024--bit%20%2F%2096kHz%20Nativo-gold.svg)](#o-que-funciona-muito-bem)
+[![Hi-Res Audio DAC](https://img.shields.io/badge/DAC%20PCM5102A-24--bit%20%2F%20192kHz%20(4--Fios)-gold.svg)](#o-que-funciona-muito-bem)
 [![Bluetooth](https://img.shields.io/badge/Bluetooth-Sony%20LDAC%20(24b%2F96k%20%7C%20990kbps)%20%7C%20SBC-purple.svg)](#o-que-funciona-muito-bem)
 [![Licença](https://img.shields.io/badge/Licenca-MIT%20%2F%20Apache%202.0-green.svg)](LICENSE)
 
-O **mps3** é um player de áudio digital portátil de alta fidelidade (**Hi-Res Digital Audio Player / DAP**) de arquitetura aberta, construído em torno de **dois microcontroladores (Dual-MCU)** que trabalham em sincronia. O projeto foi projetado para entregar uma experiência sonora pura e sem perdas, reproduzindo músicas do cartão micro SD com resolução de estúdio tanto pela saída analógica cabeada (via DAC dedicado) quanto sem fio pelo Bluetooth com o codec audiófilo **Sony LDAC em 24-bit / 96 kHz** reais.
+O **mps3** é um player de áudio digital portátil de alta fidelidade (**Hi-Res Digital Audio Player / DAP**) de arquitetura aberta, construído em torno de **dois microcontroladores (Dual-MCU)** e um pipeline interno **Dual-Core assimétrico**. O projeto foi projetado para entregar uma experiência sonora pura e sem perdas, reproduzindo músicas do cartão micro SD com resolução de estúdio tanto pela saída analógica cabeada via DAC dedicado TI PCM5102A em até **24-bit / 192 kHz reais** (modo 4-fios com MCLK dedicado), quanto sem fio pelo Bluetooth com o codec audiófilo **Sony LDAC em 24-bit / 96 kHz**.
 
-A divisão de trabalho entre dois processadores independentes evita gargalos de desempenho e garante áudio fluido sem qualquer engasgo:
+A divisão de trabalho entre processadores e núcleos independentes evita gargalos de desempenho e garante áudio fluido sem qualquer engasgo:
 
-1. **Placa Principal (ESP32-S3 N16R8)**:
-   Gerencia a leitura do cartão micro SD em alta velocidade (SDMMC 4 vias a 40 MHz), decodifica arquivos Hi-Res (**FLAC 24-bit / 96 kHz nativo**, MP3, WAV, AAC, M4A, OGG), processa a equalização paramétrica de 10 bandas, comanda a interface visual no display OLED com joystick de 5 direções e transmite o áudio digital PCM nativo (até 24-bit / 96 kHz) via barramento I2S tanto para o conversor DAC local quanto para o módulo Bluetooth.
-   Conta também com subsistema **USB TinyUSB nativo** em modos exclusivos (Serial CDC, USB DAC UAC2 e USB Mass Storage).
+1. **Placa Principal (ESP32-S3 N16R8 — Dual-Core Xtensa LX7 @ 240 MHz)**:
+   * **Core 1 (Player & I/O Task)**: Leitura de alta velocidade do micro SD (SDMMC 4 vias a 40 MHz) e decodificação contínua de formatos Hi-Res (**FLAC 24-bit até 192 kHz nativo**, MP3, WAV, AAC, M4A, OGG) com janela deslizante de cópias reduzidas e busca rápida por syncwords.
+   * **Core 0 (DSP, Áudio DMA & Interface)**: Tarefa dedicada de processamento de áudio (`audio_dsp_task`) gerenciando volume logarítmico, balanço estéreo, equalizador de 10 bandas com compensação *Auto Pre-cut*, entrega contínua nos descritores DMA do I2S, interface gráfica OLED SSD1306 a 25.0 FPS cravados e leitura de joystick sem latência.
+   * Conta também com subsistema **USB TinyUSB nativo** em modos exclusivos (Serial CDC, USB DAC UAC2 e USB Mass Storage).
 
 2. **Co-Processador de Bluetooth (`bt_companion` — ESP32 Clássico)**:
    Dedicado exclusivamente ao rádio sem fio. Recebe o áudio PCM digital vindo do S3 via I2S, processa a codificação em tempo real com **Sony LDAC 24-bit / 96 kHz** (com taxa dinâmica adaptativa entre 330 e 990 kbps) ou **SBC** de alta qualidade, além de sincronizar o volume absoluto do fone via AVRCP.
@@ -28,12 +29,13 @@ Este projeto preza pela honestidade técnica e relata com clareza o estado real 
 
 ### ✅ O Que Funciona Muito Bem
 
-* **Áudio Hi-Res Real em 24-bit / 96 kHz de Ponta a Ponta**: Arquivos FLAC de 24 bits e 96.000 Hz são lidos do micro SD, decodificados sem nenhum truncamento para 16 bits e codificados pelo encoder Sony LDAC nativamente em 24-bit / 96 kHz, chegando ao conversor digital do fone sem perda de resolução ou dinâmica.
+* **Saída Cabeada Hi-Res de Estúdio (PCM5102A em até 24-bit / 192 kHz)**: DAC Texas Instruments PCM5102A operando em modo **4-fios com Master Clock (MCLK) dedicado no GPIO 8** e clock base `PLL_240M` (multiplicadores inteligentes de 128fs e 256fs). Reproduz arquivos até 192 kHz / 24-bit sem reamostragem, com baixíssimo jitter e relação sinal-ruído superior a 112 dB.
+* **Áudio Hi-Res Sem Fio em 24-bit / 96 kHz via Sony LDAC**: Arquivos FLAC de 24 bits e 96.000 Hz são lidos do micro SD e transmitidos via I2S para o co-processador Bluetooth, que codifica pelo encoder Sony LDAC nativamente em 24-bit / 96 kHz com até **990 kbps**, chegando ao fone sem perda de resolução.
 * **Sony LDAC com Bitrate Adaptativo (ABR)**: Opera em até **990 kbps (qualidade máxima)**. Se houver interferência no sinal sem fio, o sistema ajusta temporariamente a taxa para 660 ou 330 kbps para manter o som contínuo sem estalos, retornando aos 990 kbps assim que o enlace estabilizar.
 * **SBC de Alta Fidelidade**: Garante compatibilidade imediata com qualquer fone ou caixa Bluetooth do mercado em 44.1 ou 48 kHz (Bitpool 53, estéreo de alta qualidade).
-* **Decodificação de Múltiplos Formatos no S3**: Suporte completo a **FLAC** (16 e 24 bits, até 96 kHz), **MP3** (CBR/VBR até 320 kbps), **WAV** (PCM 16 e 24 bits), **AAC / M4A** e **OGG Vorbis**.
+* **Decodificação de Múltiplos Formatos no S3**: Suporte completo a **FLAC** (16 e 24 bits, até 192 kHz na saída cabeada e 96 kHz no Bluetooth), **MP3** (CBR/VBR até 320 kbps), **WAV** (PCM 16 e 24 bits até 192 kHz), **AAC / M4A** e **OGG Vorbis**.
 * **Leitura Rápida do Cartão SD (SDMMC 4-Bit 40 MHz)**: Barramento nativo de 4 vias a 40 MHz, permitindo navegar ágil pelas pastas e carregar arquivos pesados sem esvaziamento de buffer.
-* **Equalizador Paramétrico de 10 Bandas**: Filtros IIR biquad com ganho configurável de -12 dB a +12 dB. Possui **bypass automático inteligente acima de 48 kHz** para não introduzir distorções de fase nem sobrecarregar o processamento em faixas Hi-Res de 96 kHz.
+* **Equalizador Paramétrico de 10 Bandas com Auto Pre-cut**: Filtros IIR biquad com ganho de -12 dB a +12 dB e cálculo automático de compensação de ganho (*Auto Pre-cut*) para prevenir ceifamento digital (*hard clipping*). Alocado em SRAM interna rápida com **bypass automático Bit-Perfect acima de 48 kHz**.
 * **Interface Monocromática Fluida no OLED SSD1306**: Navegação intuitiva com joystick de 5 direções, menus em carrossel, visualização da biblioteca por pastas e arquivos, além da tela "Now Playing" com dados da faixa, formato, taxa de amostragem, profundidade de bits e tempo decorrido.
 * **Persistência de Estado (NVS)**: Grava e recupera automaticamente a última música tocada, o ponto exato onde a reprodução foi pausada, o volume atual, a preferência de codec e o modo de ordenação das faixas.
 * **Ordenação Flexível de Faixas (Nome A-Z vs Data / Tracklist Original)**: Configurado diretamente no menu **"Conf" (Opção 6 — "Ordenar")**. Permite alternar instantaneamente entre a ordem alfabética clássica e a ordem por data de modificação (`mtime` do cartão SD), preservando a sequência original de faixas das gravações/álbuns. A preferência é gravada na NVS e a pasta ativa é reordenada imediatamente.
@@ -50,10 +52,10 @@ Este projeto preza pela honestidade técnica e relata com clareza o estado real 
     4. **Nada a fazer**: Fecha o prompt e permanece no player de áudio normalmente.
     *Inclui timeout automático de 15 segundos para fechar o diálogo sem interromper a música caso nenhuma tecla seja pressionada.*
   * **Modo Flash / CDC (`0x4000`)**: Console CDC com interceptação DTR/RTS e 1200 bps touch para reboot automático no bootloader ROM da Espressif (flashing sem pressionar botões).
-  * **Modo DAC USB / UAC2 (`0x4004`)**: Placa de som USB estéreo de alta fidelidade (UAC2 24-bit em subslots de 32 bits, taxas de 44.1 kHz e 48 kHz):
-    * **Interface Visual Refinada no OLED**: Badge estilizado `[USB DAC]`, indicação de resolução (`44.1k / 24b` ou `48k / 24b`), indicador gráfico de streaming (`● STREAMING ATIVO` / `○ AGUARDANDO USB...`), preset ativo do equalizador e barra de volume de alta resolução.
+  * **Modo DAC USB / UAC2 (`0x4006`)**: Placa de som USB estéreo de alta fidelidade (UAC2 24-bit em subslots de 32 bits, taxas de 44.1 kHz e 48 kHz):
+    * **Interface Visual Refinada no OLED**: Badge estilizado `[USB DAC]`, indicação de resolução (`44.1k / 24b` ou `48k / 24b`), indicador dinâmico e reativo de streaming (`● STREAMING ATIVO` / `○ AGUARDANDO USB...`), preset ativo do equalizador e barra de volume integrada.
+    * **Controle de Volume Bidirecional (HID Consumer)**: Ajustar o volume no joystick (`JOY_UP` / `JOY_DOWN`) envia comandos nativos de mídia ao computador (Volume Up/Down) via interface HID com repeat suave, sincronizando o mixer do Windows/Linux/macOS sem dupla atenuação.
     * **Resistência à Suspensão Seletiva (Selective Suspend)**: Suporte a ciclos de economia de energia do driver de áudio do sistema operacional sem desconectar ou fechar a tela do DAC.
-    * **Controle de Volume Integrado**: Joystick Cima/Baixo (`JOY_UP` / `JOY_DOWN`) com repeat contínuo para ajuste suave de volume e ganho padrão de linha sem distorção (0 dBFS em 100%).
     * **Acesso Imediato ao Equalizador**: Joystick para a Direita (`JOY_RIGHT`) abre diretamente o menu de Presets do Equalizador de 10 bandas em tempo real durante a reprodução do computador. Joystick para a Esquerda (`JOY_LEFT`) retorna instantaneamente ao DAC; segurar Esquerda retorna ao player de músicas.
   * **Modo Armazenamento / MSC (`0x4002`)**: Montagem do cartão SD como drive USB no Windows/Linux via SDMMC de 4 vias (buffer de 8 KB com DWC2 double-buffering).
 
@@ -76,51 +78,61 @@ A PHY USB interna do ESP32-S3 é restrita ao padrão **USB 2.0 Full-Speed (12 Mb
 ## 📐 Arquitetura do Sistema
 
 ```text
-+-----------------------------------------------------------------------------------------+
-|                                    mps3 (Placa Principal - ESP32-S3)                    |
-|                                                                                         |
-|  +--------------------+        +-----------------------+        +--------------------+  |
-|  | MicroSD (SDMMC 4b) | -----> |  Decodificador Hi-Res | -----> |   Equalizador IIR  |  |
-|  |  FLAC / MP3 / WAV  |        |  (Core 1 - 24b/96kHz) |        |   10 Bandas Biquad |  |
-|  +--------------------+        +-----------------------+        +--------------------+  |
-|                                                                            |            |
-|  +--------------------+        +-----------------------+                   v            |
-|  | Display OLED I2C   | <..... | Menu / GUI / Joystick |        +--------------------+  |
-|  | (SSD1306 128x64)   |        | (Core 0 - Interface)  |        |  Driver I2S Master |  |
-|  +--------------------+        +-----------------------+        |  DMA 32-bit Stereo |  |
-|                                            :                    +--------------------+  |
-|                                            : UART                          | I2S        |
-+--------------------------------------------:-------------------------------:------------+
-                                             : (115200 8N1)                  |            |
-                                             v                               |            |
-+--------------------------------------------------------------------+       |            |
-|                     ESP32 Clássico (Co-Processador bt_companion)   |       |            |
-|                                                                    |       |            |
-|  +--------------------+   +--------------------+   +-------------+ |       |            |
-|  | Controle UART Link |   |  Reamostrador 32.32|   |  I2S Slave  | <-------+            |
-|  | (Core 0 - Estado)  |   | (Pass-thru em 96k) |   | (PIN 26/25) | |       |            |
-|  +--------------------+   +--------------------+   +-------------+ |       |            |
-|             |                         |                            |       |            |
-|             v                         v                            |       |            |
-|  +--------------------+   +--------------------+                   |       |            |
-|  |  AVRCP Controller  |   | Sony LDAC Encoder  |                   |       |            |
-|  |  (Absolute Volume) |   | (24-bit / 96 kHz)  |                   |       |            |
-|  +--------------------+   +--------------------+                   |       |            |
-|             |                         |                            |       |            |
-|             +------------+------------+                            |       |            |
-|                          v                                         |       |            |
-|             +--------------------------+                           |       |            |
-|             | Pilha Bluedroid BT A2DP  |                           |       |            |
-|             | Multi-SEP (Vendor LDAC)  |                           |       |            |
-|             +--------------------------+                           |       |            |
-|                          |                                         |       |            |
-+--------------------------:-----------------------------------------+       |            |
-                           : Bluetooth A2DP / AVRCP                          v            |
-                           v                                        +-------------------+ |
-               +-----------------------+                            |   DAC PCM5102A    | |
-               | Fone de Ouvido / Caixa|                            | (Saída P2 Fones)  | <+
-               | Bluetooth Sem Fio     |                            +-------------------+
-               +-----------------------+
++---------------------------------------------------------------------------------------------------------+
+|                                    mps3 (Placa Principal - ESP32-S3)                                    |
+|                                                                                                         |
+|   [CORE 1: I/O & DECODIFICAÇÃO (Prio 5)]                                                                |
+|  +--------------------+        +-----------------------+                                                |
+|  | MicroSD (SDMMC 4b) | -----> |  Decodificador Hi-Res |                                                |
+|  | (40 MHz FATFS)     |        | (FLAC 24b/192k, MP3)  |                                                |
+|  +--------------------+        +-----------+-----------+                                                |
+|                                            |                                                            |
+|                           [Fila PCM em SRAM Interna (s_dsp_ready_queue)]                                |
+|                                            |                                                            |
+|                                            v                                                            |
+|   [CORE 0: DSP, SAÍDA & INTERFACE]         |                                                            |
+|  +-----------------------------------------+-----------+        +--------------------+                  |
+|  | audio_dsp_task (Prio 5): Vol / Balanço / Fade       | -----> |  Driver I2S Master |                  |
+|  | + Equalizador 10-Bandas com Auto Pre-cut            |        |  DMA 32-bit Stereo |                  |
+|  +-----------------------------------------------------+        +---------+----------+                  |
+|                                                                           |                             |
+|  +--------------------+        +-----------------------+                  | I2S 4-Fios:                 |
+|  | Display OLED I2C   | <..... | Menu / GUI / Joystick |                  | DOUT (47), BCLK (48),       |
+|  | (SSD1306 a 25 FPS) |        | (touch_task Prio 5)   |                  | LRCK (21), MCLK (8)         |
+|  +--------------------+        +-----------+-----------+                  |                             |
+|                                            :                              |                             |
+|                                            : UART Link                    |                             |
++--------------------------------------------:------------------------------:-----------------------------+
+                                             : (115200 8N1)                 |                             |
+                                             v                              |                             |
++--------------------------------------------------------------------+      |                             |
+|                     ESP32 Clássico (Co-Processador bt_companion)   |      |                             |
+|                                                                    |      |                             |
+|  +--------------------+   +--------------------+   +-------------+ |      |                             |
+|  | Controle UART Link |   |  Reamostrador 32.32|   |  I2S Slave  | <------+ (Até 96 kHz)                |
+|  | (Core 0 - Estado)  |   | (Pass-thru em 96k) |   | (PIN 26/25) | |      |                             |
+|  +--------------------+   +--------------------+   +-------------+ |      |                             |
+|             |                         |                            |      |                             |
+|             v                         v                            |      |                             |
+|  +--------------------+   +--------------------+                   |      |                             |
+|  |  AVRCP Controller  |   | Sony LDAC Encoder  |                   |      |                             |
+|  |  (Absolute Volume) |   | (24-bit / 96 kHz)  |                   |      |                             |
+|  +--------------------+   +--------------------+                   |      |                             |
+|             |                         |                            |      |                             |
+|             +------------+------------+                            |      |                             |
+|                          v                                         |      |                             |
+|             +--------------------------+                           |      |                             |
+|             | Pilha Bluedroid BT A2DP  |                           |      |                             |
+|             | Multi-SEP (Vendor LDAC)  |                           |      |                             |
+|             +--------------------------+                           |      |                             |
+|                          |                                         |      |                             |
++--------------------------:-----------------------------------------+      |                             |
+                           : Bluetooth A2DP / AVRCP                         v                             |
+                           v                                       +-------------------+                  |
+               +-----------------------+                           |   DAC PCM5102A    |                  |
+               | Fone de Ouvido / Caixa|                           | (Modo 4-Fios MCLK)| <----------------+
+               | Bluetooth Sem Fio     |                           | (Até 192kHz/24b)  |   (Até 192 kHz)
+               +-----------------------+                           +-------------------+
 ```
 
 ---
@@ -148,9 +160,10 @@ O projeto adota o **ESP-IDF v6.0.1 puro** como *Single Source of Truth* para com
 | Sinal I2S | ESP32-S3 (Master TX) | ESP32 Companion (Slave RX) | DAC PCM5102A | Observações |
 |---|:---:|:---:|:---:|---|
 | **BCLK** (Bit Clock) | **GPIO 48** | **GPIO 26** | **BCK** | Clock de bits síncrono |
-| **LRCK / WS** (Word Select) | **GPIO 21** | **GPIO 25** | **LCK** | Frequência de amostragem da faixa (ex: 96 kHz) |
+| **LRCK / WS** (Word Select) | **GPIO 21** | **GPIO 25** | **LCK** | Frequência de amostragem da faixa (até 192 kHz) |
 | **DOUT / DIN** (Dados PCM) | **GPIO 47** | **GPIO 22** | **DIN** | Dados de áudio PCM estéreo |
-| **GND** | GND | GND | GND / SCK | **SCK do PCM5102A deve ser conectado ao GND** |
+| **MCLK** (Master Clock) | **GPIO 8** | — | **SCK** | Master Clock dedicado (24,576 MHz max, jumper SCK-GND removido) |
+| **GND** | GND | GND | GND | Terra comum de referência |
 
 ### 2. Barramento de Controle UART (Comunicação S3 ↔ Companion)
 
@@ -169,6 +182,7 @@ O projeto adota o **ESP-IDF v6.0.1 puro** como *Single Source of Truth* para com
 | **Joystick de 5 Vias** | Botões de navegação | **UP: GPIO 2** \| **LEFT: GPIO 39** \| **DOWN: GPIO 41** \| **RIGHT: GPIO 42** \| **CENTER: GPIO 40** |
 | **Monitor de Bateria & TP4056** | Divisor Li-Ion + status TP4056 | **ADC: GPIO 1** (Tensão Li-Ion) \| **CHRG: GPIO 11** (LED Carregando) |
 | **LED RGB WS2812** | Feedback visual on-board | **DIN: GPIO 38** |
+| **I2S MCLK (Master Clock)** | Clock dedicado para o DAC PCM5102A | **MCLK: GPIO 8** (Ligue ao pino SCK do DAC) |
 | **Porta USB Dados & Debug** | Conexão OTG Nativa ESP32-S3 (CDC / DAC / MSC) | **D-: GPIO 19** \| **D+: GPIO 20** |
 | **Porta USB Carga Bateria** | Alimentação independente do carregador TP4056 | Sem conexão de dados com a MCU (Apenas VBUS/GND ao TP4056) |
 

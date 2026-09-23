@@ -53,7 +53,11 @@ static bool s_have_ctrl = false;
 static void flush_txbuf(void)
 {
     if (s_txlen > 0 && s_dev) {
-        i2c_master_transmit(s_dev, s_txbuf, s_txlen, 1000);
+        esp_err_t err = i2c_master_transmit(s_dev, s_txbuf, s_txlen, 50);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Falha na transmissao I2C: %s", esp_err_to_name(err));
+            i2c_master_bus_reset(s_bus);
+        }
     }
     s_txlen = 0;
 }
@@ -77,7 +81,7 @@ esp_err_t u8g2_hal_i2c_init(int sda_gpio, int scl_gpio, uint8_t i2c_addr_7bit)
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = i2c_addr_7bit,
-        .scl_speed_hz = 400000,
+        .scl_speed_hz = 400000, // 400 kHz Fast Mode (padrao confiavel do SSD1306)
     };
     ret = i2c_master_bus_add_device(s_bus, &dev_cfg, &s_dev);
     if (ret != ESP_OK) {

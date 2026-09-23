@@ -192,6 +192,20 @@ static void extract_vorbis_comment_block(FILE *fp, uint32_t block_len, track_met
 
 static void extract_flac(FILE *fp, track_metadata_t *out)
 {
+    uint8_t id3_hdr[10];
+    if (fread(id3_hdr, 1, 10, fp) == 10 && id3_hdr[0] == 'I' && id3_hdr[1] == 'D' && id3_hdr[2] == '3') {
+        uint32_t tag_size = ((uint32_t)(id3_hdr[6] & 0x7F) << 21) |
+                            ((uint32_t)(id3_hdr[7] & 0x7F) << 14) |
+                            ((uint32_t)(id3_hdr[8] & 0x7F) << 7)  |
+                            ((uint32_t)(id3_hdr[9] & 0x7F));
+        bool has_footer = (id3_hdr[5] & 0x10) != 0;
+        fseek(fp, 0, SEEK_SET);
+        extract_id3v2(fp, out);
+        fseek(fp, 10 + tag_size + (has_footer ? 10 : 0), SEEK_SET);
+    } else {
+        fseek(fp, 0, SEEK_SET);
+    }
+
     char magic[4];
     if (fread(magic, 1, 4, fp) != 4 || memcmp(magic, "fLaC", 4) != 0) return;
 

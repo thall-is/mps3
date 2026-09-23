@@ -23,6 +23,7 @@
 #define PIN_I2S_BCLK        48
 #define PIN_I2S_LRCK        21
 #define PIN_I2S_DOUT        47
+#define PIN_I2S_MCLK        8   // Master Clock (MCLK) dedicado para o DAC PCM5102A (SCK)
 
 // --- Enlace Serial UART com o Co-Processador Bluetooth (bt_companion) --------
 // Comunicação binária com checksum a 115200 bps 8N1 + linha de reset de hardware

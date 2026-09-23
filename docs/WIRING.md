@@ -40,7 +40,8 @@ Este documento detalha todas as conexões físicas, níveis de tensão e recomen
           |  BCLK (GPIO 48) --------+------------------------>| BCK
           |  LRCK (GPIO 21) --------+------------------------>| LCK
           |  DOUT (GPIO 47) --------+------------------------>| DIN
-          |                         |                         | SCK --> GND
+          |  MCLK (GPIO 8)  --------------------------------->| SCK (Jumper GND desfeito)
+          |                         |                         |
           |  [ENLACE UART]          |                         |
           |  TX (GPIO 14) --------->| RX (GPIO 16)            |
           |  RX (GPIO 13) <---------| TX (GPIO 17)            |
@@ -68,9 +69,10 @@ Este documento detalha todas as conexões físicas, níveis de tensão e recomen
 | **BCLK** | **48** | **26** | **BCK** | Saída 3.3V (Master) / Entradas nos Slaves |
 | **LRCK** | **21** | **25** | **LCK** | Saída 3.3V (Master) / Entradas nos Slaves |
 | **DOUT** | **47** | **22 (DIN)** | **DIN** | Saída 3.3V (Master) / Entradas nos Slaves |
-| **GND**  | GND | GND | GND / SCK | Terra comum de referência |
+| **MCLK** | **8**  | — | **SCK** | Master Clock dedicado (24,576 MHz max) para o DAC |
+| **GND**  | GND | GND | GND | Terra comum de referência |
 
-> **Atenção**: No módulo DAC PCM5102A, conecte o pino **SCK ao GND** para que ele utilize o gerador de clock interno síncrono aos sinais BCK/LCK.
+> **Atenção**: No módulo DAC PCM5102A, o pino **SCK deve ser conectado ao GPIO 8** (MCLK). É **obrigatório** verificar e remover o resistor 0-ohm / ponte de solda (Jumper 1) no verso da plaquinha que aterra o pino SCK de fábrica, evitando curto-circuito com o GND.
 
 ### 2. Barramento de Controle UART
 | Linha | ESP32-S3 | ESP32 Companion | Nível Elétrico |

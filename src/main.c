@@ -42,6 +42,7 @@ static bool s_sd_ok = false;
 static void display_task(void *arg)
 {
     (void)arg;
+    ESP_LOGI("display", "display_task INICIADA no Core %d (prio %d)", xPortGetCoreID(), (int)uxTaskPriorityGet(NULL));
     playback_state_t state;
 
     int last_volume_seen = audio_player_get_volume();
@@ -66,6 +67,7 @@ static void display_task(void *arg)
 
     while (true) {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        uint32_t frame_start_ms = now;
 
         oled_display_update_animations();
 
@@ -81,6 +83,7 @@ static void display_task(void *arg)
         } else if (s_was_sleeping) {
             oled_display_set_power_save(false);
             s_was_sleeping = false;
+            s_last_rendered_ui_mode = (ui_mode_t)-1;
         }
 
         ui_mode_t cur_ui_mode = touch_input_get_mode();
@@ -108,7 +111,7 @@ static void display_task(void *arg)
             }
             // Se menu_poll_active() acabou de sair do modo, a proxima
             // iteracao do loop (daqui 250ms) ja' cai na lista normal.
-        } else if (now < volume_show_until_ms) {
+        } else if (now < volume_show_until_ms && cur_ui_mode != UI_MODE_USB_DAC) {
             oled_display_show_volume(vol);
         }else if (touch_input_get_mode() == UI_MODE_LIST) {
 
@@ -196,7 +199,7 @@ static void display_task(void *arg)
             static int s_last_dac_vol = -1;
             static int s_last_dac_bal = -999;
             static uint32_t s_last_dac_rate = 0;
-            static uint32_t s_last_dac_pkts = 999999;
+            static bool s_last_dac_streaming = false;
             static int s_last_dac_eq_preset = -1;
             static bool s_last_dac_eq_en = false;
             static int s_dac_state = -1;
@@ -205,7 +208,7 @@ static void display_task(void *arg)
             int cur_vol = audio_player_get_volume();
             int cur_bal = audio_player_get_balance();
             uint32_t cur_rate = usb_manager_get_sample_rate();
-            uint32_t cur_pkts = usb_manager_get_pkt_count();
+            bool cur_streaming = usb_manager_is_streaming();
 
             player_eq_config_t eq_cfg;
             audio_player_get_eq_config(&eq_cfg);
@@ -213,11 +216,11 @@ static void display_task(void *arg)
             if (s_dac_state != 1 || cur_vol != s_last_dac_vol || cur_bal != s_last_dac_bal || 
                 cur_rate != s_last_dac_rate || eq_cfg.active_preset_idx != s_last_dac_eq_preset ||
                 eq_cfg.enabled != s_last_dac_eq_en ||
-                (cur_pkts != s_last_dac_pkts && (cur_pkts % 50 == 0 || s_last_dac_pkts == 999999))) {
+                cur_streaming != s_last_dac_streaming) {
                 s_last_dac_vol = cur_vol;
                 s_last_dac_bal = cur_bal;
                 s_last_dac_rate = cur_rate;
-                s_last_dac_pkts = cur_pkts;
+                s_last_dac_streaming = cur_streaming;
                 s_last_dac_eq_preset = eq_cfg.active_preset_idx;
                 s_last_dac_eq_en = eq_cfg.enabled;
                 s_dac_state = 1;
@@ -243,10 +246,33 @@ static void display_task(void *arg)
             }
         }
 
-        // Intervalo de 250ms para a rolagem do nome ficar fluida. Roda
-        // isolada no core 0, nao disputa CPU com o player_task (core 1),
-        // entao nao tem custo real em audio.
-        vTaskDelay(pdMS_TO_TICKS(50));
+        // Controle de taxa de atualizacao (pacing dinamico para 25 FPS / 40 ms).
+        // Roda no Core 0 com prioridade 3: nunca disputa CPU com player_task (Core 1)
+        // e cede CPU instantaneamente para audio_dsp_task (Core 0, prioridade 5)
+        // e touch_task (Core 0, prioridade 5).
+        uint32_t frame_elapsed_ms = (uint32_t)(esp_timer_get_time() / 1000ULL) - frame_start_ms;
+        const uint32_t target_frame_ms = 40; // 25 FPS estaveis (24ms I2C + 4ms render + 12ms folga)
+        if (frame_elapsed_ms < target_frame_ms) {
+            uint32_t sleep_ms = target_frame_ms - frame_elapsed_ms;
+            vTaskDelay(pdMS_TO_TICKS(sleep_ms < 2 ? 2 : sleep_ms));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(2));
+        }
+
+        static uint32_t s_last_fps_log_ms = 0;
+        static uint32_t s_fps_frame_count = 0;
+        static uint32_t s_fps_elapsed_sum = 0;
+        s_fps_frame_count++;
+        s_fps_elapsed_sum += frame_elapsed_ms;
+        if (now - s_last_fps_log_ms >= 5000) {
+            float avg_frame_ms = s_fps_frame_count ? (float)s_fps_elapsed_sum / s_fps_frame_count : 0.0f;
+            float fps = (now > s_last_fps_log_ms) ? (float)s_fps_frame_count * 1000.0f / (now - s_last_fps_log_ms) : 0.0f;
+            ESP_LOGI("display", "[TELEMETRIA OLED] FPS: %.1f | Frame: %.1f ms (render+I2C) | Target: %u ms (~%u FPS)",
+                     fps, avg_frame_ms, (unsigned)target_frame_ms, (unsigned)(1000 / target_frame_ms));
+            s_last_fps_log_ms = now;
+            s_fps_frame_count = 0;
+            s_fps_elapsed_sum = 0;
+        }
     }
 }
 
@@ -262,18 +288,16 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_erase());
         nvs_ret = nvs_flash_init();
     }
-    ESP_ERROR_CHECK(nvs_ret);
+    ESP_ERROR_CHECK(nvs_flash_init());
 
     esp_err_t ret;
 
     ret = oled_display_init();
-    
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Falha ao iniciar o display OLED (codigo %d). Continuando sem display.", ret);
     }
 
     bitmap_animations_init();
-
     rgb_led_init();
     ret = battery_init(); 
     if (ret != ESP_OK) {
@@ -294,19 +318,6 @@ void app_main(void)
 
     bt_link_init();
 
-    if (s_sd_ok) {
-        ret = audio_player_start(MUSIC_DIR);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Falha ao iniciar a task de reproducao.");
-        }
-    }
-
-    // Splash de boot animado
-    for (int i=0; i<20; i++) {
-        oled_display_show_loading();
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-
     // --- Registro do menu principal --------------------------------------
     // A ORDEM das chamadas abaixo e' a ordem visual do carrossel do menu
     // (0=Player, 1=WiFi, 2=Bluetooth, 3=Conf, 4=USB, 5=Game - ver os "case" em
@@ -318,25 +329,34 @@ void app_main(void)
     touch_input_register_usb_entry();     // indice 4
     touch_input_register_game_entry();    // indice 5
 
+    ESP_LOGI(TAG, "Iniciando touch_input...");
     ret = touch_input_start();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Falha ao iniciar os controles do joystick (codigo %d). Continuando sem controles.", ret);
     }
 
+    ESP_LOGI(TAG, "Iniciando usb_manager...");
     ret = usb_manager_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Falha ao iniciar o USB Manager");
     }
 
-    // 4096 -> 8192: a tela de reproducao/lista cresceu bastante desde que
-    // esse numero foi escolhido (metadados, bateria, cracha de formato,
-    // 3 marquees separados, barra de rolagem) sem o stack acompanhar. Ja
-    // vimos nesse projeto (main_task) que 4096 e' marginal mesmo pra
-    // codigo bem mais simples que isso - e um estouro de pilha aqui tem
-    // exatamente a cara de "tela apaga do nada, precisa reiniciar" (a
-    // task reinicia o sistema com panic, mas por fora so' se ve a tela
-    // preta).
-    xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 2, NULL, 0);
+    // audio_player_start() ANTES da display_task: cria s_state_mutex e
+    // s_scan_mutex que a display_task acessa imediatamente ao iniciar
+    // (via audio_player_get_state, audio_player_browse_is_root, etc.).
+    if (s_sd_ok) {
+        ret = audio_player_start(MUSIC_DIR);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Falha ao iniciar a task de reproducao.");
+        }
+    }
+
+    // display_task no Core 0 com prioridade 3:
+    // Nao disputa com o decodificador/IO do player_task (Core 1),
+    // e cede CPU instantaneamente para audio_dsp_task (Core 0, prio 5)
+    // e touch_task (Core 0, prio 5).
+    ESP_LOGI(TAG, "Criando display_task no Core 0 com prioridade 3...");
+    xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 3, NULL, 0);
 
     ESP_LOGI(TAG, "mps3 rodando.");
 }

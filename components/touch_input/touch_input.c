@@ -741,6 +741,7 @@ static void touch_task(void *arg)
                             audio_player_set_eq_config(&cfg);
                         } else if (s_mode == UI_MODE_USB_DAC) {
                             audio_player_adjust_volume(VOLUME_STEP_PERCENT);
+                            usb_manager_send_hid(3);
                         } else if (s_mode == UI_MODE_LIST) {
                             joy_move_cursor(-1, pressed_edge);
                         }
@@ -794,6 +795,7 @@ static void touch_task(void *arg)
                             }
                         } else if (s_mode == UI_MODE_USB_DAC) {
                             audio_player_adjust_volume(-VOLUME_STEP_PERCENT);
+                            usb_manager_send_hid(4);
                         } else if (s_mode == UI_MODE_LIST) {
                             joy_move_cursor(+1, pressed_edge);
                         }
@@ -1056,7 +1058,7 @@ esp_err_t touch_input_start(void)
     s_mode = audio_player_should_start_in_playing_mode() ? UI_MODE_PLAYING : UI_MODE_LIST;
     s_in_player_browser = (s_mode == UI_MODE_PLAYING); // se jÃ¡ estÃ¡ tocando, considera que veio do Player
 
-    BaseType_t ok = xTaskCreatePinnedToCore(touch_task, "touch_task", 12288, NULL, 4, NULL, 0);
+    BaseType_t ok = xTaskCreatePinnedToCore(touch_task, "touch_task", 12288, NULL, 5, NULL, 0);
     return ok == pdPASS ? ESP_OK : ESP_FAIL;
 }
 

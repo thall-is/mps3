@@ -1,5 +1,0 @@
-﻿Versao: mps3_20260913_011500
-Data: 2026-09-13 01:11:59
-Branch: develop
-Commit: ba37799
-Descricao: Versao base com ESP-IDF v6.0.1 puro, USB MSC otimizado e modos exclusivos

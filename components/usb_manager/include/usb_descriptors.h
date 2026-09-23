@@ -43,7 +43,7 @@ extern const uint8_t desc_configuration_msc[];
 extern const char* usb_manager_msc_string_desc_arr[];
 extern const int usb_manager_msc_string_desc_count;
 
-// Descriptors for Pure DAC Mode (PID 0x4001)
+// Descriptors for Pure DAC Mode (PID 0x4006)
 extern const tusb_desc_device_t desc_device_dac;
 extern const uint8_t desc_configuration_dac[];
 extern const char* usb_manager_dac_string_desc_arr[];
