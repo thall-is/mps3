@@ -143,8 +143,10 @@ O projeto adota o **ESP-IDF v6.0.1 puro** como *Single Source of Truth* para com
 
 | Diretório / Arquivo | Finalidade |
 |---|---|
-| **[`espidf/`](espidf/)** | **Ponto de entrada oficial ESP-IDF**: `CMakeLists.txt`, `main/`, `sdkconfig.defaults` (configuração de 8KB USB MSC, PSRAM Octal 8MB, Flash 16MB QIO). |
+| **[`espidf/`](espidf/)** | **Ponto de entrada oficial ESP-IDF (ESP32-S3)**: `CMakeLists.txt`, `main/`, `sdkconfig.defaults` (configuração de 8KB USB MSC, PSRAM Octal 8MB, Flash 16MB QIO). |
 | **[`components/`](components/)** | Componentes modulares independentes: `audio_player`, `usb_manager`, `sd_card`, `oled_display`, `touch_input`, `eq`, `i2s_output`, `wifi_transfer`, etc. |
+| **[`bt_companion/`](bt_companion/)** | **Firmware do Co-Processador Bluetooth (ESP32)**: Transmissor de áudio Sony LDAC 24-bit / 96 kHz e SBC de alta qualidade com controle de volume AVRCP. |
+| **[`bt_audio_sink/`](bt_audio_sink/)** | **Firmware Receptor de Teste (ESP32)**: Receptor Bluetooth A2DP Sink para validação e auditoria em bancada do áudio transmitido pelo mps3. |
 | **[`tests/`](tests/)** | Scripts de bancada e automação: benchmark Win32 unbuffered de MSC (`benchmark_msc.py`), verificadores de áudio e validação de descritores USB. |
 | **[`docs/`](docs/)** | Diagramas de ligação elétrica ([WIRING.md](docs/WIRING.md)) e especificação do protocolo binário UART ([PROTOCOL.md](docs/PROTOCOL.md)). |
 | **[`tools/`](tools/)** | Utilitários de monitoramento de testbench em Python. |

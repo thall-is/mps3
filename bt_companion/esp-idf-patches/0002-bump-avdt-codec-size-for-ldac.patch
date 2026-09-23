@@ -1,0 +1,16 @@
+diff --git a/components/bt/host/bluedroid/common/include/common/bt_target.h b/components/bt/host/bluedroid/common/include/common/bt_target.h
+index 9df86c6..bba08e0 100644
+--- a/components/bt/host/bluedroid/common/include/common/bt_target.h
++++ b/components/bt/host/bluedroid/common/include/common/bt_target.h
+@@ -2453,7 +2453,10 @@
+ 
+ /* Maximum size in bytes of the codec capabilities information element. */
+ #ifndef AVDT_CODEC_SIZE
+-#define AVDT_CODEC_SIZE             10
++/* Aumentado de 10 para 11: o layout de uma Media Codec Capability de
++ * vendor (LDAC) precisa de LOSC(1)+media_type(1)+codec_type(1)+
++ * vendor_id(4)+codec_id(2)+freq(1)+ch_mode(1) = 11 bytes. */
++#define AVDT_CODEC_SIZE             11
+ #endif
+ 
+ /* Maximum size in bytes of the content protection information element. */

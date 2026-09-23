@@ -1,0 +1,57 @@
+diff --git a/components/bt/host/bluedroid/btc/profile/std/a2dp/btc_av.c b/components/bt/host/bluedroid/btc/profile/std/a2dp/btc_av.c
+--- a/components/bt/host/bluedroid/btc/profile/std/a2dp/btc_av.c
++++ b/components/bt/host/bluedroid/btc/profile/std/a2dp/btc_av.c
+@@ -2355,6 +2355,9 @@ btc_av_audio_buff_alloc(uint16_t size, uint8_t **pp_buff, uint8_t **pp_data)
+             buf_offset += latm_hdr;
+             break;
+         }
++#endif
++        case 0xFF:
++            // Non-A2DP / vendor codec: packet includes any payload/RTP headers already
++            break;
++
+         default:
+             return;
+     }
+@@ -2275,6 +2278,12 @@ btc_a2d_src_audio_data_send(esp_a2d_conn_hdl_t conn_hdl, esp_a2d_audio_buff_t *
+             data_len += latm_hdr_cap;
+             break;
+         }
++#endif
++        case 0xFF:
++            data_len = audio_buf->data_len;
++            if (data_len > btc_av_cb.mtu) {
++                return BT_STATUS_FAIL;
++            }
++            break;
++
+         default:
+             return BT_STATUS_UNSUPPORTED;
+     }
+diff --git a/components/bt/host/bluedroid/btc/profile/std/a2dp/bta_av_co.c b/components/bt/host/bluedroid/btc/profile/std/a2dp/bta_av_co.c
+--- a/components/bt/host/bluedroid/btc/profile/std/a2dp/bta_av_co.c
++++ b/components/bt/host/bluedroid/btc/profile/std/a2dp/bta_av_co.c
+@@ -1077,6 +1077,10 @@ void bta_av_co_audio_start(tBTA_AV_HNDL hndl, tBTA_AV_CODEC codec_type,
+ 
+     APPL_TRACE_DEBUG("bta_av_co_audio_start: codec_type=0x%x", codec_type);
+ 
++    if (p_no_rtp_hdr != NULL) {
++        if (codec_type == 0xFF) {
++            *p_no_rtp_hdr = TRUE;
++        } else {
++            *p_no_rtp_hdr = FALSE;
++        }
++    }
++
+     return;
+ }
+@@ -1367,6 +1371,10 @@ static BOOLEAN bta_av_co_audio_codec_build_config(const UINT8 *p_codec_caps, UINT8 *p_codec_cfg)
+-            if (common_sr & 0x20)      sel_sr = 0x20; /* 44100 */
+-            else if (common_sr & 0x10) sel_sr = 0x10; /* 48000 */
+-            else if (common_sr & 0x04) sel_sr = 0x04; /* 96000 */
+-            else if (common_sr & 0x08) sel_sr = 0x08; /* 88200 */
++            if (common_sr & 0x04)      sel_sr = 0x04; /* 96000 (Hi-Res) */
++            else if (common_sr & 0x08) sel_sr = 0x08; /* 88200 (Hi-Res) */
++            else if (common_sr & 0x10) sel_sr = 0x10; /* 48000 */
++            else if (common_sr & 0x20) sel_sr = 0x20; /* 44100 */
+             else return FALSE;

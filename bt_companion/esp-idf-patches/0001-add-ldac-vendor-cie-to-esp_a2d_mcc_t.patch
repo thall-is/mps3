@@ -1,0 +1,18 @@
+diff --git a/components/bt/host/bluedroid/api/include/api/esp_a2dp_api.h b/components/bt/host/bluedroid/api/include/api/esp_a2dp_api.h
+index cf8165c..1f9b435 100644
+--- a/components/bt/host/bluedroid/api/include/api/esp_a2dp_api.h
++++ b/components/bt/host/bluedroid/api/include/api/esp_a2dp_api.h
+@@ -180,11 +180,13 @@ typedef struct {
+ #define ESP_A2D_CIE_LEN_M12          (4)       /*!< MPEG-1,2 cie length */
+ #define ESP_A2D_CIE_LEN_M24          (6)       /*!< MPEG-2,4 AAC cie length */
+ #define ESP_A2D_CIE_LEN_ATRAC        (7)       /*!< ATRAC family cie length */
++#define ESP_A2D_CIE_LEN_LDAC         (8)       /*!< LDAC (vendor/non-A2DP) cie length */
+     union {
+         esp_a2d_cie_sbc_t   sbc_info;          /*!< SBC codec capabilities */
+         esp_a2d_cie_m12_t   m12_info;          /*!< MPEG-1,2 audio codec capabilities */
+         esp_a2d_cie_m24_t   m24_info;          /*!< MPEG-2, 4 AAC audio codec capabilities */
+         esp_a2d_cie_atrac_t atrac_info;        /*!< ATRAC family codec capabilities */
++        uint8_t             ldac_info[ESP_A2D_CIE_LEN_LDAC]; /*!< LDAC vendor codec capabilities (raw bytes) */
+     } cie;                                     /*!< A2DP codec information element */
+ } __attribute__((packed)) esp_a2d_mcc_t;
+ 
