@@ -75,7 +75,10 @@ uint32_t bt_source_get_codec_sample_rate(void)
     return s_codec_sample_rate;
 }
 
-extern void bta_av_co_set_codec_preference(uint8_t pref);
+__attribute__((weak)) void bta_av_co_set_codec_preference(uint8_t pref)
+{
+    (void)pref;
+}
 
 void bt_source_set_codec_preference(uint8_t pref)
 {
