@@ -5,22 +5,22 @@
 #include "esp_log.h"
 #include "esp_app_format.h"
 
-#include "mbedtls/md5.h"
+#include "esp_rom_md5.h"
 
 static const char *TAG_UPDATE = "IDF_UPDATE";
 
-static int md5_starts(mbedtls_md5_context *ctx) {
-    mbedtls_md5_starts(ctx);
+static int md5_starts(md5_context_t *ctx) {
+    esp_rom_md5_init(ctx);
     return 0;
 }
 
-static int md5_update(mbedtls_md5_context *ctx, const uint8_t *data, size_t len) {
-    mbedtls_md5_update(ctx, data, len);
+static int md5_update(md5_context_t *ctx, const uint8_t *data, size_t len) {
+    esp_rom_md5_update(ctx, data, len);
     return 0;
 }
 
-static int md5_finish(mbedtls_md5_context *ctx, uint8_t out16[16]) {
-    mbedtls_md5_finish(ctx, out16);
+static int md5_finish(md5_context_t *ctx, uint8_t out16[16]) {
+    esp_rom_md5_final(out16, ctx);
     return 0;
 }
 
@@ -100,9 +100,8 @@ bool IdfUpdate::begin(size_t size, const char *label) {
     _partition = part;
 
     // MD5 context is always initialized; verification is optional.
-    mbedtls_md5_init(&_md5Ctx);
+    esp_rom_md5_init(&_md5Ctx);
     _md5CtxInit = true;
-    (void)md5_starts(&_md5Ctx);
 
     _running = true;
     ESP_LOGI(TAG_UPDATE, "begin ok slot='%s' addr=0x%08X size=%u", part->label, (unsigned)part->address, (unsigned)_expectedSize);
@@ -257,7 +256,6 @@ void IdfUpdate::reset_() {
     _md5Finalized = false;
 
     if (_md5CtxInit) {
-        mbedtls_md5_free(&_md5Ctx);
         _md5CtxInit = false;
     }
 }
@@ -272,7 +270,6 @@ void IdfUpdate::abort_(Error err) {
     _running = false;
 
     if (_md5CtxInit) {
-        mbedtls_md5_free(&_md5Ctx);
         _md5CtxInit = false;
     }
 

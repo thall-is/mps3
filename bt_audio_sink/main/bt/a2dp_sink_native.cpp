@@ -107,7 +107,7 @@ void NativeA2DPSink::app_task_handler(void *arg) {
 
 void NativeA2DPSink::av_hdl_stack_evt(uint16_t event, void *p_param) {
     ESP_LOGI(TAG, "av_hdl_stack_evt: starting A2DP sink init");
-    esp_err_t name_err = esp_bt_dev_set_device_name(bt_name.c_str()); ESP_LOGI(TAG, "set_device_name: %s", esp_err_to_name(name_err));
+    esp_err_t name_err = esp_bt_gap_set_device_name(bt_name.c_str()); ESP_LOGI(TAG, "set_device_name: %s", esp_err_to_name(name_err));
     esp_bt_gap_register_callback(gap_cb_trampoline);
     esp_avrc_ct_register_callback(rc_ct_cb_trampoline);
     esp_avrc_ct_init();
@@ -172,14 +172,14 @@ void NativeA2DPSink::av_hdl_a2d_evt(uint16_t event, void *p_param) {
         audio_type = p_mcc->type;
         uint32_t sr = 44100; uint8_t bits = 16; uint8_t ch = 2;
         if (audio_type == ESP_A2D_MCT_SBC) {
-            uint8_t oct0 = p_mcc->cie.sbc[0];
+            uint8_t oct0 = ((const uint8_t*)&p_mcc->cie)[0];
             if (oct0 & (0x01 << 6)) sr = 32000;
             else if (oct0 & (0x01 << 5)) sr = 44100;
             else if (oct0 & (0x01 << 4)) sr = 48000;
             else if (oct0 & (0x01 << 7)) sr = 16000;
             if (oct0 & (0x01 << 3)) ch = 1;
         } else if (audio_type == ESP_A2D_MCT_M24) {
-            const uint8_t *raw = p_mcc->cie.m24;
+            const uint8_t *raw = (const uint8_t*)&p_mcc->cie;
             uint16_t sampleBits = ((uint16_t)raw[1] << 4) | ((raw[2] >> 4) & 0x0F);
             if (sampleBits & 0x800) sr = 8000;
             else if (sampleBits & 0x400) sr = 11025;
