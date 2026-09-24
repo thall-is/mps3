@@ -10,8 +10,9 @@ extern "C" {
 #endif
 
 typedef enum {
-    WIFI_TRANSFER_MODE_STA, // entra na rede WiFi de casa (CONFIG_WIFI_STA_SSID/PASSWORD)
-    WIFI_TRANSFER_MODE_AP,  // o player cria a propria rede (CONFIG_WIFI_AP_SSID/PASSWORD)
+    WIFI_TRANSFER_MODE_STA,   // entra na rede WiFi de casa (CONFIG_WIFI_STA_SSID/PASSWORD)
+    WIFI_TRANSFER_MODE_AP,    // o player cria a propria rede (CONFIG_WIFI_AP_SSID/PASSWORD)
+    WIFI_TRANSFER_MODE_APSTA, // modo misto: hotspot e estacao simultaneos
 } wifi_transfer_mode_t;
 
 // Entra no modo de transferencia por WiFi: pausa a reproducao (mesmo

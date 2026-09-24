@@ -514,16 +514,14 @@ static esp_err_t audio_dsp_init(void)
     int internal_count = 0;
     for (int i = 0; i < DSP_NUM_BLOCKS; i++) {
         s_dsp_blocks[i] = (dsp_block_t *)heap_caps_calloc(1, sizeof(dsp_block_t),
-                                                          MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        if (s_dsp_blocks[i]) {
-            internal_count++;
-        } else {
-            ESP_LOGW(TAG, "SRAM interna esgotada no bloco %d, tentando SPIRAM", i);
+                                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_dsp_blocks[i]) {
             s_dsp_blocks[i] = (dsp_block_t *)heap_caps_calloc(1, sizeof(dsp_block_t),
-                                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (!s_dsp_blocks[i]) {
-                s_dsp_blocks[i] = (dsp_block_t *)calloc(1, sizeof(dsp_block_t));
-            }
+                                                              MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            if (s_dsp_blocks[i]) internal_count++;
+        }
+        if (!s_dsp_blocks[i]) {
+            s_dsp_blocks[i] = (dsp_block_t *)calloc(1, sizeof(dsp_block_t));
         }
         if (!s_dsp_blocks[i]) {
             ESP_LOGE(TAG, "Sem memoria para bloco DSP %d", i);
@@ -2689,9 +2687,9 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
                 num_channels = decoder->channels();
                 output_capacity_samples = decoder->recommended_output_capacity_samples();
                 if (output_buf) heap_caps_free(output_buf);
-                output_buf = (int32_t *)heap_caps_malloc(output_capacity_samples * sizeof(int32_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+                output_buf = (int32_t *)heap_caps_malloc(output_capacity_samples * sizeof(int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                 if (!output_buf) {
-                    output_buf = (int32_t *)heap_caps_malloc(output_capacity_samples * sizeof(int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                    output_buf = (int32_t *)heap_caps_malloc(output_capacity_samples * sizeof(int32_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
                 }
                 if (!output_buf) {
                     output_buf = (int32_t *)malloc(output_capacity_samples * sizeof(int32_t));

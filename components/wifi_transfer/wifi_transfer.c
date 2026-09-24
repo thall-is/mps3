@@ -201,7 +201,7 @@ static esp_err_t http_captive_apple_handler(httpd_req_t *req)
 static esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err)
 {
     (void)err;
-    if (s_mode == WIFI_TRANSFER_MODE_AP) {
+    if (s_mode == WIFI_TRANSFER_MODE_AP || s_mode == WIFI_TRANSFER_MODE_APSTA) {
         // Redireciona qualquer URL desconhecida para o IP do AP
         httpd_resp_set_status(req, "302 Found");
         httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
@@ -327,7 +327,7 @@ wifi_transfer_mode_t wifi_transfer_get_mode(void) {
 }
 
 int wifi_transfer_get_connected_clients(void) {
-    if (s_mode != WIFI_TRANSFER_MODE_AP) return -1;
+    if (s_mode != WIFI_TRANSFER_MODE_AP && s_mode != WIFI_TRANSFER_MODE_APSTA) return -1;
     wifi_sta_list_t sta_list;
     if (esp_wifi_ap_get_sta_list(&sta_list) == ESP_OK) {
         return sta_list.num;
@@ -344,7 +344,7 @@ static void update_ui_state(void) {
         return;
     }
 
-    // Se estiver transferindo, nÃ£o muda
+    // Se estiver transferindo, não muda
     if (s_ui_state == WIFI_UI_TRANSFERRING) return;
 
     if (s_mode == WIFI_TRANSFER_MODE_STA) {
@@ -353,9 +353,9 @@ static void update_ui_state(void) {
         } else {
             if (s_ui_state == WIFI_UI_CONNECTED) s_ui_state = WIFI_UI_IDLE;
         }
-    } else { // AP
+    } else { // AP ou APSTA
         int clients = wifi_transfer_get_connected_clients();
-        if (clients > 0) {
+        if (clients > 0 || (s_mode == WIFI_TRANSFER_MODE_APSTA && s_got_ip)) {
             if (s_ui_state == WIFI_UI_IDLE) s_ui_state = WIFI_UI_CONNECTED;
         } else {
             if (s_ui_state == WIFI_UI_CONNECTED) s_ui_state = WIFI_UI_IDLE;
@@ -1729,7 +1729,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         if (event_id == WIFI_EVENT_STA_START) {
             esp_wifi_connect();
         } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
-            if (s_active && s_mode == WIFI_TRANSFER_MODE_STA && !s_got_ip) {
+            if (s_active && (s_mode == WIFI_TRANSFER_MODE_STA || s_mode == WIFI_TRANSFER_MODE_APSTA) && !s_got_ip) {
                 if (s_sta_retry < WIFI_STA_MAX_RETRY) {
                     s_sta_retry++;
                     esp_wifi_connect();
@@ -1740,10 +1740,18 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
                     apply_sta_candidate();
                 } else {
                     s_sta_failed = true;
+                    ESP_LOGW(TAG, "Tentativas STA esgotadas. Hotspot AP (192.168.4.1) continua ativo!");
                 }
             }
         } else if (event_id == WIFI_EVENT_AP_START) {
             s_ap_ready = true;
+            ESP_LOGI(TAG, "Hotspot AP iniciado! SSID='%s' IP=192.168.4.1", CONFIG_WIFI_AP_SSID);
+        } else if (event_id == WIFI_EVENT_AP_STACONNECTED) {
+            wifi_event_ap_staconnected_t *st = (wifi_event_ap_staconnected_t *)event_data;
+            ESP_LOGI(TAG, "Cliente conectou ao Hotspot AP (AID=%d)", (int)st->aid);
+        } else if (event_id == WIFI_EVENT_AP_STADISCONNECTED) {
+            wifi_event_ap_stadisconnected_t *st = (wifi_event_ap_stadisconnected_t *)event_data;
+            ESP_LOGI(TAG, "Cliente desconectou do Hotspot AP (AID=%d)", (int)st->aid);
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *evt = (ip_event_got_ip_t *)event_data;
@@ -1751,8 +1759,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         s_got_ip = true;
 
         ESP_LOGI(TAG, "===> CONECTADO NA REDE WIFI LOCAL! <===");
-        ESP_LOGI(TAG, "IP obtido: %s", s_status);
-        ESP_LOGI(TAG, "Acesse pelo navegador: http://%s ou http://mps3.local", s_status);
+        ESP_LOGI(TAG, "IP STA obtido: %s | Hotspot AP: 192.168.4.1", s_status);
+        ESP_LOGI(TAG, "Acesse pelo navegador: http://%s ou http://192.168.4.1 ou http://mps3.local", s_status);
 
         // Rede que funcionou vai pro topo da lista de conhecidas - da'
         // proxima vez essa e' a primeira tentativa, sem precisar navegar
@@ -1777,6 +1785,10 @@ static esp_err_t ensure_stack_ready(void)
     if (!s_netif_ap)  s_netif_ap  = esp_netif_create_default_wifi_ap();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    cfg.static_rx_buf_num = 4;
+    cfg.dynamic_rx_buf_num = 16;
+    cfg.dynamic_tx_buf_num = 16;
+    cfg.mgmt_sbuf_num = 16;
     err = esp_wifi_init(&cfg);
     if (err != ESP_OK) return err;
 
@@ -1809,10 +1821,10 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
         audio_player_toggle_play_pause();
     }
 
-    if (mode == WIFI_TRANSFER_MODE_STA) {
+    if (mode == WIFI_TRANSFER_MODE_STA || mode == WIFI_TRANSFER_MODE_APSTA) {
         s_candidate_count = build_sta_candidates();
         s_candidate_idx = 0;
-        if (s_candidate_count == 0) {
+        if (s_candidate_count == 0 && mode == WIFI_TRANSFER_MODE_STA) {
             strncpy(s_status, "SSID nao configurado", sizeof(s_status) - 1);
             s_status[sizeof(s_status) - 1] = '\0';
             return ESP_ERR_INVALID_STATE;
@@ -1835,38 +1847,53 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
     s_ap_ready = false;
     s_sta_failed = false;
     s_sta_retry = 0;
-    if (mode == WIFI_TRANSFER_MODE_AP) {
+    if (mode == WIFI_TRANSFER_MODE_AP || mode == WIFI_TRANSFER_MODE_APSTA) {
         strncpy(s_status, "192.168.4.1", sizeof(s_status) - 1);
     } else {
         strncpy(s_status, "Conectando...", sizeof(s_status) - 1);
     }
     s_status[sizeof(s_status) - 1] = '\0';
 
-    if (mode == WIFI_TRANSFER_MODE_STA) {
-        wifi_config_t wifi_config = { 0 };
-        strncpy((char *)wifi_config.sta.ssid, s_candidates[s_candidate_idx].ssid, sizeof(wifi_config.sta.ssid) - 1);
-        strncpy((char *)wifi_config.sta.password, s_candidates[s_candidate_idx].pass, sizeof(wifi_config.sta.password) - 1);
-        wifi_config.sta.threshold.authmode = strlen(s_candidates[s_candidate_idx].pass) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    wifi_config_t ap_config = { 0 };
+    wifi_config_t sta_config = { 0 };
 
-        ESP_LOGI(TAG, "Tentando rede conhecida %d/%d: SSID=%s",
-                 s_candidate_idx + 1, s_candidate_count, s_candidates[s_candidate_idx].ssid);
-
-        esp_wifi_set_mode(WIFI_MODE_STA);
-        esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-    } else {
-        wifi_config_t wifi_config = { 0 };
-        strncpy((char *)wifi_config.ap.ssid, CONFIG_WIFI_AP_SSID, sizeof(wifi_config.ap.ssid) - 1);
-        wifi_config.ap.ssid_len = strlen(CONFIG_WIFI_AP_SSID);
-        strncpy((char *)wifi_config.ap.password, CONFIG_WIFI_AP_PASSWORD, sizeof(wifi_config.ap.password) - 1);
-        wifi_config.ap.max_connection = 4;
-        wifi_config.ap.authmode = strlen(CONFIG_WIFI_AP_PASSWORD) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    if (mode == WIFI_TRANSFER_MODE_AP || mode == WIFI_TRANSFER_MODE_APSTA) {
+        strncpy((char *)ap_config.ap.ssid, CONFIG_WIFI_AP_SSID, sizeof(ap_config.ap.ssid) - 1);
+        ap_config.ap.ssid_len = strlen(CONFIG_WIFI_AP_SSID);
+        strncpy((char *)ap_config.ap.password, CONFIG_WIFI_AP_PASSWORD, sizeof(ap_config.ap.password) - 1);
+        ap_config.ap.channel = 1;
+        ap_config.ap.beacon_interval = 100;
+        ap_config.ap.max_connection = 4;
+        ap_config.ap.authmode = strlen(CONFIG_WIFI_AP_PASSWORD) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
 
         ESP_LOGI(TAG, "===> MODO HOTSPOT ATIVO <===");
-        ESP_LOGI(TAG, "Rede gerada pelo MPS3: SSID='%s' | Senha='%s'", CONFIG_WIFI_AP_SSID, CONFIG_WIFI_AP_PASSWORD);
+        ESP_LOGI(TAG, "Rede gerada pelo MPS3: SSID='%s' | Senha='%s' | Canal=1", CONFIG_WIFI_AP_SSID, CONFIG_WIFI_AP_PASSWORD);
         ESP_LOGI(TAG, "Conecte o seu PC/celular a essa rede e acesse: http://192.168.4.1 ou http://mps3.local");
+    }
 
+    if (mode == WIFI_TRANSFER_MODE_STA || mode == WIFI_TRANSFER_MODE_APSTA) {
+        if (s_candidate_count > 0) {
+            strncpy((char *)sta_config.sta.ssid, s_candidates[s_candidate_idx].ssid, sizeof(sta_config.sta.ssid) - 1);
+            strncpy((char *)sta_config.sta.password, s_candidates[s_candidate_idx].pass, sizeof(sta_config.sta.password) - 1);
+            sta_config.sta.threshold.authmode = strlen(s_candidates[s_candidate_idx].pass) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+
+            ESP_LOGI(TAG, "Tentando rede conhecida %d/%d: SSID=%s",
+                     s_candidate_idx + 1, s_candidate_count, s_candidates[s_candidate_idx].ssid);
+        }
+    }
+
+    if (mode == WIFI_TRANSFER_MODE_APSTA) {
+        esp_wifi_set_mode(WIFI_MODE_APSTA);
+        esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+        if (s_candidate_count > 0) {
+            esp_wifi_set_config(WIFI_IF_STA, &sta_config);
+        }
+    } else if (mode == WIFI_TRANSFER_MODE_AP) {
         esp_wifi_set_mode(WIFI_MODE_AP);
-        esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
+        esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+    } else {
+        esp_wifi_set_mode(WIFI_MODE_STA);
+        esp_wifi_set_config(WIFI_IF_STA, &sta_config);
     }
 
     err = esp_wifi_start();
@@ -1882,26 +1909,30 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
     // Potencia calibrada em ~18 dBm (72) para conexao estavel e forte com o roteador:
     esp_wifi_set_max_tx_power(72);
 
-    wifi_interface_t ifx = (mode == WIFI_TRANSFER_MODE_STA) ? WIFI_IF_STA : WIFI_IF_AP;
-    // Usa 20 MHz (BW20) para manter imunidade eletromagnetica contra as linhas do SDMMC
-    esp_wifi_set_bandwidth(ifx, WIFI_BW20);
+    if (mode == WIFI_TRANSFER_MODE_APSTA) {
+        esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW20);
+        esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW20);
+    } else {
+        wifi_interface_t ifx = (mode == WIFI_TRANSFER_MODE_STA) ? WIFI_IF_STA : WIFI_IF_AP;
+        esp_wifi_set_bandwidth(ifx, WIFI_BW20);
+    }
 
-    ESP_LOGI(TAG, "Modo WiFi (%s) iniciado", mode == WIFI_TRANSFER_MODE_STA ? "estacao" : "hotspot");
+    ESP_LOGI(TAG, "Modo WiFi (%s) iniciado",
+             mode == WIFI_TRANSFER_MODE_APSTA ? "AP+STA simultaneo" :
+             (mode == WIFI_TRANSFER_MODE_STA ? "estacao" : "hotspot"));
     return ESP_OK;
 }
 
 esp_err_t wifi_transfer_enter_auto(void)
 {
+    // O modo automatico inicia em APSTA para garantir que o Hotspot "mps3-player"
+    // (192.168.4.1) fique SEMPRE disponivel imediatamente para conexao direta do PC/celular,
+    // e simultaneamente tenta conectar a rede Wi-Fi local cadastrada se houver.
     int candidates = build_sta_candidates();
     if (candidates > 0) {
-        esp_err_t err = wifi_transfer_enter(WIFI_TRANSFER_MODE_STA);
-        if (err == ESP_OK) {
-            s_auto_fallback = true;
-            return ESP_OK;
-        }
+        return wifi_transfer_enter(WIFI_TRANSFER_MODE_APSTA);
     }
-    ESP_LOGI(TAG, "Nenhuma rede STA disponivel, iniciando direto em modo AP...");
-    s_auto_fallback = false;
+    ESP_LOGI(TAG, "Nenhuma rede STA disponivel, iniciando em modo AP...");
     return wifi_transfer_enter(WIFI_TRANSFER_MODE_AP);
 }
 
@@ -1909,69 +1940,69 @@ bool wifi_transfer_poll(void)
 {
     if (!s_active) return false;
 
-    update_ui_state();   // <-- NOVO
+    update_ui_state();
 
     static uint32_t s_last_httpd_attempt_ms = 0;
     uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 
     if (!s_httpd) {
-        if (s_mode == WIFI_TRANSFER_MODE_STA && s_got_ip) {
-            if (now_ms - s_last_httpd_attempt_ms >= 2000) {
-                s_last_httpd_attempt_ms = now_ms;
-                if (start_httpd() == ESP_OK) {
-                    s_auto_fallback = false;
-                    start_mdns_service();
-                }
-            }
+        bool can_start = false;
+        if (s_mode == WIFI_TRANSFER_MODE_APSTA && (s_ap_ready || s_got_ip)) {
+            can_start = true;
         } else if (s_mode == WIFI_TRANSFER_MODE_AP && s_ap_ready) {
-            snprintf(s_status, sizeof(s_status), "192.168.4.1");
-            if (now_ms - s_last_httpd_attempt_ms >= 2000) {
+            can_start = true;
+        } else if (s_mode == WIFI_TRANSFER_MODE_STA && s_got_ip) {
+            can_start = true;
+        }
+
+        if (can_start) {
+            if (now_ms - s_last_httpd_attempt_ms >= 1000) {
                 s_last_httpd_attempt_ms = now_ms;
                 if (start_httpd() == ESP_OK) {
                     start_mdns_service();
                     s_auto_fallback = false;
-                    // Inicia o servidor DNS cativo
-                    if (!s_dns_task_handle) {
+                    // Inicia o servidor DNS cativo se AP estiver ativo
+                    if ((s_mode == WIFI_TRANSFER_MODE_AP || s_mode == WIFI_TRANSFER_MODE_APSTA) && !s_dns_task_handle) {
                         xTaskCreate(dns_server_task, "dns", 4096, NULL, 5, &s_dns_task_handle);
                     }
                 }
             }
-        } else if (s_mode == WIFI_TRANSFER_MODE_STA && s_sta_failed) {
-            if (s_auto_fallback) {
-                ESP_LOGW(TAG, "STA falhou apos tentativas, trocando para AP...");
-                esp_wifi_stop();
-                s_active = false;
+        }
+    } else if (s_mode == WIFI_TRANSFER_MODE_STA && s_sta_failed) {
+        if (s_auto_fallback) {
+            ESP_LOGW(TAG, "STA falhou apos tentativas, trocando para AP...");
+            esp_wifi_stop();
+            s_active = false;
 
-                s_mode = WIFI_TRANSFER_MODE_AP;
-                s_files_received = 0;
-                s_exit_requested = false;
-                s_got_ip = false;
-                s_ap_ready = false;
-                s_sta_failed = false;
-                s_sta_retry = 0;
-                strncpy(s_status, "192.168.4.1", sizeof(s_status) - 1);
-                s_status[sizeof(s_status) - 1] = '\0';
+            s_mode = WIFI_TRANSFER_MODE_AP;
+            s_files_received = 0;
+            s_exit_requested = false;
+            s_got_ip = false;
+            s_ap_ready = false;
+            s_sta_failed = false;
+            s_sta_retry = 0;
+            strncpy(s_status, "192.168.4.1", sizeof(s_status) - 1);
+            s_status[sizeof(s_status) - 1] = '\0';
 
-                wifi_config_t wifi_config = { 0 };
-                strncpy((char *)wifi_config.ap.ssid, CONFIG_WIFI_AP_SSID, sizeof(wifi_config.ap.ssid) - 1);
-                wifi_config.ap.ssid_len = strlen(CONFIG_WIFI_AP_SSID);
-                strncpy((char *)wifi_config.ap.password, CONFIG_WIFI_AP_PASSWORD, sizeof(wifi_config.ap.password) - 1);
-                wifi_config.ap.max_connection = 4;
-                wifi_config.ap.authmode = strlen(CONFIG_WIFI_AP_PASSWORD) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+            wifi_config_t wifi_config = { 0 };
+            strncpy((char *)wifi_config.ap.ssid, CONFIG_WIFI_AP_SSID, sizeof(wifi_config.ap.ssid) - 1);
+            wifi_config.ap.ssid_len = strlen(CONFIG_WIFI_AP_SSID);
+            strncpy((char *)wifi_config.ap.password, CONFIG_WIFI_AP_PASSWORD, sizeof(wifi_config.ap.password) - 1);
+            wifi_config.ap.max_connection = 4;
+            wifi_config.ap.authmode = strlen(CONFIG_WIFI_AP_PASSWORD) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
 
-                ESP_LOGI(TAG, "===> MODO HOTSPOT ATIVO (Fallback) <===");
-                ESP_LOGI(TAG, "Rede gerada pelo MPS3: SSID='%s' | Senha='%s'", CONFIG_WIFI_AP_SSID, CONFIG_WIFI_AP_PASSWORD);
-                ESP_LOGI(TAG, "Conecte o seu PC/celular a essa rede e acesse: http://192.168.4.1 ou http://mps3.local");
+            ESP_LOGI(TAG, "===> MODO HOTSPOT ATIVO (Fallback) <===");
+            ESP_LOGI(TAG, "Rede gerada pelo MPS3: SSID='%s' | Senha='%s'", CONFIG_WIFI_AP_SSID, CONFIG_WIFI_AP_PASSWORD);
+            ESP_LOGI(TAG, "Conecte o seu PC/celular a essa rede e acesse: http://192.168.4.1 ou http://mps3.local");
 
-                esp_wifi_set_mode(WIFI_MODE_AP);
-                esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
-                esp_wifi_start();
-                s_active = true;
-                s_auto_fallback = false;
-            } else {
-                strncpy(s_status, "Rede indisponivel", sizeof(s_status) - 1);
-                s_status[sizeof(s_status) - 1] = '\0';
-            }
+            esp_wifi_set_mode(WIFI_MODE_AP);
+            esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
+            esp_wifi_start();
+            s_active = true;
+            s_auto_fallback = false;
+        } else {
+            strncpy(s_status, "Rede indisponivel", sizeof(s_status) - 1);
+            s_status[sizeof(s_status) - 1] = '\0';
         }
     }
 
@@ -2057,7 +2088,7 @@ static void wifi_menu_draw_status(void)
     }
 
     int rssi = 0;
-    if (s_mode == WIFI_TRANSFER_MODE_STA) {
+    if (s_mode == WIFI_TRANSFER_MODE_STA || s_mode == WIFI_TRANSFER_MODE_APSTA) {
         esp_wifi_sta_get_rssi(&rssi);
     } else {
         rssi = -1;
@@ -2070,17 +2101,16 @@ static void wifi_menu_draw_status(void)
             oled_display_show_wifi_idle(ip, "mps3.local", dns_active, rssi);
             break;
         case WIFI_UI_CONNECTED: {
-            int clients = (s_mode == WIFI_TRANSFER_MODE_AP) ? wifi_transfer_get_connected_clients() : 0;
+            int clients = (s_mode == WIFI_TRANSFER_MODE_AP || s_mode == WIFI_TRANSFER_MODE_APSTA) ? wifi_transfer_get_connected_clients() : 0;
             oled_display_show_wifi_connected(ip, "mps3.local", rssi, clients);
             break;
         }
         case WIFI_UI_TRANSFERRING:
             // Obter RSSI
-            int rssi = 0;
-            if (s_mode == WIFI_TRANSFER_MODE_STA) {
+            if (s_mode == WIFI_TRANSFER_MODE_STA || s_mode == WIFI_TRANSFER_MODE_APSTA) {
                 esp_wifi_sta_get_rssi(&rssi);
             } else {
-                rssi = -1;  // AP nÃ£o tem RSSI de cliente, mas podemos mostrar -40db ou deixar fallback
+                rssi = -1;
             }
             oled_display_show_wifi_transfer(
                 prog.filename,

@@ -276,6 +276,61 @@ static void display_task(void *arg)
     }
 }
 
+static void uart_cmd_task(void *arg)
+{
+    (void)arg;
+    char line_buf[32];
+    int line_len = 0;
+
+    while (1) {
+        int c = fgetc(stdin);
+        if (c != EOF && c > 0) {
+            if (c == '\r' || c == '\n') {
+                if (line_len > 0) {
+                    line_buf[line_len] = '\0';
+                    if (strcmp(line_buf, "wifi") == 0 || strcmp(line_buf, "w") == 0) {
+                        ESP_LOGI("UART_CMD", "Comando recebido: entrar no modo WiFi Auto (APSTA)");
+                        if (!wifi_transfer_is_active()) {
+                            wifi_transfer_enter_auto();
+                        }
+                    } else if (strcmp(line_buf, "ap") == 0) {
+                        ESP_LOGI("UART_CMD", "Comando recebido: entrar no modo Hotspot AP");
+                        if (!wifi_transfer_is_active()) {
+                            wifi_transfer_enter(WIFI_TRANSFER_MODE_AP);
+                        }
+                    } else if (strcmp(line_buf, "sta") == 0) {
+                        ESP_LOGI("UART_CMD", "Comando recebido: entrar no modo STA");
+                        if (!wifi_transfer_is_active()) {
+                            wifi_transfer_enter(WIFI_TRANSFER_MODE_STA);
+                        }
+                    } else if (strcmp(line_buf, "exit") == 0 || strcmp(line_buf, "x") == 0) {
+                        ESP_LOGI("UART_CMD", "Comando recebido: sair do modo WiFi");
+                        if (wifi_transfer_is_active()) {
+                            wifi_transfer_request_exit();
+                        }
+                    } else if (strcmp(line_buf, "status") == 0 || strcmp(line_buf, "s") == 0) {
+                        char st[64] = {0};
+                        int files = 0;
+                        wifi_transfer_get_status(st, sizeof(st), &files);
+                        ESP_LOGI("UART_CMD", "WiFi: active=%d status='%s' files=%d | Free RAM: %u PSRAM: %u",
+                                 wifi_transfer_is_active(), st, files,
+                                 (unsigned)esp_get_free_heap_size(),
+                                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+                    } else if (strcmp(line_buf, "play") == 0 || strcmp(line_buf, "p") == 0) {
+                        ESP_LOGI("UART_CMD", "Comando recebido: toggle play/pause");
+                        audio_player_toggle_play_pause();
+                    }
+                    line_len = 0;
+                }
+            } else if (line_len < (int)sizeof(line_buf) - 1) {
+                line_buf[line_len++] = (char)c;
+            }
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+    }
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Iniciando mps3...");
@@ -357,6 +412,9 @@ void app_main(void)
     // e touch_task (Core 0, prio 5).
     ESP_LOGI(TAG, "Criando display_task no Core 0 com prioridade 3...");
     xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 3, NULL, 0);
+
+    ESP_LOGI(TAG, "Criando uart_cmd_task no Core 0...");
+    xTaskCreatePinnedToCore(uart_cmd_task, "uart_cmd", 4096, NULL, 1, NULL, 0);
 
     ESP_LOGI(TAG, "mps3 rodando.");
 }
