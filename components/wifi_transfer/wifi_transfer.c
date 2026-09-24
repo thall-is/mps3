@@ -1695,8 +1695,8 @@ static esp_err_t api_ota_post_handler(httpd_req_t *req)
     snprintf(s_ota_status, sizeof(s_ota_status), "Validando cabecalho...");
     s_ui_state = WIFI_UI_OTA_UPDATING;
 
-    // Buffer de 4 KB alocado em heap/PSRAM
-    char *ota_write_data = (char *)heap_caps_malloc(OTA_BUFF_SIZE, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+    // Buffer de 4 KB alocado obrigatoriamente na DRAM interna (obrigatorio para operacoes de Flash/OTA no ESP32)
+    char *ota_write_data = (char *)heap_caps_malloc(OTA_BUFF_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
     if (!ota_write_data) {
         ota_write_data = (char *)malloc(OTA_BUFF_SIZE);
     }
@@ -1895,6 +1895,14 @@ static esp_err_t api_ota_post_handler(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"Firmware gravado com sucesso! Reiniciando o MPS3...\"}", HTTPD_RESP_USE_STRLEN);
 
+    // Salvar indicador de reboot pós-OTA na NVS para reentrar no modo Wi-Fi e confirmar atualização
+    nvs_handle_t nvs_h;
+    if (nvs_open("system", NVS_READWRITE, &nvs_h) == ESP_OK) {
+        nvs_set_u8(nvs_h, "ota_reboot", 1);
+        nvs_commit(nvs_h);
+        nvs_close(nvs_h);
+    }
+
     const esp_timer_create_args_t restart_timer_args = {
         .callback = &ota_restart_timer_cb,
         .name = "ota_restart"
@@ -1917,8 +1925,8 @@ static esp_err_t start_httpd(void)
     static uint16_t s_ctrl_port = 32768;
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.stack_size = 8192;
-    config.task_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT; // Aloca na Octal PSRAM (8MB livres)!
+    config.stack_size = 6144;
+    config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT; // Stack na DRAM interna (essencial para que chamadas flash/OTA nao crashem com cache desativado)
     config.core_id = 1; // Roda no Core 1 com 240 MHz livres enquanto o player esta pausado!
     config.ctrl_port = s_ctrl_port++;
     if (s_ctrl_port > 32800) s_ctrl_port = 32768;

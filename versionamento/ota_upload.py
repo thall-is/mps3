@@ -540,7 +540,7 @@ def main():
     parser.add_argument("-p", "--port", type=int, default=DEFAULT_PORT, help=f"Porta HTTP (padrao: {DEFAULT_PORT})")
     parser.add_argument("-f", "--force", "-y", "--yes", action="store_true", help="Ignora avisos de bateria baixa sem pedir confirmacao interativa")
     parser.add_argument("-t", "--timeout", type=float, default=60.0, help="Timeout do upload em segundos (padrao: 60s)")
-    parser.add_argument("--max-wait", type=int, default=30, help="Tempo maximo de espera pela reconexao pos-reboot em segundos (padrao: 30s)")
+    parser.add_argument("--max-wait", type=int, default=45, help="Tempo maximo de espera pela reconexao pos-reboot em segundos (padrao: 45s)")
 
     args = parser.parse_args()
 

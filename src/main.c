@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "esp_ota_ops.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 
 #include "pinos.h"
 #include "sd_card.h"
@@ -425,6 +426,19 @@ void app_main(void)
             ESP_LOGI("OTA", "Novo firmware em verificacao. Validando e cancelando rollback...");
             esp_ota_mark_app_valid_cancel_rollback();
         }
+    }
+
+    // Se reiniciou apos uma atualizacao OTA, religa o Wi-Fi para confirmacao remota imediata
+    nvs_handle_t nvs_h;
+    uint8_t ota_reboot = 0;
+    if (nvs_open("system", NVS_READWRITE, &nvs_h) == ESP_OK) {
+        if (nvs_get_u8(nvs_h, "ota_reboot", &ota_reboot) == ESP_OK && ota_reboot == 1) {
+            nvs_erase_key(nvs_h, "ota_reboot");
+            nvs_commit(nvs_h);
+            ESP_LOGI("OTA", "Reboot pos-OTA detectado. Ativando Wi-Fi para reconexao...");
+            wifi_transfer_enter_auto();
+        }
+        nvs_close(nvs_h);
     }
 
     ESP_LOGI(TAG, "mps3 rodando.");
