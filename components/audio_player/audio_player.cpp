@@ -181,7 +181,6 @@ void audio_player_toggle_play_pause(void)
 
     if (!s_paused) {
         s_paused = true;
-        i2s_output_disable(); // silencio real, nao so' para de escrever amostras
         // Salva a posicao ao pausar - momento provavel de "vou desligar
         // daqui a pouco", entao vale capturar aqui alem do save periodico.
         scan_lock();
@@ -195,7 +194,6 @@ void audio_player_toggle_play_pause(void)
             scan_unlock();
         }
     } else {
-        i2s_output_enable();
         s_paused = false;
     }
     ESP_LOGI(TAG, "%s", s_paused ? "Pausado" : "Tocando");
