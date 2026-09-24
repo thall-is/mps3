@@ -1,4 +1,4 @@
-﻿idf_component_register(
+idf_component_register(
     SRCS
         "wifi_transfer.c"
     INCLUDE_DIRS
@@ -16,6 +16,9 @@
         mdns
         esp_ringbuf
         eq
-
+        app_update
+        esp_partition
+        board_io
+        esp_app_format
 )
 

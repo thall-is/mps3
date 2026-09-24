@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "esp_ota_ops.h"
 #include "nvs_flash.h"
 
 #include "pinos.h"
@@ -415,6 +416,16 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Criando uart_cmd_task no Core 0...");
     xTaskCreatePinnedToCore(uart_cmd_task, "uart_cmd", 4096, NULL, 1, NULL, 0);
+
+    // --- Autovalidacao de firmware e cancelamento de rollback OTA ---
+    const esp_partition_t *running_part = esp_ota_get_running_partition();
+    esp_ota_img_states_t ota_state;
+    if (esp_ota_get_state_partition(running_part, &ota_state) == ESP_OK) {
+        if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+            ESP_LOGI("OTA", "Novo firmware em verificacao. Validando e cancelando rollback...");
+            esp_ota_mark_app_valid_cancel_rollback();
+        }
+    }
 
     ESP_LOGI(TAG, "mps3 rodando.");
 }

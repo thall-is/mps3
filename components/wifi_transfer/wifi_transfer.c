@@ -5,9 +5,14 @@
 #include "menu.h"
 
 #include "esp_wifi.h"
+#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
+#include "esp_ota_ops.h"
+#include "esp_app_format.h"
+#include "esp_partition.h"
+#include "esp_timer.h"
 
 #include "eq.h"
 #include "esp_vfs_fat.h"
@@ -312,11 +317,17 @@ typedef enum {
     WIFI_UI_IDLE,
     WIFI_UI_CONNECTED,
     WIFI_UI_TRANSFERRING,
-    WIFI_UI_DONE
+    WIFI_UI_DONE,
+    WIFI_UI_OTA_UPDATING,
+    WIFI_UI_OTA_FINISHED
 } wifi_ui_state_t;
 
 static wifi_ui_state_t s_ui_state = WIFI_UI_IDLE;
 static uint32_t s_done_show_until_ms = 0;
+
+static volatile bool s_ota_in_progress = false;
+static volatile int s_ota_pct = 0;
+static char s_ota_status[32] = {0};
 
 bool wifi_transfer_is_dns_active(void) {
     return s_dns_socket >= 0;
@@ -344,8 +355,8 @@ static void update_ui_state(void) {
         return;
     }
 
-    // Se estiver transferindo, não muda
-    if (s_ui_state == WIFI_UI_TRANSFERRING) return;
+    // Se estiver transferindo ou em atualizacao OTA, não muda
+    if (s_ui_state == WIFI_UI_TRANSFERRING || s_ui_state == WIFI_UI_OTA_UPDATING || s_ui_state == WIFI_UI_OTA_FINISHED) return;
 
     if (s_mode == WIFI_TRANSFER_MODE_STA) {
         if (s_got_ip) {
@@ -740,6 +751,11 @@ static esp_err_t api_list_get_handler(httpd_req_t *req)
 
 static esp_err_t api_upload_put_handler(httpd_req_t *req)
 {
+    if (s_ota_in_progress) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Atualizacao OTA em andamento");
+        return ESP_FAIL;
+    }
+
     // Parar qualquer reproducao local para liberar o SD e evitar concorrencia
     playback_state_t st;
     audio_player_get_state(&st);
@@ -1561,6 +1577,339 @@ static esp_err_t api_mkdir_post_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// --- OTA Handlers -----------------------------------------------------------
+
+static void ota_restart_timer_cb(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "Reiniciando MPS3 agora...");
+    esp_restart();
+}
+
+static esp_err_t api_ota_get_handler(httpd_req_t *req)
+{
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+
+    int bat_pct = battery_get_percent();
+    bool charging = battery_is_charging();
+
+    uint8_t mac[6] = {0};
+    if (esp_wifi_get_mac(WIFI_IF_STA, mac) != ESP_OK) {
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    }
+    char mac_str[18];
+    snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    char json[384];
+    snprintf(json, sizeof(json),
+             "{\"running_version\":\"%s\",\"running_partition\":\"%s\","
+             "\"next_partition\":\"%s\",\"battery_percent\":%d,"
+             "\"battery_charging\":%s,\"ota_in_progress\":%s,\"mac\":\"%s\"}",
+             app_desc ? app_desc->version : "unknown",
+             running ? running->label : "unknown",
+             next ? next->label : "unknown",
+             bat_pct,
+             charging ? "true" : "false",
+             s_ota_in_progress ? "true" : "false",
+             mac_str);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+#define OTA_BUFF_SIZE 4096
+
+static esp_err_t api_ota_post_handler(httpd_req_t *req)
+{
+    // Bloquear concorrencia se ja ocupado
+    if (s_ota_in_progress) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Atualizacao OTA ja esta em andamento\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    if (s_ui_state == WIFI_UI_TRANSFERRING) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Transferencia de arquivos em andamento. Aguarde terminar.\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    // Checar bateria: se < 15% e sem carregador conectado, recusar
+    int bat_pct = battery_get_percent();
+    bool charging = battery_is_charging();
+    if (bat_pct < 15 && !charging) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Bateria baixa (<15%). Conecte o carregador USB para atualizar.\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    const int min_hdr = (int)(sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t));
+    int total_len = req->content_len;
+    if (total_len <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Content-Length ausente ou zerado\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+    if (total_len < min_hdr) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Arquivo de firmware muito pequeno ou corrompido\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    // Obter particao alvo
+    const esp_partition_t *target_part = esp_ota_get_next_update_partition(NULL);
+    if (!target_part) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Nenhuma particao OTA disponivel na flash\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    if ((size_t)total_len > target_part->size) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Arquivo .bin maior que a particao flash de destino\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    // Parar audio se estiver tocando para liberar barramento SPI e evitar conflitos
+    playback_state_t st;
+    audio_player_get_state(&st);
+    if (st.playing && !st.paused) {
+        audio_player_toggle_play_pause();
+    }
+    audio_player_stop_url();
+
+    // Trava estado OTA imediatamente para bloquear requisicoes concorrentes e saida acidental
+    s_ota_in_progress = true;
+    s_ota_pct = 0;
+    snprintf(s_ota_status, sizeof(s_ota_status), "Validando cabecalho...");
+    s_ui_state = WIFI_UI_OTA_UPDATING;
+
+    // Buffer de 4 KB alocado em heap/PSRAM
+    char *ota_write_data = (char *)heap_caps_malloc(OTA_BUFF_SIZE, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+    if (!ota_write_data) {
+        ota_write_data = (char *)malloc(OTA_BUFF_SIZE);
+    }
+    if (!ota_write_data) {
+        s_ota_in_progress = false;
+        s_ui_state = WIFI_UI_CONNECTED;
+        s_ota_status[0] = '\0';
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Memoria insuficiente para alocar buffer OTA\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    // Receber primeiro chunk de pelo menos min_hdr (288 bytes) para validar cabecalhos antes de apagar flash
+    int first_chunk_len = 0;
+    int first_chunk_timeouts = 0;
+    while (first_chunk_len < min_hdr && first_chunk_len < total_len) {
+        int r = httpd_req_recv(req, ota_write_data + first_chunk_len, OTA_BUFF_SIZE - first_chunk_len);
+        if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+                if (++first_chunk_timeouts > 10) {
+                    ESP_LOGE(TAG, "Timeout excessivo aguardando cabecalho OTA");
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+        first_chunk_timeouts = 0;
+        first_chunk_len += r;
+    }
+
+    if (first_chunk_len < min_hdr) {
+        free(ota_write_data);
+        s_ota_in_progress = false;
+        s_ui_state = WIFI_UI_CONNECTED;
+        s_ota_status[0] = '\0';
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Falha de rede ao receber cabecalho do firmware\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    // Validar cabecalho de imagem ESP32: byte 0 == ESP_IMAGE_HEADER_MAGIC (0xE9)
+    esp_image_header_t *img_hdr = (esp_image_header_t *)ota_write_data;
+    if (img_hdr->magic != ESP_IMAGE_HEADER_MAGIC) {
+        ESP_LOGE(TAG, "Magic header invalido: 0x%02X (esperado 0x%02X)", img_hdr->magic, ESP_IMAGE_HEADER_MAGIC);
+        free(ota_write_data);
+        s_ota_in_progress = false;
+        s_ui_state = WIFI_UI_CONNECTED;
+        s_ota_status[0] = '\0';
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Arquivo invalido: cabecalho de imagem ESP32 ausente\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    // Validar esp_app_desc_t no offset 0x20
+    esp_app_desc_t app_desc;
+    memcpy(&app_desc, ota_write_data + sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t), sizeof(esp_app_desc_t));
+    if (app_desc.magic_word != ESP_APP_DESC_MAGIC_WORD ||
+        strncmp(app_desc.project_name, "mps3", sizeof(app_desc.project_name)) != 0) {
+        app_desc.project_name[sizeof(app_desc.project_name) - 1] = '\0';
+        ESP_LOGE(TAG, "esp_app_desc invalido: magic=0x%08X (esp: 0x%08X), project='%s' (esp: 'mps3')",
+                 (unsigned int)app_desc.magic_word, (unsigned int)ESP_APP_DESC_MAGIC_WORD, app_desc.project_name);
+        free(ota_write_data);
+        s_ota_in_progress = false;
+        s_ui_state = WIFI_UI_CONNECTED;
+        s_ota_status[0] = '\0';
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Arquivo .bin nao pertence ao projeto mps3 ou esta corrompido!\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    app_desc.project_name[sizeof(app_desc.project_name) - 1] = '\0';
+    app_desc.version[sizeof(app_desc.version) - 1] = '\0';
+    ESP_LOGI(TAG, "Firmware validado! Projeto: '%s', Versao: '%s'. Gravando em %s...",
+             app_desc.project_name, app_desc.version, target_part->label);
+
+    snprintf(s_ota_status, sizeof(s_ota_status), "Gravando flash...");
+
+    esp_ota_handle_t ota_handle = 0;
+    esp_err_t err = esp_ota_begin(target_part, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin falhou: %s", esp_err_to_name(err));
+        s_ota_in_progress = false;
+        s_ui_state = WIFI_UI_CONNECTED;
+        s_ota_status[0] = '\0';
+        free(ota_write_data);
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Falha ao inicializar particao flash OTA\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    // Gravar o primeiro chunk ja lido
+    err = esp_ota_write(ota_handle, (const void *)ota_write_data, first_chunk_len);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_write falhou no primeiro bloco: %s", esp_err_to_name(err));
+        esp_ota_abort(ota_handle);
+        s_ota_in_progress = false;
+        s_ui_state = WIFI_UI_CONNECTED;
+        s_ota_status[0] = '\0';
+        free(ota_write_data);
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Falha ao gravar bloco inicial na flash\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    int bytes_written = first_chunk_len;
+    s_ota_pct = (int)((bytes_written * 100LL) / total_len);
+    int block_cnt = 0;
+    bool write_failed = false;
+    int consecutive_timeouts = 0;
+
+    while (bytes_written < total_len) {
+        int to_read = (total_len - bytes_written < OTA_BUFF_SIZE) ? (total_len - bytes_written) : OTA_BUFF_SIZE;
+        int r = httpd_req_recv(req, ota_write_data, to_read);
+        if (r < 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+                if (++consecutive_timeouts > 20) {
+                    ESP_LOGE(TAG, "OTA abortado: conexao inativa por muito tempo (timeouts)");
+                    write_failed = true;
+                    break;
+                }
+                continue;
+            }
+            ESP_LOGE(TAG, "httpd_req_recv falhou: %d", r);
+            write_failed = true;
+            break;
+        }
+        if (r == 0) break;
+        consecutive_timeouts = 0;
+
+        err = esp_ota_write(ota_handle, (const void *)ota_write_data, r);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write falhou (%d bytes): %s", r, esp_err_to_name(err));
+            write_failed = true;
+            break;
+        }
+
+        bytes_written += r;
+        s_ota_pct = (int)((bytes_written * 100LL) / total_len);
+
+        block_cnt++;
+        if (block_cnt % 4 == 0) {
+            vTaskDelay(1);
+        }
+    }
+
+    free(ota_write_data);
+
+    if (write_failed || bytes_written != total_len) {
+        ESP_LOGE(TAG, "OTA abortado: gravados %d de %d bytes", bytes_written, total_len);
+        esp_ota_abort(ota_handle);
+        s_ota_in_progress = false;
+        s_ui_state = WIFI_UI_CONNECTED;
+        s_ota_status[0] = '\0';
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Falha de conexao ou escrita durante gravacao da flash\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    err = esp_ota_end(ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end falhou: %s", esp_err_to_name(err));
+        s_ota_in_progress = false;
+        s_ui_state = WIFI_UI_CONNECTED;
+        s_ota_status[0] = '\0';
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Validacao da imagem OTA falhou apos gravacao\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    err = esp_ota_set_boot_partition(target_part);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition falhou: %s", esp_err_to_name(err));
+        s_ota_in_progress = false;
+        s_ui_state = WIFI_UI_CONNECTED;
+        s_ota_status[0] = '\0';
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Falha ao definir nova particao de boot\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    s_ota_pct = 100;
+    snprintf(s_ota_status, sizeof(s_ota_status), "Reiniciando...");
+    s_ui_state = WIFI_UI_OTA_FINISHED;
+    ESP_LOGI(TAG, "OTA concluido com sucesso na particao %s! Reiniciando em 1.5s...", target_part->label);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"Firmware gravado com sucesso! Reiniciando o MPS3...\"}", HTTPD_RESP_USE_STRLEN);
+
+    const esp_timer_create_args_t restart_timer_args = {
+        .callback = &ota_restart_timer_cb,
+        .name = "ota_restart"
+    };
+    esp_timer_handle_t restart_timer;
+    if (esp_timer_create(&restart_timer_args, &restart_timer) == ESP_OK) {
+        esp_timer_start_once(restart_timer, 1500 * 1000); // 1500 ms
+    } else {
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        esp_restart();
+    }
+
+    return ESP_OK;
+}
+
 static esp_err_t start_httpd(void)
 {
     if (s_httpd) return ESP_OK;
@@ -1655,6 +2004,10 @@ static esp_err_t start_httpd(void)
     httpd_register_uri_handler(s_httpd, &move_uri);
     httpd_register_uri_handler(s_httpd, &copy_uri);
     httpd_register_uri_handler(s_httpd, &mkdir_uri);
+    httpd_uri_t ota_get_uri = { .uri = "/api/ota", .method = HTTP_GET, .handler = api_ota_get_handler };
+    httpd_uri_t ota_post_uri = { .uri = "/api/ota", .method = HTTP_POST, .handler = api_ota_post_handler };
+    httpd_register_uri_handler(s_httpd, &ota_get_uri);
+    httpd_register_uri_handler(s_httpd, &ota_post_uri);
 
     httpd_register_err_handler(s_httpd, HTTPD_404_NOT_FOUND, http_404_error_handler);
 
@@ -2006,7 +2359,7 @@ bool wifi_transfer_poll(void)
         }
     }
 
-    if (s_exit_requested) {
+    if (s_exit_requested && !s_ota_in_progress) {
         s_last_httpd_attempt_ms = 0;
         if (s_httpd) {
             httpd_stop(s_httpd);
@@ -2047,8 +2400,17 @@ bool wifi_transfer_poll(void)
     return false;
 }
 
-void wifi_transfer_request_exit(void) { s_exit_requested = true; }
+void wifi_transfer_request_exit(void)
+{
+    if (s_ota_in_progress) {
+        ESP_LOGW(TAG, "Tentativa de sair do menu WiFi ignorada: atualizacao OTA em andamento!");
+        return;
+    }
+    s_exit_requested = true;
+}
+
 bool wifi_transfer_is_active(void)    { return s_active; }
+bool wifi_transfer_is_ota_busy(void)  { return s_ota_in_progress; }
 
 void wifi_transfer_get_status(char *out, size_t out_len, int *files_received)
 {
@@ -2126,6 +2488,10 @@ static void wifi_menu_draw_status(void)
             break;
         case WIFI_UI_DONE:
             oled_display_show_wifi_done(files);
+            break;
+        case WIFI_UI_OTA_UPDATING:
+        case WIFI_UI_OTA_FINISHED:
+            oled_display_show_ota_progress(s_ota_pct, s_ota_status);
             break;
         default:
             break;

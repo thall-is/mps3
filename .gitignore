@@ -44,4 +44,6 @@ planos/
 remote_*.py
 sync_to_remote.ps1
 test_*.py
+versionamento/.mps3_last_ip
+pcm5102a_tester/
 

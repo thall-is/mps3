@@ -113,3 +113,41 @@ Com os patches da pasta `esp-idf-patches/` e a compilação com `CONFIG_BT_A2DP_
 ### ESP32 Companion
 * **Core 0:** Pilha Bluedroid (HCI, L2CAP, AVDTP, AVRCP), recepção e envio de pacotes de controle UART.
 * **Core 1:** Tarefa de áudio dedicada (`audio_task`, prioridade 18, stack 8 KB): leitura I2S Slave, reamostrador 32.32, codificação LDAC/aptX/SBC e despacho de pacotes de mídia para a pilha de rádio.
+
+---
+
+## 6. Arquitetura de Memória Flash, Dual-Bank e Rollback OTA
+
+O ESP32-S3 conta com 16 MB de memória Flash Quad-SPI (`partitions.csv` / `espidf/partitions.csv`), estruturada para atualizações remotas seguras e autônomas:
+
+```csv
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,      data, nvs,      0x9000,   0x6000,
+phy_init, data, phy,      0xf000,   0x1000,
+otadata,  data, ota,      0x10000,  0x2000,
+ota_0,    app,  ota_0,    0x20000,  0x400000,
+ota_1,    app,  ota_1,    0x420000, 0x400000,
+```
+
+### Princípios do Subsistema OTA
+
+1. **Dual-Bank Assíncrono com Dois Bancos de 4 MB**:
+   - As partições `ota_0` e `ota_1` possuem 4.194.304 bytes cada, suportando o executável com folga de mais de 50%.
+   - A escrita ocorre sequencialmente na partição inativa (`esp_ota_get_next_update_partition()`), sem interromper a execução do sistema até a confirmação final.
+
+2. **Validação Pré-Flash e Verificação de Projeto**:
+   - Antes de iniciar o apagamento de blocos de Flash, o backend OTA (`wifi_transfer.c`) valida o cabeçalho inicial de 288 bytes:
+     - Magic Byte ESP32: `0xE9`
+     - Magic Word `esp_app_desc_t`: `0xABCD5432`
+     - Pertencimento ao projeto: `project_name == "mps3"`
+   - Binários corrompidos, incompletos ou compilados para outro projeto são rejeitados imediatamente (`HTTP 400 Bad Request`), preservando a partição intacta.
+
+3. **Mecanismo Anti-Brick e Cancelamento de Rollback**:
+   - Compilado com `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`.
+   - Ao reiniciar, o bootloader inicializa a partição recém-gravada no estado `ESP_OTA_IMG_PENDING_VERIFY`.
+   - Se o novo firmware falhar ao inicializar, entrar em pânico ou resetar pelo watchdog, o bootloader reverte automaticamente o boot para a partição anterior saudável.
+   - Apenas quando o hardware inicializa com sucesso o display OLED, o host SDMMC, os buffers DMA I2S e as tarefas FreeRTOS, a rotina `esp_ota_mark_app_valid_cancel_rollback()` é acionada, consolidando a nova versão em definitivo.
+
+4. **Identificação e Auto-Descoberta por MAC de Hardware**:
+   - O endpoint `GET /api/ota` reporta o MAC físico (`28:84:85:52:35:84`).
+   - O utilitário CLI `versionamento/ota_upload.py` varre as interfaces locais (tabela ARP e ping sweep ativo) para localizar e autenticar o dispositivo automaticamente, permitindo atualização transparente sem dependência de IP fixo ou consultas manuais a roteadores.

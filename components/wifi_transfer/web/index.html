@@ -183,6 +183,7 @@
             <button id="eqBtn" style="background:#f0f0f0;font-size:.85em;padding:.3em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">🎚️ Equalizador</button>
             <button id="mkdirBtn" style="background:#f0f0f0;font-size:.85em;padding:.3em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">📁 Nova Pasta</button>
             <button id="configBtn" style="background:#f0f0f0;font-size:.85em;padding:.3em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">⚙️ Config</button>
+            <button id="otaBtn" style="background:#0077ff;color:#fff;font-size:.85em;padding:.3em .7em;border:none;border-radius:6px;cursor:pointer;font-weight:600;">🚀 Atualizar</button>
         </div>
     </h2>
     <input type="text" id="filterInput" class="search-box" placeholder="🔍 Filtrar músicas e pastas...">
@@ -320,6 +321,70 @@
             <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #eee;padding-top:12px;">
                 <button type="button" class="btn-secondary" onclick="closeMoveModal()">Cancelar</button>
                 <button type="button" id="btnConfirmMove" class="btn-primary">✓ Mover para esta pasta</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE ATUALIZAÇÃO DE FIRMWARE (OTA) -->
+    <div id="otaModal" class="modal-backdrop" style="display:none;">
+        <div class="modal-card" style="max-width:440px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:14px;">
+                <h3 style="margin:0;display:flex;align-items:center;gap:8px;">🚀 Atualização de Firmware (OTA)</h3>
+                <button type="button" id="btnCloseOta" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:#888;padding:0 4px;">✕</button>
+            </div>
+
+            <!-- Informações do Dispositivo -->
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:14px;font-size:0.88em;display:flex;flex-direction:column;gap:6px;">
+                <div style="display:flex;justify-content:space-between;">
+                    <span style="color:#64748b;">Versão Atual:</span>
+                    <strong id="otaRunningVer">Carregando...</strong>
+                </div>
+                <div style="display:flex;justify-content:space-between;">
+                    <span style="color:#64748b;">Partição em Execução:</span>
+                    <span id="otaRunningPart" style="font-family:monospace;font-weight:bold;">--</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;">
+                    <span style="color:#64748b;">Partição Alvo:</span>
+                    <span id="otaNextPart" style="font-family:monospace;font-weight:bold;color:#0077ff;">--</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;">
+                    <span style="color:#64748b;">Bateria do MPS3:</span>
+                    <strong id="otaBatteryInfo">--</strong>
+                </div>
+            </div>
+
+            <!-- Alerta Crítico -->
+            <div id="otaWarnBox" style="background:#fff3cd;border:1px solid #ffeeba;color:#856404;border-radius:8px;padding:10px;margin-bottom:14px;font-size:0.82em;line-height:1.4;">
+                ⚠️ <strong>ATENÇÃO:</strong> Não desligue o MPS3 nem feche o navegador durante a gravação. O sistema conta com rollback anti-brick caso ocorra falha de boot.
+            </div>
+
+            <!-- Seletor de Arquivo .bin -->
+            <div id="otaFileSection" style="margin-bottom:14px;">
+                <label style="font-size:0.85em;font-weight:bold;display:block;margin-bottom:6px;">Selecione o arquivo de firmware (.bin):</label>
+                <input type="file" id="otaFileInput" accept=".bin" style="width:100%;padding:8px;border:1px dashed #cbd5e1;border-radius:6px;background:#f8fafc;font-size:0.88em;cursor:pointer;">
+                <div id="otaFileErr" style="color:#dc2626;font-size:0.8em;margin-top:4px;display:none;"></div>
+            </div>
+
+            <!-- Barra de Progresso OTA -->
+            <div id="otaProgressBox" style="display:none;margin-bottom:14px;">
+                <div style="display:flex;justify-content:space-between;font-size:0.85em;margin-bottom:4px;">
+                    <span id="otaStatusText" style="font-weight:bold;color:#0077ff;">Enviando firmware...</span>
+                    <span id="otaPctText" style="font-weight:bold;">0%</span>
+                </div>
+                <div style="width:100%;height:10px;background:#e2e8f0;border-radius:5px;overflow:hidden;">
+                    <div id="otaProgressBar" style="width:0%;height:100%;background:#0077ff;transition:width 0.15s ease;"></div>
+                </div>
+            </div>
+
+            <!-- Contagem Regressiva de Reinicialização -->
+            <div id="otaCountdownBox" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:8px;padding:12px;text-align:center;margin-bottom:14px;font-size:0.9em;">
+                <div>🎉 <strong>Firmware gravado com sucesso!</strong></div>
+                <div style="margin-top:6px;">O MPS3 está reiniciando. Reconectando em <strong id="otaCountdownSec">10</strong>s...</div>
+            </div>
+
+            <div style="display:flex;justify-content:flex-end;gap:10px;border-top:1px solid #eee;padding-top:12px;">
+                <button type="button" id="btnCancelOta" class="btn-secondary">Cancelar</button>
+                <button type="button" id="btnStartOta" class="btn-primary" disabled style="background:#0077ff;">Iniciar Atualização</button>
             </div>
         </div>
     </div>
@@ -1541,6 +1606,165 @@
 
         document.getElementById('btnSaveEq').onclick = saveEq;
         document.getElementById('btnActivatePreset').onclick = activatePreset;
+
+        // ================= ATUALIZAÇÃO DE FIRMWARE (OTA) =================
+        let otaFile = null;
+        let otaXhr = null;
+
+        async function openOtaModal() {
+            document.getElementById('otaModal').style.display = 'flex';
+            document.getElementById('otaFileSection').style.display = 'block';
+            document.getElementById('otaProgressBox').style.display = 'none';
+            document.getElementById('otaCountdownBox').style.display = 'none';
+            document.getElementById('otaFileInput').value = '';
+            document.getElementById('otaFileInput').disabled = false;
+            document.getElementById('btnStartOta').disabled = true;
+            document.getElementById('btnCancelOta').disabled = false;
+            document.getElementById('btnCloseOta').disabled = false;
+            document.getElementById('otaFileErr').style.display = 'none';
+            otaFile = null;
+
+            document.getElementById('otaRunningVer').textContent = 'Consultando...';
+            document.getElementById('otaRunningPart').textContent = '--';
+            document.getElementById('otaNextPart').textContent = '--';
+            document.getElementById('otaBatteryInfo').textContent = '--';
+
+            try {
+                const res = await fetch('/api/ota');
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById('otaRunningVer').textContent = data.running_version || 'Desconhecida';
+                    document.getElementById('otaRunningPart').textContent = data.running_partition || 'ota_0';
+                    document.getElementById('otaNextPart').textContent = data.next_partition || 'ota_1';
+                    
+                    const batPct = data.battery_percent !== undefined ? data.battery_percent : '--';
+                    const isCharging = data.battery_charging;
+                    document.getElementById('otaBatteryInfo').textContent = `${batPct}% ${isCharging ? '⚡ (Carregando)' : ''}`;
+
+                    if (data.battery_percent < 15 && !data.battery_charging) {
+                        const err = document.getElementById('otaFileErr');
+                        err.textContent = 'Bateria muito baixa (< 15%). Conecte o carregador antes de atualizar!';
+                        err.style.display = 'block';
+                    }
+                }
+            } catch(e) {
+                document.getElementById('otaRunningVer').textContent = 'Erro ao consultar';
+            }
+        }
+
+        function closeOtaModal() {
+            if (otaXhr) {
+                if (!confirm("Atualização em andamento! Deseja cancelar?")) return;
+                otaXhr.abort();
+                otaXhr = null;
+            }
+            document.getElementById('otaModal').style.display = 'none';
+        }
+
+        document.getElementById('otaBtn').onclick = openOtaModal;
+        document.getElementById('btnCloseOta').onclick = closeOtaModal;
+        document.getElementById('btnCancelOta').onclick = closeOtaModal;
+
+        document.getElementById('otaFileInput').onchange = (e) => {
+            const files = e.target.files;
+            const err = document.getElementById('otaFileErr');
+            err.style.display = 'none';
+            if (files && files.length > 0) {
+                const file = files[0];
+                if (!file.name.toLowerCase().endsWith('.bin')) {
+                    err.textContent = 'Selecione um arquivo de firmware com extensão .bin';
+                    err.style.display = 'block';
+                    document.getElementById('btnStartOta').disabled = true;
+                    otaFile = null;
+                    return;
+                }
+                otaFile = file;
+                document.getElementById('btnStartOta').disabled = false;
+            } else {
+                document.getElementById('btnStartOta').disabled = true;
+                otaFile = null;
+            }
+        };
+
+        document.getElementById('btnStartOta').onclick = () => {
+            if (!otaFile) return;
+
+            if (!confirm(`Confirmar gravação do firmware "${otaFile.name}" (${(otaFile.size / 1024 / 1024).toFixed(2)} MB) no MPS3?`)) {
+                return;
+            }
+
+            document.getElementById('btnStartOta').disabled = true;
+            document.getElementById('btnCancelOta').disabled = true;
+            document.getElementById('btnCloseOta').disabled = true;
+            document.getElementById('otaFileInput').disabled = true;
+            document.getElementById('otaProgressBox').style.display = 'block';
+            document.getElementById('otaProgressBar').style.width = '0%';
+            document.getElementById('otaPctText').textContent = '0%';
+            document.getElementById('otaStatusText').textContent = 'Gravando Flash SPI...';
+
+            otaXhr = new XMLHttpRequest();
+            otaXhr.open('POST', '/api/ota');
+            otaXhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+            otaXhr.upload.onprogress = (evt) => {
+                if (evt.lengthComputable) {
+                    const pct = Math.round((evt.loaded / evt.total) * 100);
+                    document.getElementById('otaProgressBar').style.width = `${pct}%`;
+                    document.getElementById('otaPctText').textContent = `${pct}%`;
+                    if (pct >= 100) {
+                        document.getElementById('otaStatusText').textContent = 'Finalizando gravação na partição flash...';
+                    }
+                }
+            };
+
+            otaXhr.onreadystatechange = () => {
+                if (otaXhr && otaXhr.readyState === 4) {
+                    if (otaXhr.status === 200) {
+                        document.getElementById('otaProgressBar').style.width = '100%';
+                        document.getElementById('otaPctText').textContent = '100%';
+                        document.getElementById('otaProgressBox').style.display = 'none';
+                        document.getElementById('otaFileSection').style.display = 'none';
+                        document.getElementById('otaCountdownBox').style.display = 'block';
+
+                        let sec = 10;
+                        document.getElementById('otaCountdownSec').textContent = sec;
+                        const timer = setInterval(() => {
+                            sec--;
+                            document.getElementById('otaCountdownSec').textContent = sec;
+                            if (sec <= 0) {
+                                clearInterval(timer);
+                                location.reload();
+                            }
+                        }, 1000);
+                    } else {
+                        let errMsg = 'Erro na atualização.';
+                        try {
+                            const errResp = JSON.parse(otaXhr.responseText);
+                            if (errResp.error) errMsg = errResp.error;
+                        } catch(e) {}
+                        alert(`Falha na atualização OTA (${otaXhr.status}):\n${errMsg}`);
+                        document.getElementById('btnStartOta').disabled = false;
+                        document.getElementById('btnCancelOta').disabled = false;
+                        document.getElementById('btnCloseOta').disabled = false;
+                        document.getElementById('otaFileInput').disabled = false;
+                        document.getElementById('otaProgressBox').style.display = 'none';
+                    }
+                    otaXhr = null;
+                }
+            };
+
+            otaXhr.onerror = () => {
+                alert('Erro de conexão durante o upload OTA.');
+                document.getElementById('btnStartOta').disabled = false;
+                document.getElementById('btnCancelOta').disabled = false;
+                document.getElementById('btnCloseOta').disabled = false;
+                document.getElementById('otaFileInput').disabled = false;
+                document.getElementById('otaProgressBox').style.display = 'none';
+                otaXhr = null;
+            };
+
+            otaXhr.send(otaFile);
+        };
 
         fetchStatus(); setInterval(fetchStatus, 8000); load();
     </script>

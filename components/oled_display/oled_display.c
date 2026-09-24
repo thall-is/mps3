@@ -2321,3 +2321,57 @@ void oled_display_show_sort_mode(int mode)
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);
 }
+
+void oled_display_show_ota_progress(int percent, const char *status_msg)
+{
+    if (!s_ready) return;
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Titulo
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    const char *title = "ATUALIZANDO FIRMWARE";
+    int tw = u8g2_GetStrWidth(&s_u8g2, title);
+    u8g2_DrawStr(&s_u8g2, (OLED_WIDTH - tw) / 2, 9, title);
+    u8g2_DrawHLine(&s_u8g2, 0, 12, OLED_WIDTH);
+
+    // Barra de progresso com moldura e preenchimento proporcional (0-100%)
+    const int bar_x = 8;
+    const int bar_y = 20;
+    const int bar_w = OLED_WIDTH - 16; // 112 px
+    const int bar_h = 14;
+
+    u8g2_DrawFrame(&s_u8g2, bar_x, bar_y, bar_w, bar_h);
+    int fill = ((bar_w - 2) * percent) / 100;
+    if (fill > 0) {
+        u8g2_DrawBox(&s_u8g2, bar_x + 1, bar_y + 1, fill, bar_h - 2);
+    }
+
+    // Texto de porcentagem centralizado na barra
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    char pct_label[16];
+    snprintf(pct_label, sizeof(pct_label), "%d%%", percent);
+    int pw = u8g2_GetStrWidth(&s_u8g2, pct_label);
+    int px = bar_x + (bar_w - pw) / 2;
+    u8g2_SetDrawColor(&s_u8g2, 2); // Modo XOR (inversao) para legibilidade perfeita sobre a barra
+    u8g2_DrawStr(&s_u8g2, px, bar_y + 11, pct_label);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Mensagem de status
+    u8g2_SetFont(&s_u8g2, u8g2_font_5x8_tf);
+    const char *msg = (status_msg && status_msg[0]) ? status_msg : "Gravando Flash SPI...";
+    int mw = u8g2_GetStrWidth(&s_u8g2, msg);
+    u8g2_DrawStr(&s_u8g2, (OLED_WIDTH - mw) / 2, 47, msg);
+
+    // Aviso fixo na base
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    const char *warn = "NAO DESLIGUE O MPS3!";
+    int ww = u8g2_GetStrWidth(&s_u8g2, warn);
+    u8g2_DrawStr(&s_u8g2, (OLED_WIDTH - ww) / 2, 60, warn);
+
+    apply_brightness_if_needed();
+    u8g2_SendBuffer(&s_u8g2);
+}

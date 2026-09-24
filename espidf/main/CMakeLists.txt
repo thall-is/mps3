@@ -24,4 +24,6 @@ idf_component_register(
         esp_driver_sdmmc
         sd_card
         oled_display
+        app_update
+        esp_partition
 )

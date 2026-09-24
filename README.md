@@ -39,6 +39,12 @@ Este projeto preza pela honestidade técnica e relata com clareza o estado real 
 * **Interface Monocromática Fluida no OLED SSD1306**: Navegação intuitiva com joystick de 5 direções, menus em carrossel, visualização da biblioteca por pastas e arquivos, além da tela "Now Playing" com dados da faixa, formato, taxa de amostragem, profundidade de bits e tempo decorrido.
 * **Persistência de Estado (NVS)**: Grava e recupera automaticamente a última música tocada, o ponto exato onde a reprodução foi pausada, o volume atual, a preferência de codec e o modo de ordenação das faixas.
 * **Ordenação Flexível de Faixas (Nome A-Z vs Data / Tracklist Original)**: Configurado diretamente no menu **"Conf" (Opção 6 — "Ordenar")**. Permite alternar instantaneamente entre a ordem alfabética clássica e a ordem por data de modificação (`mtime` do cartão SD), preservando a sequência original de faixas das gravações/álbuns. A preferência é gravada na NVS e a pasta ativa é reordenada imediatamente.
+* **Atualização de Firmware Over-The-Air (OTA) Dual-Bank com Rollback Anti-Brick**:
+  * **Layout Dual-Bank Seguro na Flash de 16MB**: Dois bancos de aplicação de 4MB cada (`ota_0` em `0x20000` e `ota_1` em `0x420000`) com partição de controle `otadata` em `0x10000`, permitindo gravação em segundo plano sem risco de perda de configurações na NVS.
+  * **Rollback Automático Anti-Brick**: Habilitado via `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`. A aplicação precisa inicializar com sucesso todos os periféricos vitais (SDMMC, I2S, tarefas FreeRTOS) e chamar `esp_ota_mark_app_valid_cancel_rollback()` para ser confirmada; em caso de falha de boot ou crash prematuro, o bootloader reverte autonomamente para a partição anterior saudável.
+  * **Auto-Descoberta Inteligente por MAC de Hardware (`28:84:85:52:35:84`)**: Os scripts CLI localizam o MPS3 na rede local combinando leitura de cache ARP do sistema operacional, varredura rápida de rede (ping sweep multithread), mDNS e rotas de contingência, eliminando a necessidade de descobrir o IP atribuído via DHCP.
+  * **Interface Web Amigável (`/api/ota`)**: Modal visual no gerenciador web (`http://mps3.local/`) com leitura de partição ativa, versão, nível de bateria (< 15% bloqueia gravação com alerta de segurança), barra de progresso em tempo real e contagem regressiva de reconexão.
+  * **Feedback Visual em Tempo Real no OLED**: Renderização com barra de progresso proporcional em modo XOR (`u8g2_SetDrawColor(..., 2)`), percentual dinâmico e aviso de segurança anti-desligamento ("NAO DESLIGUE O MPS3!").
 * **Gerenciador de Músicas via Wi-Fi (`mps3.local`)**: Ao ativar o modo Wi-Fi, o mps3 cria um servidor web acessível na rede local para gerenciamento e upload de álbuns e faixas diretamente pelo navegador:
   * **Explorador de Arquivos Web Completo**: Navegação multinível por subpastas dentro do modal "Mover para...", permitindo organizar a biblioteca sem remover o cartão.
   * **Proteção contra Movimentação Circular**: Validação no front-end e no back-end (`/api/move` e `/api/rename`) impedindo mover uma pasta para dentro de si mesma ou de suas subpastas, garantindo a integridade da tabela FatFS.
@@ -143,14 +149,15 @@ O projeto adota o **ESP-IDF v6.0.1 puro** como *Single Source of Truth* para com
 
 | Diretório / Arquivo | Finalidade |
 |---|---|
-| **[`espidf/`](espidf/)** | **Ponto de entrada oficial ESP-IDF (ESP32-S3)**: `CMakeLists.txt`, `main/`, `sdkconfig.defaults` (configuração de 8KB USB MSC, PSRAM Octal 8MB, Flash 16MB QIO). |
-| **[`components/`](components/)** | Componentes modulares independentes: `audio_player`, `usb_manager`, `sd_card`, `oled_display`, `touch_input`, `eq`, `i2s_output`, `wifi_transfer`, etc. |
+| **[`espidf/`](espidf/)** | **Ponto de entrada oficial ESP-IDF (ESP32-S3)**: `CMakeLists.txt`, `main/`, `sdkconfig.defaults` (configuração de 8KB USB MSC, PSRAM Octal 8MB, Flash 16MB QIO, Rollback OTA). |
+| **[`components/`](components/)** | Componentes modulares independentes: `audio_player`, `usb_manager`, `sd_card`, `oled_display`, `touch_input`, `eq`, `i2s_output`, `wifi_transfer` (servidor web + OTA backend), etc. |
+| **[`versionamento/`](versionamento/)** | **Scripts de Versionamento e Upload**: `mps3_version.ps1` (PowerShell), `mps3_version.sh` (Bash) e `ota_upload.py` (upload OTA com auto-descoberta inteligente por MAC de hardware). |
 | **[`bt_companion/`](bt_companion/)** | **Firmware do Co-Processador Bluetooth (ESP32)**: Transmissor de áudio Sony LDAC 24-bit / 96 kHz e SBC de alta qualidade com controle de volume AVRCP. |
 | **[`bt_audio_sink/`](bt_audio_sink/)** | **Firmware Receptor de Teste (ESP32)**: Receptor Bluetooth A2DP Sink para validação e auditoria em bancada do áudio transmitido pelo mps3. |
-| **[`tests/`](tests/)** | Scripts de bancada e automação: benchmark Win32 unbuffered de MSC (`benchmark_msc.py`), verificadores de áudio e validação de descritores USB. |
+| **[`tests/`](tests/)** | Scripts de bancada e automação: benchmark Win32 unbuffered de MSC (`benchmark_msc.py`), verificadores de áudio e testes de descoberta OTA. |
 | **[`docs/`](docs/)** | Diagramas de ligação elétrica ([WIRING.md](docs/WIRING.md)) e especificação do protocolo binário UART ([PROTOCOL.md](docs/PROTOCOL.md)). |
-| **[`tools/`](tools/)** | Utilitários de monitoramento de testbench em Python. |
-| **[`partitions.csv`](partitions.csv)** | Tabela de partições customizada (App de 4 MB com suporte a OTA e NVS). |
+| **[`tools/`](tools/)** | Utilitários de empacotamento web (`pack_web.py`) e monitoramento em Python. |
+| **[`partitions.csv`](partitions.csv)** | Tabela de partições dual-bank (`otadata` @ 0x10000, `ota_0` de 4MB @ 0x20000, `ota_1` de 4MB @ 0x420000). |
 
 ---
 
@@ -231,12 +238,40 @@ idf.py set-target esp32s3
 # 4. Compilar
 idf.py build
 
-# 5. Gravar no ESP32-S3 (ajustar porta COM conforme seu sistema)
+# 5. Gravar no ESP32-S3 via cabo serial (ajustar porta COM conforme seu sistema)
 idf.py -p COM7 flash
 
 # 6. Monitorar logs de execução
 idf.py -p COM7 monitor
 ```
+
+### Atualização e Upload Remoto via Wi-Fi (OTA)
+
+O MPS3 pode ser atualizado via rede sem fio, sem precisar conectar o cabo serial ao computador:
+
+#### 1. Via Scripts de Versionamento (CLI com Auto-Descoberta por MAC)
+Basta colocar o MPS3 no modo Wi-Fi (conectado na mesma rede que o computador). O script localiza automaticamente a placa pelo MAC `28:84:85:52:35:84` (ou aceita IP opcional):
+
+```powershell
+# Windows (PowerShell)
+.\versionamento\mps3_version.ps1 ota                # Envia o binario mais recente via OTA
+.\versionamento\mps3_version.ps1 build-ota          # Compila nova versao e envia via OTA
+.\versionamento\mps3_version.ps1 ota 192.168.1.100  # Envia apontando para IP fixo
+```
+
+```bash
+# Linux / macOS / Git Bash
+./versionamento/mps3_version.sh ota                 # Envia o binario mais recente via OTA
+./versionamento/mps3_version.sh build-ota           # Compila nova versao e envia via OTA
+./versionamento/mps3_version.sh ota 192.168.1.100   # Envia apontando para IP fixo
+```
+
+#### 2. Via Interface Web
+1. Entre no modo Wi-Fi no menu do MPS3 e conecte-se na rede.
+2. No computador ou celular, abra o navegador em `http://mps3.local/` (ou no IP exibido na tela).
+3. Clique no botão **"🚀 Atualizar"** no cabeçalho.
+4. Selecione o arquivo `mps3.bin` e acompanhe a barra de progresso.
+5. O MPS3 grava a nova imagem no banco livre (`ota_0` ou `ota_1`), reinicia e comuta a partição automaticamente.
 
 ### Executando o Benchmark de Velocidade USB MSC
 Com o player em modo USB Storage conectado ao computador (montado como letra `D:` ou equivalente):

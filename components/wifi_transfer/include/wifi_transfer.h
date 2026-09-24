@@ -43,6 +43,7 @@ bool wifi_transfer_poll(void);
 void wifi_transfer_request_exit(void);
 
 bool wifi_transfer_is_active(void);
+bool wifi_transfer_is_ota_busy(void);
 
 // Preenche "out" com uma linha de status pronta pra' mostrar na tela:
 // "Conectando..." / "192.168.x.x" (IP assim que pronto pra' receber
