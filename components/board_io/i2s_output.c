@@ -5,6 +5,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "driver/i2s_std.h"
+#include "driver/gpio.h"
+#include "esp_rom_sys.h"
 #include "esp_log.h"
 
 static const char *TAG = "i2s_output";
@@ -31,6 +33,9 @@ esp_err_t i2s_output_init(void)
     if (!s_i2s_mutex) {
         s_i2s_mutex = xSemaphoreCreateMutex();
     }
+    gpio_set_direction((gpio_num_t)PIN_I2S_BCLK, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)PIN_I2S_BCLK, 0);
+    esp_rom_delay_us(100);
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     // Buffer DMA calibrado para o limite de hardware do GDMA (max 4092 B por descritor).
     // 256 frames stereo de 32 bits = 2048 bytes (alinhamento perfeito de 2 descritores por bloco DSP de 512 frames).
@@ -220,7 +225,15 @@ esp_err_t i2s_output_disable(void)
         return ESP_OK;
     }
     esp_err_t ret = i2s_channel_disable(s_tx_handle);
-    if (ret == ESP_OK) s_channel_enabled = false;
+    if (ret == ESP_OK) {
+        s_channel_enabled = false;
+        // No ESP32-S3 DevKit v1.0, o LED RGB WS2812 on-board fica soldado no GPIO 48 (mesmo pino do BCLK).
+        // Quando o I2S pausa, o pino fica estatico e retem o byte verde anterior.
+        // Forcamos a linha em LOW por > 80us (reset code do WS2812) para que ele apague.
+        gpio_set_direction((gpio_num_t)PIN_I2S_BCLK, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)PIN_I2S_BCLK, 0);
+        esp_rom_delay_us(100);
+    }
     if (s_i2s_mutex) xSemaphoreGive(s_i2s_mutex);
     return ret;
 }

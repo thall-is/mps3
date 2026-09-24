@@ -30,6 +30,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <mdns.h>
+#include <lwip/tcp.h>
+#include <lwip/tcpip.h>
+#include <lwip/priv/tcp_priv.h>
 
 static const char *TAG = "wifi_transfer";
 
@@ -156,11 +159,12 @@ static void radio_server_task(void *arg) {
 
 
 esp_err_t wifi_transfer_enter_auto(void);
+static wifi_transfer_mode_t s_mode;
 
 // =========================================================================
-// HTML embutido
+// HTML embutido (Compactado com Gzip)
 // =========================================================================
-#include "index_html.h"
+#include "index_html_gz.h"
 #include "battery.h"
 
 
@@ -179,11 +183,48 @@ static esp_err_t api_now_playing_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t http_captive_204_handler(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t http_captive_apple_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html");
+    const char *apple_resp = "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>";
+    httpd_resp_send(req, apple_resp, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err)
+{
+    (void)err;
+    if (s_mode == WIFI_TRANSFER_MODE_AP) {
+        // Redireciona qualquer URL desconhecida para o IP do AP
+        httpd_resp_set_status(req, "302 Found");
+        httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "404 Not Found");
+    return ESP_FAIL;
+}
+
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, (const char *)index_html_start, index_html_size);
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+
+    esp_err_t ret = httpd_resp_send(req, (const char *)index_html_gz, index_html_gz_size);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Falha ao enviar HTML gzip (%d bytes): %s", (int)index_html_gz_size, esp_err_to_name(ret));
+    }
+    return ret;
 }
+
 
 
 static esp_err_t api_status_get_handler(httpd_req_t *req)
@@ -240,7 +281,6 @@ static esp_netif_t *s_netif_sta = NULL;
 static esp_netif_t *s_netif_ap = NULL;
 static httpd_handle_t s_httpd = NULL;
 
-static wifi_transfer_mode_t s_mode;
 static volatile bool s_active = false;
 static volatile bool s_exit_requested = false;
 static volatile bool s_got_ip = false;
@@ -323,22 +363,31 @@ static void update_ui_state(void) {
     }
 }
 
+static bool s_mdns_started = false;
+
 static void start_mdns_service(void)
 {
+    if (s_mdns_started) return;
     esp_err_t err = mdns_init();
-    if (err != ESP_OK) {
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG, "Falha ao inicializar mDNS: %s", esp_err_to_name(err));
         return;
     }
     mdns_hostname_set("mps3");
     mdns_instance_name_set("mps3");
-    mdns_service_add("MPS3 Radio", "_http", "_tcp", 80, NULL, 0);
+    if (!mdns_service_exists("_http", "_tcp", NULL)) {
+        mdns_service_add("MPS3 Radio", "_http", "_tcp", 80, NULL, 0);
+    }
+    s_mdns_started = true;
     ESP_LOGI(TAG, "mDNS iniciado: http://mps3.local");
 }
 
 static void stop_mdns_service(void)
 {
-    mdns_free();
+    if (s_mdns_started) {
+        mdns_free();
+        s_mdns_started = false;
+    }
 }
 
 static void dns_server_task(void *arg)
@@ -380,35 +429,42 @@ static void dns_server_task(void *arg)
         uint16_t qdcount = (buf[4] << 8) | buf[5];
         if (qdcount != 1) continue;
 
-        char qname[64] = {0};
+        // Caminha pela secao Question para encontrar o fim exato (RFC 1035)
         int pos = 12;
-        int qname_pos = 0;
         while (pos < len && buf[pos] != 0) {
             int label_len = buf[pos];
             if (pos + 1 + label_len > len) break;
-            if (qname_pos > 0 && qname_pos < (int)(sizeof(qname) - 1)) qname[qname_pos++] = '.';
-            for (int i = 0; i < label_len && qname_pos < (int)(sizeof(qname) - 1); i++) {
-                qname[qname_pos++] = buf[pos + 1 + i];
-            }
             pos += label_len + 1;
         }
+        if (pos >= len || buf[pos] != 0) continue;
+        pos++; // Pula o terminador nulo de QNAME
+        pos += 4; // Pula QTYPE (2 bytes) + QCLASS (2 bytes)
+        if (pos > len) continue;
 
-        if (strcasecmp(qname, "mps3") != 0) continue;
-        if (len + 16 > 512) continue;
+        // pos agora marca exatamente o fim da secao Question
+        if (pos + 16 > 512) continue;
 
         uint8_t response[512];
-        memcpy(response, buf, len);
-        response[2] |= 0x80;
-        response[7] = 1;
+        // Copia SOMENTE o Header (12 bytes) e a Question original
+        memcpy(response, buf, pos);
 
-        int rsp_len = len;
+        // Header da resposta (RFC 1035)
+        response[2] = 0x81; // QR=1 (Response), Opcode=0, AA=0, TC=0, RD=1
+        response[3] = 0x80; // RA=1 (Recursion Available), Z=0, RCODE=0 (No error)
+        response[4] = 0x00; response[5] = 0x01; // QDCOUNT = 1
+        response[6] = 0x00; response[7] = 0x01; // ANCOUNT = 1
+        response[8] = 0x00; response[9] = 0x00; // NSCOUNT = 0
+        response[10] = 0x00; response[11] = 0x00; // ARCOUNT = 0 (descarta EDNS0 OPT da consulta!)
+
+        // Secao Answer imediatamente apos a Question
+        int rsp_len = pos;
         response[rsp_len++] = 0xC0;
-        response[rsp_len++] = 0x0C;
-        response[rsp_len++] = 0x00; response[rsp_len++] = 0x01;
-        response[rsp_len++] = 0x00; response[rsp_len++] = 0x01;
+        response[rsp_len++] = 0x0C; // Pointer para QNAME em offset 12
+        response[rsp_len++] = 0x00; response[rsp_len++] = 0x01; // TYPE A
+        response[rsp_len++] = 0x00; response[rsp_len++] = 0x01; // CLASS IN
         response[rsp_len++] = 0x00; response[rsp_len++] = 0x00;
-        response[rsp_len++] = 0x00; response[rsp_len++] = 0x3C;
-        response[rsp_len++] = 0x00; response[rsp_len++] = 0x04;
+        response[rsp_len++] = 0x00; response[rsp_len++] = 0x3C; // TTL = 60s
+        response[rsp_len++] = 0x00; response[rsp_len++] = 0x04; // RDLENGTH = 4
 
         // Obtem o IP do AP (192.168.4.1)
         esp_netif_ip_info_t ip_info;
@@ -734,12 +790,19 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     size_t content_len = req->content_len;
     progress_begin(display_name, content_len, idx, count, batch_total > 0 ? batch_total : (long long)content_len);
 
-    const size_t buf_size = 16384;
-    char *buf = malloc(buf_size);
-    char *io_buf = malloc(buf_size);
+    size_t buf_size = 16384;
+    char *buf = (char *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    char *io_buf = (char *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (!buf || !io_buf) {
-        free(buf);
-        free(io_buf);
+        if (buf) heap_caps_free(buf);
+        if (io_buf) heap_caps_free(io_buf);
+        buf_size = 4096;
+        buf = (char *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        io_buf = (char *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    }
+    if (!buf || !io_buf) {
+        if (buf) heap_caps_free(buf);
+        if (io_buf) heap_caps_free(io_buf);
         fclose(fp);
         remove(abs_path);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sem memoria para o buffer de upload");
@@ -782,9 +845,9 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         remaining -= received;
         progress_update(content_len - remaining);
     }
-    free(buf);
+    heap_caps_free(buf);
     fclose(fp);
-    free(io_buf);
+    heap_caps_free(io_buf);
 
     if (!ok) {
         remove(abs_path);
@@ -1502,9 +1565,15 @@ static esp_err_t start_httpd(void)
 {
     if (s_httpd) return ESP_OK;
 
+    static uint16_t s_ctrl_port = 32768;
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
-    config.max_uri_handlers = 24;
+    config.task_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT; // Aloca na Octal PSRAM (8MB livres)!
+    config.core_id = 1; // Roda no Core 1 com 240 MHz livres enquanto o player esta pausado!
+    config.ctrl_port = s_ctrl_port++;
+    if (s_ctrl_port > 32800) s_ctrl_port = 32768;
+    config.max_uri_handlers = 32;
     config.lru_purge_enable = true;
     config.keep_alive_enable = true;
     config.keep_alive_idle = 5;
@@ -1513,19 +1582,35 @@ static esp_err_t start_httpd(void)
     config.send_wait_timeout = 15;
     config.recv_wait_timeout = 15;
 
+    ESP_LOGI(TAG, "Iniciando servidor HTTP (modo=%s, ip=%s, ctrl_port=%d)...",
+             s_mode == WIFI_TRANSFER_MODE_STA ? "STA" : "AP", s_status, config.ctrl_port);
+
+    // Limpa qualquer PCB orfao deixado em LISTEN na porta 80 por sessoes anteriores
+    LOCK_TCPIP_CORE();
+    for (struct tcp_pcb_listen *p = tcp_listen_pcbs.listen_pcbs; p != NULL; ) {
+        struct tcp_pcb_listen *next = p->next;
+        if (p->local_port == config.server_port) {
+            ESP_LOGW(TAG, "Fechando PCB preso na porta %d antes de subir httpd!", p->local_port);
+            tcp_close((struct tcp_pcb *)p);
+        }
+        p = next;
+    }
+    UNLOCK_TCPIP_CORE();
+
     esp_err_t err = httpd_start(&s_httpd, &config);
     if (err != ESP_OK) {
-        // error
-    } else {
-        // if (!s_radio_task_handle) xTaskCreate(radio_server_task, "radio_server", 4096, NULL, 5, &s_radio_task_handle);
-    }
-    if (err != ESP_OK) {
         ESP_LOGE(TAG, "Falha ao subir o servidor HTTP: %s", esp_err_to_name(err));
+        s_httpd = NULL;
         return err;
     }
+    ESP_LOGI(TAG, "Servidor HTTP iniciado com sucesso na porta 80");
 
-        httpd_uri_t now_playing_uri = { .uri = "/api/now_playing", .method = HTTP_GET, .handler = api_now_playing_get_handler };
-    httpd_uri_t root_uri   = { .uri = "/",           .method = HTTP_GET,    .handler = root_get_handler };
+    httpd_uri_t now_playing_uri = { .uri = "/api/now_playing", .method = HTTP_GET, .handler = api_now_playing_get_handler };
+    httpd_uri_t root_uri        = { .uri = "/",                .method = HTTP_GET, .handler = root_get_handler };
+    httpd_uri_t index_uri       = { .uri = "/index.html",      .method = HTTP_GET, .handler = root_get_handler };
+    httpd_uri_t gen204_uri      = { .uri = "/generate_204",    .method = HTTP_GET, .handler = http_captive_204_handler };
+    httpd_uri_t gen204_alt_uri  = { .uri = "/gen_204",         .method = HTTP_GET, .handler = http_captive_204_handler };
+    httpd_uri_t apple_uri       = { .uri = "/hotspot-detect.html", .method = HTTP_GET, .handler = http_captive_apple_handler };
     httpd_uri_t list_uri   = { .uri = "/api/list",   .method = HTTP_GET,    .handler = api_list_get_handler };
     httpd_uri_t space_uri  = { .uri = "/api/space",  .method = HTTP_GET,    .handler = api_space_get_handler };
     httpd_uri_t status_uri = { .uri = "/api/status", .method = HTTP_GET,    .handler = api_status_get_handler };
@@ -1540,8 +1625,12 @@ static esp_err_t start_httpd(void)
     httpd_uri_t webradio_play_uri    = { .uri = "/api/webradio",      .method = HTTP_POST,   .handler = api_webradio_play_handler };
     httpd_uri_t webradio_stop_uri    = { .uri = "/api/webradio/stop", .method = HTTP_POST,   .handler = api_webradio_stop_handler };
 
-        httpd_register_uri_handler(s_httpd, &now_playing_uri);
+    httpd_register_uri_handler(s_httpd, &now_playing_uri);
     httpd_register_uri_handler(s_httpd, &root_uri);
+    httpd_register_uri_handler(s_httpd, &index_uri);
+    httpd_register_uri_handler(s_httpd, &gen204_uri);
+    httpd_register_uri_handler(s_httpd, &gen204_alt_uri);
+    httpd_register_uri_handler(s_httpd, &apple_uri);
     httpd_register_uri_handler(s_httpd, &list_uri);
     httpd_register_uri_handler(s_httpd, &space_uri);
     httpd_register_uri_handler(s_httpd, &status_uri);
@@ -1566,6 +1655,8 @@ static esp_err_t start_httpd(void)
     httpd_register_uri_handler(s_httpd, &move_uri);
     httpd_register_uri_handler(s_httpd, &copy_uri);
     httpd_register_uri_handler(s_httpd, &mkdir_uri);
+
+    httpd_register_err_handler(s_httpd, HTTPD_404_NOT_FOUND, http_404_error_handler);
 
     return ESP_OK;
 }
@@ -1659,6 +1750,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         snprintf(s_status, sizeof(s_status), IPSTR, IP2STR(&evt->ip_info.ip));
         s_got_ip = true;
 
+        ESP_LOGI(TAG, "===> CONECTADO NA REDE WIFI LOCAL! <===");
+        ESP_LOGI(TAG, "IP obtido: %s", s_status);
+        ESP_LOGI(TAG, "Acesse pelo navegador: http://%s ou http://mps3.local", s_status);
+
         // Rede que funcionou vai pro topo da lista de conhecidas - da'
         // proxima vez essa e' a primeira tentativa, sem precisar navegar
         // pelas outras antes de chegar nela.
@@ -1677,6 +1772,9 @@ static esp_err_t ensure_stack_ready(void)
 
     err = esp_event_loop_create_default();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
+
+    if (!s_netif_sta) s_netif_sta = esp_netif_create_default_wifi_sta();
+    if (!s_netif_ap)  s_netif_ap  = esp_netif_create_default_wifi_ap();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     err = esp_wifi_init(&cfg);
@@ -1697,6 +1795,13 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
 {
     if (s_active) return ESP_ERR_INVALID_STATE;
     
+    // Se havia uma sessao HTTP residual, encerra antes de comecar
+    if (s_httpd) {
+        httpd_stop(s_httpd);
+        s_httpd = NULL;
+    }
+    stop_mdns_service();
+
     // Pausa a música automaticamente ao entrar no WiFi
     playback_state_t st;
     audio_player_get_state(&st);
@@ -1730,12 +1835,14 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
     s_ap_ready = false;
     s_sta_failed = false;
     s_sta_retry = 0;
-    strncpy(s_status, "Conectando...", sizeof(s_status) - 1);
+    if (mode == WIFI_TRANSFER_MODE_AP) {
+        strncpy(s_status, "192.168.4.1", sizeof(s_status) - 1);
+    } else {
+        strncpy(s_status, "Conectando...", sizeof(s_status) - 1);
+    }
     s_status[sizeof(s_status) - 1] = '\0';
 
     if (mode == WIFI_TRANSFER_MODE_STA) {
-        if (!s_netif_sta) s_netif_sta = esp_netif_create_default_wifi_sta();
-
         wifi_config_t wifi_config = { 0 };
         strncpy((char *)wifi_config.sta.ssid, s_candidates[s_candidate_idx].ssid, sizeof(wifi_config.sta.ssid) - 1);
         strncpy((char *)wifi_config.sta.password, s_candidates[s_candidate_idx].pass, sizeof(wifi_config.sta.password) - 1);
@@ -1747,14 +1854,16 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
         esp_wifi_set_mode(WIFI_MODE_STA);
         esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     } else {
-        if (!s_netif_ap) s_netif_ap = esp_netif_create_default_wifi_ap();
-
         wifi_config_t wifi_config = { 0 };
         strncpy((char *)wifi_config.ap.ssid, CONFIG_WIFI_AP_SSID, sizeof(wifi_config.ap.ssid) - 1);
         wifi_config.ap.ssid_len = strlen(CONFIG_WIFI_AP_SSID);
         strncpy((char *)wifi_config.ap.password, CONFIG_WIFI_AP_PASSWORD, sizeof(wifi_config.ap.password) - 1);
-        wifi_config.ap.max_connection = 2;
+        wifi_config.ap.max_connection = 4;
         wifi_config.ap.authmode = strlen(CONFIG_WIFI_AP_PASSWORD) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+
+        ESP_LOGI(TAG, "===> MODO HOTSPOT ATIVO <===");
+        ESP_LOGI(TAG, "Rede gerada pelo MPS3: SSID='%s' | Senha='%s'", CONFIG_WIFI_AP_SSID, CONFIG_WIFI_AP_PASSWORD);
+        ESP_LOGI(TAG, "Conecte o seu PC/celular a essa rede e acesse: http://192.168.4.1 ou http://mps3.local");
 
         esp_wifi_set_mode(WIFI_MODE_AP);
         esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
@@ -1768,13 +1877,14 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
     }
 
     s_active = true;
+    // No modo de transferencia WiFi, desativa o modem sleep para resposta TCP instantanea:
     esp_wifi_set_ps(WIFI_PS_NONE);
+    // Potencia calibrada em ~18 dBm (72) para conexao estavel e forte com o roteador:
+    esp_wifi_set_max_tx_power(72);
 
     wifi_interface_t ifx = (mode == WIFI_TRANSFER_MODE_STA) ? WIFI_IF_STA : WIFI_IF_AP;
-    esp_err_t bw_err = esp_wifi_set_bandwidth(ifx, WIFI_BW40);
-    if (bw_err != ESP_OK) {
-        ESP_LOGW(TAG, "Nao foi possivel pedir HT40 (%s) - seguindo em HT20", esp_err_to_name(bw_err));
-    }
+    // Usa 20 MHz (BW20) para manter imunidade eletromagnetica contra as linhas do SDMMC
+    esp_wifi_set_bandwidth(ifx, WIFI_BW20);
 
     ESP_LOGI(TAG, "Modo WiFi (%s) iniciado", mode == WIFI_TRANSFER_MODE_STA ? "estacao" : "hotspot");
     return ESP_OK;
@@ -1782,14 +1892,17 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
 
 esp_err_t wifi_transfer_enter_auto(void)
 {
-    esp_err_t err = wifi_transfer_enter(WIFI_TRANSFER_MODE_STA);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Modo STA falhou imediatamente, iniciando AP...");
-        s_auto_fallback = false;
-        return wifi_transfer_enter(WIFI_TRANSFER_MODE_AP);
+    int candidates = build_sta_candidates();
+    if (candidates > 0) {
+        esp_err_t err = wifi_transfer_enter(WIFI_TRANSFER_MODE_STA);
+        if (err == ESP_OK) {
+            s_auto_fallback = true;
+            return ESP_OK;
+        }
     }
-    s_auto_fallback = true;
-    return ESP_OK;
+    ESP_LOGI(TAG, "Nenhuma rede STA disponivel, iniciando direto em modo AP...");
+    s_auto_fallback = false;
+    return wifi_transfer_enter(WIFI_TRANSFER_MODE_AP);
 }
 
 bool wifi_transfer_poll(void)
@@ -1798,21 +1911,31 @@ bool wifi_transfer_poll(void)
 
     update_ui_state();   // <-- NOVO
 
+    static uint32_t s_last_httpd_attempt_ms = 0;
+    uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+
     if (!s_httpd) {
         if (s_mode == WIFI_TRANSFER_MODE_STA && s_got_ip) {
-            start_httpd();
-            s_auto_fallback = false;
-            start_mdns_service();
+            if (now_ms - s_last_httpd_attempt_ms >= 2000) {
+                s_last_httpd_attempt_ms = now_ms;
+                if (start_httpd() == ESP_OK) {
+                    s_auto_fallback = false;
+                    start_mdns_service();
+                }
+            }
         } else if (s_mode == WIFI_TRANSFER_MODE_AP && s_ap_ready) {
             snprintf(s_status, sizeof(s_status), "192.168.4.1");
-            start_httpd();
-            start_mdns_service();
-            s_auto_fallback = false;
-                // Inicia o servidor DNS para o nome "mps3"
-            if (!s_dns_task_handle) {
-                xTaskCreate(dns_server_task, "dns", 4096, NULL, 5, &s_dns_task_handle);
+            if (now_ms - s_last_httpd_attempt_ms >= 2000) {
+                s_last_httpd_attempt_ms = now_ms;
+                if (start_httpd() == ESP_OK) {
+                    start_mdns_service();
+                    s_auto_fallback = false;
+                    // Inicia o servidor DNS cativo
+                    if (!s_dns_task_handle) {
+                        xTaskCreate(dns_server_task, "dns", 4096, NULL, 5, &s_dns_task_handle);
+                    }
+                }
             }
-                
         } else if (s_mode == WIFI_TRANSFER_MODE_STA && s_sta_failed) {
             if (s_auto_fallback) {
                 ESP_LOGW(TAG, "STA falhou apos tentativas, trocando para AP...");
@@ -1826,16 +1949,19 @@ bool wifi_transfer_poll(void)
                 s_ap_ready = false;
                 s_sta_failed = false;
                 s_sta_retry = 0;
-                strncpy(s_status, "Conectando...", sizeof(s_status) - 1);
+                strncpy(s_status, "192.168.4.1", sizeof(s_status) - 1);
                 s_status[sizeof(s_status) - 1] = '\0';
 
-                if (!s_netif_ap) s_netif_ap = esp_netif_create_default_wifi_ap();
                 wifi_config_t wifi_config = { 0 };
                 strncpy((char *)wifi_config.ap.ssid, CONFIG_WIFI_AP_SSID, sizeof(wifi_config.ap.ssid) - 1);
                 wifi_config.ap.ssid_len = strlen(CONFIG_WIFI_AP_SSID);
                 strncpy((char *)wifi_config.ap.password, CONFIG_WIFI_AP_PASSWORD, sizeof(wifi_config.ap.password) - 1);
-                wifi_config.ap.max_connection = 2;
+                wifi_config.ap.max_connection = 4;
                 wifi_config.ap.authmode = strlen(CONFIG_WIFI_AP_PASSWORD) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+
+                ESP_LOGI(TAG, "===> MODO HOTSPOT ATIVO (Fallback) <===");
+                ESP_LOGI(TAG, "Rede gerada pelo MPS3: SSID='%s' | Senha='%s'", CONFIG_WIFI_AP_SSID, CONFIG_WIFI_AP_PASSWORD);
+                ESP_LOGI(TAG, "Conecte o seu PC/celular a essa rede e acesse: http://192.168.4.1 ou http://mps3.local");
 
                 esp_wifi_set_mode(WIFI_MODE_AP);
                 esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
@@ -1850,6 +1976,7 @@ bool wifi_transfer_poll(void)
     }
 
     if (s_exit_requested) {
+        s_last_httpd_attempt_ms = 0;
         if (s_httpd) {
             httpd_stop(s_httpd);
             s_httpd = NULL;
@@ -1870,6 +1997,17 @@ bool wifi_transfer_poll(void)
         s_auto_fallback = false;
         s_status[0] = '\0';
         progress_end();
+
+        // Remontagem robusta do cartao SD (reinicializa o host SDMMC e remonta o FatFS do zero)
+        ESP_LOGI(TAG, "Remontando cartao SD apos encerramento do WiFi...");
+        sd_card_deinit();
+        vTaskDelay(pdMS_TO_TICKS(50));
+        esp_err_t remount_err = sd_card_init();
+        if (remount_err != ESP_OK) {
+            ESP_LOGE(TAG, "Falha ao remontar SD Card apos WiFi: %s", esp_err_to_name(remount_err));
+        } else {
+            ESP_LOGI(TAG, "SD Card remontado com sucesso apos WiFi");
+        }
         audio_player_reacquire_sd_after_usb();
         ESP_LOGI(TAG, "Modo WiFi encerrado (%d arquivo(s) recebido(s))", s_files_received);
         return true;
