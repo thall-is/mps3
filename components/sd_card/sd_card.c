@@ -49,6 +49,13 @@ esp_err_t sd_card_init(void)
     }
 
     sdmmc_card_print_info(stdout, s_card);
+
+    uint64_t total_bytes = 0, free_bytes = 0;
+    if (esp_vfs_fat_info(SD_MOUNT_POINT, &total_bytes, &free_bytes) == ESP_OK) {
+        ESP_LOGI(TAG, "Cartao montado com sucesso: Total=%.2f GB | Livre=%.2f MB",
+                 (double)total_bytes / (1024.0 * 1024.0 * 1024.0),
+                 (double)free_bytes / (1024.0 * 1024.0));
+    }
     return ESP_OK;
 }
 

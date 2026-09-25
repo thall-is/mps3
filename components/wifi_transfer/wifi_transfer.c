@@ -631,7 +631,14 @@ static void mkdir_p_for_file(const char *abs_file_path)
     for (size_t i = root_len + 1; tmp[i] != '\0'; i++) {
         if (tmp[i] == '/') {
             tmp[i] = '\0';
-            mkdir(tmp, 0775);
+            struct stat st;
+            if (stat(tmp, &st) != 0) {
+                if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
+                    ESP_LOGW(TAG, "mkdir falhou para '%s': errno=%d (%s)", tmp, errno, strerror(errno));
+                } else {
+                    ESP_LOGI(TAG, "Diretorio criado: '%s'", tmp);
+                }
+            }
             tmp[i] = '/';
         }
     }
@@ -798,8 +805,10 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
 
     FILE *fp = fopen(abs_path, "wb");
     if (!fp) {
-        ESP_LOGE(TAG, "Nao foi possivel criar %s", abs_path);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nao foi possivel criar o arquivo no cartao");
+        ESP_LOGE(TAG, "Nao foi possivel criar %s (errno=%d: %s)", abs_path, errno, strerror(errno));
+        char err_msg[128];
+        snprintf(err_msg, sizeof(err_msg), "nao foi possivel criar o arquivo no cartao (%s)", strerror(errno));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, err_msg);
         return ESP_FAIL;
     }
 
@@ -816,23 +825,12 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         buf_size = 8192;
         buf = (char *)malloc(buf_size);
     }
-
-    size_t io_buf_size = 65536;
-    char *io_buf = (char *)heap_caps_malloc(io_buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!io_buf) {
-        io_buf_size = 16384;
-        io_buf = (char *)malloc(io_buf_size);
-    }
     if (!buf) {
-        if (io_buf) free(io_buf);
         fclose(fp);
         remove(abs_path);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sem memoria para o buffer de upload");
         progress_end();
         return ESP_FAIL;
-    }
-    if (io_buf) {
-        setvbuf(fp, io_buf, _IOFBF, io_buf_size);
     }
 
     size_t remaining = content_len;
@@ -841,6 +839,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     const int max_consecutive_timeouts = 100;
     uint32_t last_prog_update_ms = 0;
     size_t buf_fill = 0;
+    char fail_detail[128] = "conexao interrompida durante o envio";
 
     while (remaining > 0) {
         int to_read = (int)(buf_size - buf_fill);
@@ -850,6 +849,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         if (received == HTTPD_SOCK_ERR_TIMEOUT) {
             if (++consecutive_timeouts > max_consecutive_timeouts) {
                 ESP_LOGE(TAG, "Upload de %s abortado: timeout demais seguidos", display_name);
+                snprintf(fail_detail, sizeof(fail_detail), "timeout no recv (%d timeouts seguidos)", consecutive_timeouts);
                 ok = false;
                 break;
             }
@@ -857,6 +857,8 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         }
         consecutive_timeouts = 0;
         if (received <= 0) {
+            ESP_LOGE(TAG, "httpd_req_recv erro: %d", received);
+            snprintf(fail_detail, sizeof(fail_detail), "httpd_req_recv erro ret=%d", received);
             ok = false;
             break;
         }
@@ -866,7 +868,12 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
 
         // Grava em blocos alinhados de 32 KB para velocidade maxima no SDMMC
         if (buf_fill >= buf_size || remaining == 0) {
-            if (fwrite(buf, 1, buf_fill, fp) != buf_fill) {
+            size_t written = fwrite(buf, 1, buf_fill, fp);
+            if (written != buf_fill) {
+                ESP_LOGE(TAG, "fwrite no SD falhou: esperado=%d, gravado=%d (errno=%d: %s)",
+                         (int)buf_fill, (int)written, errno, strerror(errno));
+                snprintf(fail_detail, sizeof(fail_detail), "fwrite SD erro: esperado=%d ret=%d (errno=%d: %s)",
+                         (int)buf_fill, (int)written, errno, strerror(errno));
                 ok = false;
                 break;
             }
@@ -882,12 +889,11 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     }
     free(buf);
     fclose(fp);
-    if (io_buf) free(io_buf);
 
     if (!ok) {
         remove(abs_path);
-        ESP_LOGE(TAG, "Envio de %s interrompido", display_name);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "conexao interrompida durante o envio");
+        ESP_LOGE(TAG, "Envio de %s interrompido: %s", display_name, fail_detail);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, fail_detail);
         progress_end();
         return ESP_FAIL;
     }
@@ -897,6 +903,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
 
     s_files_received++;
     ESP_LOGI(TAG, "Recebido: %s (%d/%d)", rel_path, idx, count);
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
@@ -1012,6 +1019,7 @@ static esp_err_t api_download_get_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_send_chunk(req, NULL, 0); 
     free(chunk);
     fclose(fp);
@@ -1619,10 +1627,19 @@ static esp_err_t api_mkdir_post_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    if (mkdir(abs_path, 0775) != 0 && errno != EEXIST) {
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_send(req, "{\"error\":\"falha ao criar pasta\"}", HTTPD_RESP_USE_STRLEN);
-        return ESP_FAIL;
+    char abs_file[320];
+    snprintf(abs_file, sizeof(abs_file), "%s/", abs_path);
+    mkdir_p_for_file(abs_file);
+
+    struct stat st;
+    if (stat(abs_path, &st) != 0) {
+        if (mkdir(abs_path, 0777) != 0 && errno != EEXIST) {
+            char err_msg[128];
+            snprintf(err_msg, sizeof(err_msg), "{\"error\":\"falha ao criar pasta (%s)\"}", strerror(errno));
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_send(req, err_msg, HTTPD_RESP_USE_STRLEN);
+            return ESP_FAIL;
+        }
     }
 
     httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
@@ -2045,6 +2062,8 @@ static esp_err_t start_httpd(void)
     config.ctrl_port = s_ctrl_port++;
     if (s_ctrl_port > 32800) s_ctrl_port = 32768;
     config.max_uri_handlers = 32;
+    config.max_open_sockets = 7;
+    config.backlog_conn = 5;
     config.lru_purge_enable = true;
     config.keep_alive_enable = true;
     config.keep_alive_idle = 5;

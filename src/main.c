@@ -15,6 +15,10 @@
 
 #include <time.h>
 #include <sys/time.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h>
 
 #include "pinos.h"
 #include "sd_card.h"
@@ -93,7 +97,7 @@ static void display_task(void *arg)
 
             // Avalia estado do player e comuta CPU para perfil de repouso (ex: 80 MHz para MP3/pausado)
             audio_player_get_state(&state);
-            bool wifi_active = (wifi_transfer_is_active() && wifi_transfer_is_transferring()) || podcast_sync_is_busy();
+            bool wifi_active = wifi_transfer_is_active() || podcast_sync_is_busy();
 
             if (is_usb_mode) {
                 // Em modos USB (DAC, Mass Storage ou Prompt), a CPU deve permanecer ativa e em 160 MHz
@@ -125,7 +129,7 @@ static void display_task(void *arg)
             s_last_rendered_ui_mode = (ui_mode_t)-1;
             // Ao acordar, restaura frequência para UI fluida (160 MHz)
             audio_player_get_state(&state);
-            bool wifi_active = (wifi_transfer_is_active() && wifi_transfer_is_transferring()) || podcast_sync_is_busy();
+            bool wifi_active = wifi_transfer_is_active() || podcast_sync_is_busy();
             pwr_governor_update(true, wifi_active, audio_player_is_seeking(), state.playing, state.sample_rate);
         }
 
@@ -138,7 +142,7 @@ static void display_task(void *arg)
         audio_player_get_state(&state);
 
         // Atualizacao dinamica de clock com tela acordada
-        bool wifi_active = (wifi_transfer_is_active() && wifi_transfer_is_transferring()) || podcast_sync_is_busy();
+        bool wifi_active = wifi_transfer_is_active() || podcast_sync_is_busy();
         pwr_governor_update(true, wifi_active, audio_player_is_seeking(), state.playing, state.sample_rate);
 
         // Checagem universal de inatividade para Deep Sleep (pausado e sem uso, mesmo com tela ligada)
@@ -393,6 +397,28 @@ static void display_task(void *arg)
     }
 }
 
+static void scan_and_print_sd(const char *dir_path)
+{
+    DIR *d = opendir(dir_path);
+    if (!d) return;
+    struct dirent *ent;
+    char sub[300];
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        snprintf(sub, sizeof(sub), "%s/%s", dir_path, ent->d_name);
+        struct stat st;
+        if (stat(sub, &st) == 0) {
+            if (S_ISDIR(st.st_mode)) {
+                ESP_LOGI("SD_SCAN", "[DIR] %s", sub);
+                scan_and_print_sd(sub);
+            } else {
+                ESP_LOGI("SD_SCAN", "  %s (%.1f MB)", sub, (double)st.st_size / (1024.0 * 1024.0));
+            }
+        }
+    }
+    closedir(d);
+}
+
 static void uart_cmd_task(void *arg)
 {
     (void)arg;
@@ -409,6 +435,19 @@ static void uart_cmd_task(void *arg)
                         ESP_LOGI("UART_CMD", "Comando recebido: entrar no modo WiFi Auto (APSTA)");
                         if (!wifi_transfer_is_active()) {
                             wifi_transfer_enter_auto();
+                        }
+                    } else if (strcmp(line_buf, "ls") == 0) {
+                        ESP_LOGI("UART_CMD", "Varrendo arquivos no SD card...");
+                        scan_and_print_sd("/sdcard");
+                    } else if (strncmp(line_buf, "ls ", 3) == 0) {
+                        ESP_LOGI("UART_CMD", "Varrendo %s...", line_buf + 3);
+                        scan_and_print_sd(line_buf + 3);
+                    } else if (strncmp(line_buf, "rm ", 3) == 0) {
+                        const char *fpath = line_buf + 3;
+                        if (unlink(fpath) == 0) {
+                            ESP_LOGI("UART_CMD", "Arquivo removido: %s", fpath);
+                        } else {
+                            ESP_LOGE("UART_CMD", "Erro ao remover %s (errno=%d)", fpath, errno);
                         }
                     } else if (strcmp(line_buf, "ap") == 0) {
                         ESP_LOGI("UART_CMD", "Comando recebido: entrar no modo Hotspot AP");
@@ -713,7 +752,7 @@ void app_main(void)
     touch_input_set_display_task_handle(display_handle);
 
     ESP_LOGI(TAG, "Criando uart_cmd_task no Core 0...");
-    xTaskCreatePinnedToCore(uart_cmd_task, "uart_cmd", 4096, NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(uart_cmd_task, "uart_cmd", 8192, NULL, 1, NULL, 0);
 
     // --- Autovalidacao de firmware e cancelamento de rollback OTA ---
     const esp_partition_t *running_part = esp_ota_get_running_partition();

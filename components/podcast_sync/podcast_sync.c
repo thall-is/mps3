@@ -23,9 +23,10 @@
 
 static const char *TAG = "podcast_sync";
 
-#define PODCAST_BASE_DIR        SD_MOUNT_POINT "/Podcasts"
-#define SYNC_BUFFER_SIZE        (32 * 1024)   // 32 KB de buffer de transferencia em PSRAM
-#define CATALOG_BUFFER_SIZE     (64 * 1024)   // 64 KB para o catalogo JSON
+#define PODCAST_BASE_DIR                 SD_MOUNT_POINT "/Podcasts"
+#define PODCAST_MAX_RECENT_PER_PROGRAM   2             // Maximo de episodios recentes por programa na sincronizacao automatica
+#define SYNC_BUFFER_SIZE                 (32 * 1024)   // 32 KB de buffer de transferencia em PSRAM
+#define CATALOG_BUFFER_SIZE              (64 * 1024)   // 64 KB para o catalogo JSON
 
 typedef struct {
     char id[16];
@@ -344,6 +345,19 @@ static void podcast_sync_task(void *pvParameters)
             offset = (size_t)st_part.st_size;
             ESP_LOGI(TAG, "Arquivo parcial detectado (%u de %u B). Retomando download...",
                      (unsigned)offset, (unsigned)items[i].size_bytes);
+        }
+
+        // Limita a sincronizacao automatica aos episodios mais recentes por programa
+        int count_prog = 0;
+        for (int k = 0; k < download_count; k++) {
+            if (strcmp(items[items_to_download[k]].program, items[i].program) == 0) {
+                count_prog++;
+            }
+        }
+        if (count_prog >= PODCAST_MAX_RECENT_PER_PROGRAM) {
+            ESP_LOGD(TAG, "Ignorando '%s' (limite de %d episodios recentes atingido para '%s')",
+                     items[i].filename, PODCAST_MAX_RECENT_PER_PROGRAM, items[i].program);
+            continue;
         }
 
         items_to_download[download_count] = i;
