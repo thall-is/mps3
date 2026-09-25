@@ -1,98 +1,119 @@
 #ifndef MENU_H
 #define MENU_H
 
+/**
+ * @file menu.h
+ * @brief Registro Central e Despachante Polimórfico de Menus do Sistema
+ *
+ * Fornece um barramento desacoplado para registro dos itens navegáveis no
+ * carrossel principal (Player, WiFi, Conf, USB, Game). Cada componente registra
+ * seus callbacks de ciclo de vida (`on_select`, `is_active`, `draw_status`,
+ * `request_exit`, etc.), permitindo que a `display_task` e a `touch_task` despachem
+ * eventos genericamente.
+ */
+
 #include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// =============================================================================
-// Registro central do menu principal (Player, WiFi, Conf, USB, ...).
-//
-// Cada função do menu (existente ou nova) vive no seu próprio componente e
-// só precisa preencher um menu_item_t e chamar menu_register() UMA VEZ, no
-// boot (ver a seção "Registro do menu principal" em src/main.c). A partir
-// daí, ninguém mais no firmware precisa saber que aquele item existe:
-// touch_input.c despacha seleção/saída genericamente, e main.c desenha a
-// tela de status ativa genericamente, ambos iterando sobre o que estiver
-// registrado aqui.
-//
-// A ÚNICA parte que continua manual ao adicionar um item novo é o ícone do
-// carrossel do menu principal (oled_display_show_main_menu) — é arte pixel
-// por pixel (posição do ícone + rótulos vizinhos), não dá pra generalizar
-// sem redesenhar os bitmaps. Tudo o mais (contagem de itens, despacho de
-// seleção, ciclo de vida de modos de tela cheia como USB/WiFi) é
-// automático.
-// =============================================================================
-
+/**
+ * @brief Estrutura que define um item registrável no menu do sistema.
+ */
 typedef struct {
-    const char *name; // só para logs/diagnóstico
+    const char *name; /**< Nome descritivo do item (para logs e auditoria). */
 
-    // Chamado quando o usuário confirma esse item no menu principal
-    // (joystick direita). NULL se o item não faz nada ao ser selecionado.
+    /** Callback invocado quando o usuário confirma o item (joystick Direita). */
     void (*on_select)(void);
 
-    // --- Modos de "tela cheia" (USB, WiFi, e futuros modos parecidos) ------
-    // Deixe os quatro abaixo como NULL se o item NÃO abre um modo de tela
-    // cheia próprio (ex.: "Conf" ainda não faz nada; "Player" só troca de
-    // tela dentro do próprio menu de lista, não é um modo separado).
-    bool (*is_active)(void);    // true enquanto o modo estiver rodando
-    bool (*poll)(void);         // chamado a cada ciclo do display_task
-                                 // enquanto is_active(); retorna true no
-                                 // ciclo exato em que o modo termina
-    void (*draw_status)(void);  // desenha a tela desse modo (chamado no
-                                 // lugar da lista/menu enquanto is_active())
-    void (*request_exit)(void); // pedido de saída manual (toque/joystick
-                                 // durante o modo) - seguro de chamar de
-                                 // qualquer task
-    void (*request_action)(void); // acao contextual enquanto ativo (ex: botao central)
-    void (*nav_up)(void);         // navegacao pra cima no modo ativo
-    void (*nav_down)(void);       // navegacao pra baixo no modo ativo
-    void (*nav_select)(void);     // selecao (joystick direita) no modo ativo
+    // Callbacks de ciclo de vida para modos de tela cheia (USB, WiFi, etc.)
+    bool (*is_active)(void);      /**< true enquanto o modo exclusivo estiver em execução. */
+    bool (*poll)(void);           /**< Chamado a cada ciclo da display_task; retorna true quando o modo finaliza. */
+    void (*draw_status)(void);    /**< Renderiza a tela gráfica personalizada do modo ativo. */
+    void (*request_exit)(void);   /**< Solicita encerramento limpo do modo ativo (seguro entre tasks). */
+    void (*request_action)(void); /**< Dispara ação contextual durante o modo (ex: clique central). */
+    void (*nav_up)(void);         /**< Navegação contextual para cima. */
+    void (*nav_down)(void);       /**< Navegação contextual para baixo. */
+    void (*nav_select)(void);     /**< Seleção contextual dentro do modo ativo. */
 } menu_item_t;
 
-#define MENU_MAX_ITEMS 8
+#define MENU_MAX_ITEMS 8 /**< Limite máximo de itens suportados no menu principal. */
 
-// Adiciona um item ao menu principal, na próxima posição livre. Chame
-// durante o boot, antes de touch_input_start() (ver main.c) - a ORDEM das
-// chamadas é a ordem visual do carrossel (índice 0, 1, 2...). "item" é
-// copiado internamente, não precisa sobreviver depois da chamada.
+/**
+ * @brief Registra um item no menu principal na próxima posição livre do carrossel.
+ *
+ * A ordem de registro no boot define a sequência visual dos itens (0, 1, 2...).
+ *
+ * @param[in] item Ponteiro para a estrutura com os dados e callbacks do menu.
+ */
 void menu_register(const menu_item_t *item);
 
-// Quantos itens estão registrados agora.
+/**
+ * @brief Retorna a quantidade de itens atualmente registrados no menu.
+ *
+ * @return Total de itens cadastrados.
+ */
 int menu_count(void);
 
-// Item na posição "index", ou NULL se fora do intervalo [0, menu_count()).
+/**
+ * @brief Obtém o ponteiro para o item na posição especificada.
+ *
+ * @param[in] index Índice do item (0 a menu_count()-1).
+ *
+ * @return Ponteiro constante para `menu_item_t` ou NULL se índice for inválido.
+ */
 const menu_item_t *menu_get(int index);
 
-// Chama o on_select() do item em "index", se existir. Não faz nada se
-// "index" estiver fora do intervalo ou o item não tiver on_select.
+/**
+ * @brief Dispara o callback `on_select()` do item correspondente ao índice fornecido.
+ *
+ * @param[in] index Posição do item no carrossel.
+ */
 void menu_select(int index);
 
-// true se algum item registrado estiver com is_active() == true agora.
+/**
+ * @brief Verifica se algum dos itens registrados está operando em modo de tela cheia exclusivo.
+ *
+ * @return true se algum item possui `is_active() == true`; false caso contrário.
+ */
 bool menu_any_active(void);
 
-// Faz poll() do item ativo no momento (se houver). Retorna true no exato
-// ciclo em que ele terminou (deixou de estar ativo). Não faz nada (e
-// retorna false) se nenhum item estiver ativo.
+/**
+ * @brief Executa o ciclo periódico de polling do item que está ativo no momento.
+ *
+ * @return true no ciclo exato em que o modo terminou; false caso contrário.
+ */
 bool menu_poll_active(void);
 
-// Desenha a tela do item ativo no momento (chama draw_status() dele, se
-// houver). Não faz nada se nenhum item estiver ativo.
+/**
+ * @brief Invoca a rotina de desenho de status do modo atualmente em foco.
+ */
 void menu_draw_active_status(void);
 
-// Pede pra sair do modo ativo no momento (toque/joystick durante um modo
-// de tela cheia) - delega pro request_exit() do item ativo, se houver.
+/**
+ * @brief Solicita a saída e fechamento do modo ativo no momento.
+ */
 void menu_request_exit_active(void);
 
-// Dispara a acao contextual do modo ativo no momento (ex: botao central)
-// delega pro request_action() do item ativo, se houver.
+/**
+ * @brief Dispara a ação de clique contextual do modo em execução.
+ */
 void menu_request_action_active(void);
 
-// Navegacao contextual dentro do modo ativo
+/**
+ * @brief Envia evento de navegação para cima ao modo ativo.
+ */
 void menu_nav_up_active(void);
+
+/**
+ * @brief Envia evento de navegação para baixo ao modo ativo.
+ */
 void menu_nav_down_active(void);
+
+/**
+ * @brief Envia evento de seleção/avanço ao modo ativo.
+ */
 void menu_nav_select_active(void);
 
 #ifdef __cplusplus

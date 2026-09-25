@@ -1,6 +1,15 @@
 #ifndef METADATA_EXTRACT_H
 #define METADATA_EXTRACT_H
 
+/**
+ * @file metadata_extract.h
+ * @brief Extrator de Metadados e Tags de Faixas Hi-Res
+ *
+ * Extrai tags ID3v1/ID3v2 (MP3/AAC), Vorbis Comment e blocos STREAMINFO (FLAC),
+ * cabeçalhos RIFF (WAV), calculando duração exata, taxa de amostragem, bit depth
+ * e taxa média de bytes para suporte a Seek em O(1).
+ */
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -9,43 +18,38 @@
 extern "C" {
 #endif
 
+/**
+ * @brief Estrutura que armazena os metadados extraídos de um arquivo de áudio.
+ */
 typedef struct {
-    char title[128];
-    char artist[64];
-    char album[64];
-    char format_name[16];      // "ALAC", "OPUS", "OGG", "M4A", etc.
-    uint32_t total_sec;        // 0 = duracao desconhecida
-    bool duration_is_estimate; // true = aproximada (tamanho/bitrate), nao exata
-    uint32_t sample_rate;      // taxa de amostragem em Hz
-    uint16_t bits_per_sample;  // bits por amostra (ex: 16, 24)
-    uint32_t bitrate;          // taxa de bits em bps
+    char title[128];            /**< Título da música (tag TIT2/TITLE ou vazio). */
+    char artist[64];            /**< Nome do artista (tag TPE1/ARTIST ou vazio). */
+    char album[64];             /**< Nome do álbum (tag TALB/ALBUM ou vazio). */
+    char format_name[16];       /**< Formato do arquivo (ex.: "FLAC", "MP3", "WAV", "OGG"). */
+    uint32_t total_sec;         /**< Duração total em segundos (0 = desconhecida). */
+    bool duration_is_estimate;  /**< true se a duração foi estimada por tamanho/bitrate. */
+    uint32_t sample_rate;       /**< Taxa de amostragem em Hz (ex.: 44100, 96000, 192000). */
+    uint16_t bits_per_sample;   /**< Resolução de bits (ex.: 16, 24 bits). */
+    uint32_t bitrate;           /**< Taxa de bits em bps. */
 
-    // Pra' seek rapido (ver audio_player_seek_to_fast() em audio_player.cpp):
-    // posicao em bytes de onde comecam os frames de audio de verdade
-    // (depois de ID3v2/blocos de metadados FLAC/cabecalho WAV) e uma
-    // media de bytes por segundo de audio a partir dali. Com os dois, da'
-    // pra' estimar um offset de bytes pra' qualquer instante da faixa e
-    // ir direto pra' la' com fseek, em vez de decodificar (e descartar)
-    // tudo desde o comeco - essencial pra' podcasts de horas.
-    // avg_byte_rate == 0 significa "sem estimativa" (qualquer coisa que falhou ao calcular)
-    uint64_t audio_data_offset;
-    uint32_t avg_byte_rate;
+    /**
+     * Offset em bytes onde começam os dados reais de áudio (após ID3v2/cabeçalhos)
+     * e média de bytes por segundo para salto rápido via fseek O(1).
+     */
+    uint64_t audio_data_offset; /**< Posição do primeiro frame de áudio útil no arquivo. */
+    uint32_t avg_byte_rate;     /**< Taxa média de bytes por segundo (0 = indisponível). */
 } track_metadata_t;
 
-// Le' as tags do arquivo (ID3v2 pra .mp3/.aac, VORBIS_COMMENT pra .flac) E
-// calcula a duracao total (exata quando da' - FLAC via STREAMINFO, MP3 via
-// cabecalho Xing/VBRI, WAV via tamanho do chunk "data" - ou estimada por
-// tamanho/bitrate quando nao da', ver duration_is_estimate). Campos sem
-// tag/info correspondente ficam como string vazia ("") ou 0, NUNCA lixo -
-// o chamador decide o fallback (ex: usar o nome do arquivo quando
-// title[0] == '\0').
-//
-// M4A (.m4a) ainda nao tem duracao/tags extraidas aqui - formato baseado
-// em atomos MP4, parser proprio nao implementado ainda; fica com
-// total_sec=0 e as tags vazias (fallback pro nome do arquivo).
-//
-// So' le' os primeiros KB do arquivo (onde essas tags/cabecalhos ficam) -
-// rapido, nao decodifica audio nenhum.
+/**
+ * @brief Lê os metadados e tags do arquivo de áudio especificado.
+ *
+ * Analisa os primeiros blocos do arquivo procurando tags ID3v2, blocos de metadados
+ * FLAC (STREAMINFO, VORBIS_COMMENT) ou chunks RIFF/WAV.
+ * Não decodifica o fluxo de áudio, operando em alta velocidade.
+ *
+ * @param[in]  abs_path Caminho absoluto do arquivo no sistema FatFS (ex: "/sdcard/musica.flac").
+ * @param[out] out      Ponteiro para a estrutura `track_metadata_t` a ser preenchida.
+ */
 void metadata_extract(const char *abs_path, track_metadata_t *out);
 
 #ifdef __cplusplus

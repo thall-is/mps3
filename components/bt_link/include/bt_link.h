@@ -1,14 +1,14 @@
 #ifndef BT_LINK_H
 #define BT_LINK_H
 
-// Ponte entre esta placa e o companheiro de Bluetooth (ESP32 classico,
-// projeto bt_companion) - fala o protocolo de components/uart_ctrl e
-// se registra no menu principal (ver menu.h) como mais um item, logo
-// apos o Wifi.
-//
-// A reproducao de audio Bluetooth roda em paralelo com a DAC local.
-// Sair da tela de status mantem o audio tocando continuamente.
-// Para desconectar ou parear, usa-se o botao central dentro da tela.
+/**
+ * @file bt_link.h
+ * @brief Ponte de Controle e Comunicação com o Co-Processador Bluetooth (ESP32)
+ *
+ * Gerencia a troca de comandos via UART (115200 bps, 8N1) com o co-processador
+ * dedicado `bt_companion` (transmissor Sony LDAC 24-bit / 96 kHz e SBC),
+ * sincronização de volume absoluto via AVRCP e controle de reset de hardware (GPIO 12).
+ */
 
 #include <stdint.h>
 
@@ -16,17 +16,29 @@
 extern "C" {
 #endif
 
-// Inicializa a UART de controle com o companheiro e registra o
-// callback de mudanca de taxa de amostragem no i2s_output.
+/**
+ * @brief Inicializa a UART de controle inter-MCU e registra callbacks de amostragem.
+ *
+ * Configura o canal UART1 com o co-processador e monitora mudanças de taxa de amostragem
+ * no driver I2S para informar o reamostrador do co-processador.
+ */
 void bt_link_init(void);
 
-// Registra o item "Bluetooth" no menu principal.
+/**
+ * @brief Registra a entrada "Bluetooth" no menu carrossel principal do sistema.
+ */
 void bt_link_register_menu_entry(void);
 
-// Fornece um pulso de reset no pino EN do companheiro
+/**
+ * @brief Gera um pulso de reset em nível baixo no pino EN (GPIO 12) do co-processador.
+ */
 void bt_link_reset_companion(void);
 
-// Envia comando de volume absoluto ao companheiro (0-100%)
+/**
+ * @brief Envia comando de volume absoluto ao co-processador para sincronização AVRCP.
+ *
+ * @param[in] volume_percent Nível de volume em porcentagem (0 a 100%).
+ */
 void bt_link_send_volume(uint8_t volume_percent);
 
 #ifdef __cplusplus
@@ -34,4 +46,3 @@ void bt_link_send_volume(uint8_t volume_percent);
 #endif
 
 #endif // BT_LINK_H
-

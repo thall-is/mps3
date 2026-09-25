@@ -1,0 +1,47 @@
+# Doxyfile para o projeto mps3 (Digital Audio Player)
+# Formato padrão Doxygen / ESP-IDF
+
+PROJECT_NAME           = "mps3 Digital Audio Player"
+PROJECT_NUMBER         = "2.0 (Dual-Core / Dual-MCU)"
+PROJECT_BRIEF          = "Player de Áudio Digital Hi-Res 24-bit / 192 kHz com Sony LDAC"
+OUTPUT_DIRECTORY       = "docs/doxygen"
+CREATE_SUBDIRS         = NO
+ALLOW_UNICODE_NAMES    = YES
+OUTPUT_LANGUAGE        = Portuguese
+BRIEF_MEMBER_DESC      = YES
+REPEAT_BRIEF           = YES
+ALWAYS_DETAILED_SEC    = NO
+FULL_PATH_NAMES        = NO
+OPTIMIZE_OUTPUT_FOR_C  = YES
+TYPEDEF_HIDES_STRUCT   = NO
+
+# Entradas e Varredura
+INPUT                  = components espidf/main README.md docs
+INPUT_ENCODING         = UTF-8
+FILE_PATTERNS          = *.c *.cpp *.h *.md
+RECURSIVE              = YES
+EXCLUDE                = build espidf/build managed_components espidf/managed_components components/u8g2 components/ldac_enc/vendor components/esp_audio_codec
+EXCLUDE_PATTERNS       = */build/* */.git/* */__pycache__/*
+
+# Extração
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+CASE_SENSE_NAMES       = NO
+
+# Saídas
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_FILE_EXTENSION    = .html
+GENERATE_LATEX         = NO
+GENERATE_RTF           = NO
+GENERATE_MAN           = NO
+GENERATE_XML           = NO
+
+# Diagramas (habilitado se graphviz/dot estiver disponível)
+HAVE_DOT               = NO
+CLASS_DIAGRAMS         = YES
+

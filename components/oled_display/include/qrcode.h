@@ -6,90 +6,103 @@
  *
  * Copyright (c) 2017 Richard Moore     (https://github.com/ricmoo/QRCode)
  * Copyright (c) 2017 Project Nayuki    (https://www.nayuki.io/page/qr-code-generator-library)
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
  */
-
-/**
- *  Special thanks to Nayuki (https://www.nayuki.io/) from which this library was
- *  heavily inspired and compared against.
- *
- *  See: https://github.com/nayuki/QR-Code-generator/tree/master/cpp
- */
-
 
 #ifndef __QRCODE_H_
 #define __QRCODE_H_
 
-#include <stdbool.h>
+/**
+ * @file qrcode.h
+ * @brief Gerador e Codificador de QR Code Monocromático 2D
+ *
+ * Biblioteca leve para geração de matrizes de QR Code diretamente na memória,
+ * com suporte a níveis de correção de erro (ECC Low, Medium, Quartile, High)
+ * e conversão direta para pixels no display OLED SSD1306.
+ */
 
+#include <stdbool.h>
 #include <stdint.h>
 
-
 // QR Code Format Encoding
-#define MODE_NUMERIC        0
-#define MODE_ALPHANUMERIC   1
-#define MODE_BYTE           2
-
+#define MODE_NUMERIC        0 /**< Modo numérico (apenas dígitos 0-9). */
+#define MODE_ALPHANUMERIC   1 /**< Modo alfanumérico (A-Z, 0-9, espaço e símbolos). */
+#define MODE_BYTE           2 /**< Modo binário/UTF-8 (qualquer caractere de 8 bits). */
 
 // Error Correction Code Levels
-#define ECC_LOW            0
-#define ECC_MEDIUM         1
-#define ECC_QUARTILE       2
-#define ECC_HIGH           3
+#define ECC_LOW            0 /**< Nível de correção L (~7% dos dados recuperáveis). */
+#define ECC_MEDIUM         1 /**< Nível de correção M (~15% dos dados recuperáveis). */
+#define ECC_QUARTILE       2 /**< Nível de correção Q (~25% dos dados recuperáveis). */
+#define ECC_HIGH           3 /**< Nível de correção H (~30% dos dados recuperáveis). */
 
-
-// If set to non-zero, this library can ONLY produce QR codes at that version
-// This saves a lot of dynamic memory, as the codeword tables are skipped
 #ifndef LOCK_VERSION
 #define LOCK_VERSION       0
 #endif
 
-
+/**
+ * @brief Estrutura de estado de uma matriz de QR Code gerada.
+ */
 typedef struct QRCode {
-    uint8_t version;
-    uint8_t size;
-    uint8_t ecc;
-    uint8_t mode;
-    uint8_t mask;
-    uint8_t *modules;
+    uint8_t version;     /**< Versão do QR Code (1 a 40). */
+    uint8_t size;        /**< Dimensão da matriz (size x size módulos). */
+    uint8_t ecc;         /**< Nível de correção de erro configurado. */
+    uint8_t mode;        /**< Modo de codificação utilizado. */
+    uint8_t mask;        /**< Padrão de máscara aplicada. */
+    uint8_t *modules;    /**< Ponteiro para o buffer de bytes onde os módulos estão armazenados. */
 } QRCode;
-
 
 #ifdef __cplusplus
 extern "C"{
-#endif  /* __cplusplus */
+#endif
 
-
-
+/**
+ * @brief Calcula a quantidade necessária de bytes para o buffer de módulos de uma dada versão.
+ *
+ * @param[in] version Versão do QR Code (1 a 40).
+ *
+ * @return Número de bytes necessários para alocação do array `modules`.
+ */
 uint16_t qrcode_getBufferSize(uint8_t version);
 
+/**
+ * @brief Inicializa e codifica uma string de texto/URL em uma matriz QR Code.
+ *
+ * @param[out] qrcode  Ponteiro para a estrutura `QRCode` a ser preenchida.
+ * @param[in]  modules Buffer de bytes previamente alocado com tamanho `qrcode_getBufferSize(version)`.
+ * @param[in]  version Versão do código (1 a 40).
+ * @param[in]  ecc     Nível de correção de erro (`ECC_LOW`, `ECC_MEDIUM`, `ECC_QUARTILE`, `ECC_HIGH`).
+ * @param[in]  data    String null-terminated a ser codificada (ex: "http://mps3.local" ou dados Wi-Fi).
+ *
+ * @return 0 em caso de sucesso; < 0 se o texto exceder a capacidade da versão especificada.
+ */
 int8_t qrcode_initText(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8_t ecc, const char *data);
+
+/**
+ * @brief Inicializa e codifica um payload binário arbitrário em uma matriz QR Code.
+ *
+ * @param[out] qrcode  Ponteiro para a estrutura `QRCode` de saída.
+ * @param[in]  modules Buffer de bytes alocado para os módulos.
+ * @param[in]  version Versão do QR Code (1 a 40).
+ * @param[in]  ecc     Nível de correção de erro.
+ * @param[in]  data    Ponteiro para os bytes a serem codificados.
+ * @param[in]  length  Quantidade de bytes do payload.
+ *
+ * @return 0 em caso de sucesso; < 0 se o payload exceder a capacidade da versão.
+ */
 int8_t qrcode_initBytes(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8_t ecc, uint8_t *data, uint16_t length);
 
+/**
+ * @brief Consulta o valor de um módulo (pixel) específico na matriz do QR Code.
+ *
+ * @param[in] qrcode Ponteiro para a estrutura `QRCode` inicializada.
+ * @param[in] x      Coordenada horizontal do módulo (0 a size-1).
+ * @param[in] y      Coordenada vertical do módulo (0 a size-1).
+ *
+ * @return true se o pixel/módulo estiver aceso (preto); false se apagado (branco).
+ */
 bool qrcode_getModule(QRCode *qrcode, uint8_t x, uint8_t y);
-
-
 
 #ifdef __cplusplus
 }
-#endif  /* __cplusplus */
-
+#endif
 
 #endif  /* __QRCODE_H_ */
