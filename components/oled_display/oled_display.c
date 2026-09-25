@@ -2650,3 +2650,77 @@ void oled_display_show_wifi_qr(const char *ssid, const char *pass,
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);
 }
+
+void oled_display_show_clock(const rtc_clock_info_t *info)
+{
+    if (!s_ready) return;
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    if (!info || !info->rtc_ok) {
+        u8g2_SetFont(&s_u8g2, u8g2_font_profont12_tr);
+        u8g2_DrawStr(&s_u8g2, 12, 11, "RELOGIO RTC DS3231");
+        u8g2_DrawLine(&s_u8g2, 0, 14, 127, 14);
+
+        u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+        u8g2_DrawStr(&s_u8g2, 6, 32, "MODULO NAO DETECTADO");
+        u8g2_SetFont(&s_u8g2, u8g2_font_tom_thumb_4x6_t_all);
+        u8g2_DrawStr(&s_u8g2, 16, 46, "I2C SDA:10 SCL:9 (0x68)");
+        u8g2_DrawStr(&s_u8g2, 22, 58, "[ESQ] Voltar ao Menu");
+
+        apply_brightness_if_needed();
+        u8g2_SendBuffer(&s_u8g2);
+        return;
+    }
+
+    // Cabecalho
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont11_tr);
+    u8g2_DrawStr(&s_u8g2, 4, 10, "RELOGIO RTC");
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    u8g2_DrawStr(&s_u8g2, 76, 9, "TCXO +/-2ppm");
+    u8g2_DrawLine(&s_u8g2, 0, 12, 127, 12);
+
+    // Horario Principal: HH:MM:SS
+    char hms_str[16];
+    snprintf(hms_str, sizeof(hms_str), "%02d:%02d:%02d", info->hour, info->min, info->sec);
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont17_tr);
+    u8g2_DrawStr(&s_u8g2, 14, 30, hms_str);
+
+    // Milissegundos / Fracoes de segundo: .mmm
+    char ms_str[8];
+    snprintf(ms_str, sizeof(ms_str), ".%03d", info->millis);
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    u8g2_DrawStr(&s_u8g2, 88, 30, ms_str);
+
+    // Data completa: DIA, DD/MM/AAAA
+    static const char *wdays[] = {"DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SAB"};
+    char date_str[32];
+    snprintf(date_str, sizeof(date_str), "%s, %02d/%02d/%04d",
+             wdays[info->wday % 7], info->day, info->month, info->year);
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    int date_w = u8g2_GetStrWidth(&s_u8g2, date_str);
+    int date_x = (128 - date_w) / 2;
+    u8g2_DrawStr(&s_u8g2, date_x, 44, date_str);
+
+    // Linha divisoria do rodape
+    u8g2_DrawLine(&s_u8g2, 0, 48, 127, 48);
+
+    // Telemetria do TCXO: Temperatura com resolucao maxima nativa de 0.25 C
+    char temp_str[24];
+    snprintf(temp_str, sizeof(temp_str), "TEMP: %.2f C", info->temp_c);
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    u8g2_DrawStr(&s_u8g2, 4, 56, temp_str);
+
+    // Status da bateria do RTC / OSF
+    if (info->osc_stopped) {
+        u8g2_DrawStr(&s_u8g2, 78, 56, "BAT: AJUSTAR!");
+    } else {
+        u8g2_DrawStr(&s_u8g2, 88, 56, "BAT: OK");
+    }
+
+    // Dica de saida
+    u8g2_DrawStr(&s_u8g2, 36, 63, "[ESQ] Voltar");
+
+    apply_brightness_if_needed();
+    u8g2_SendBuffer(&s_u8g2);
+}

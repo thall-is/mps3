@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
 
 static const char *TAG = "ds3231";
 
@@ -230,6 +231,96 @@ esp_err_t rtc_ds3231_sync_system_time(void)
     char buf[64];
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_val);
     ESP_LOGI(TAG, "Horario do sistema POSIX sincronizado com RTC: %s", buf);
+    return ESP_OK;
+}
+
+esp_err_t rtc_ds3231_get_clock_info(rtc_clock_info_t *info)
+{
+    if (!info) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(info, 0, sizeof(rtc_clock_info_t));
+
+    if (!s_available || !s_rtc_dev) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    static int s_last_sec = -1;
+    static int64_t s_last_tick_us = 0;
+
+    // Le registradores de tempo (0x00 a 0x06)
+    uint8_t reg_addr = 0x00;
+    uint8_t raw[7] = {0};
+    esp_err_t err = i2c_master_transmit_receive(s_rtc_dev, &reg_addr, 1, raw, 7, 100);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    int sec = bcd_to_dec(raw[0] & 0x7F);
+    int min = bcd_to_dec(raw[1] & 0x7F);
+    int hour;
+    if (raw[2] & 0x40) {
+        hour = bcd_to_dec(raw[2] & 0x1F);
+        if (raw[2] & 0x20) {
+            if (hour < 12) hour += 12;
+        } else {
+            if (hour == 12) hour = 0;
+        }
+    } else {
+        hour = bcd_to_dec(raw[2] & 0x3F);
+    }
+
+    int wday = (raw[3] & 0x07) - 1;
+    if (wday < 0) wday = 0;
+    int day = bcd_to_dec(raw[4] & 0x3F);
+    int month = bcd_to_dec(raw[5] & 0x1F);
+    int year_2digit = bcd_to_dec(raw[6]);
+    bool century = (raw[5] & 0x80) != 0;
+    int year = 2000 + year_2digit + (century ? 100 : 0);
+
+    int64_t now_us = esp_timer_get_time();
+    if (sec != s_last_sec) {
+        s_last_sec = sec;
+        s_last_tick_us = now_us;
+    }
+
+    int millis = 0;
+    if (s_last_tick_us > 0) {
+        int64_t delta_ms = (now_us - s_last_tick_us) / 1000;
+        if (delta_ms < 0) delta_ms = 0;
+        if (delta_ms > 999) delta_ms = 999;
+        millis = (int)delta_ms;
+    }
+
+    // Le temperatura (0x11 e 0x12)
+    float temp_c = 0.0f;
+    uint8_t temp_reg = 0x11;
+    uint8_t temp_raw[2] = {0};
+    if (i2c_master_transmit_receive(s_rtc_dev, &temp_reg, 1, temp_raw, 2, 50) == ESP_OK) {
+        int8_t msb = (int8_t)temp_raw[0];
+        uint8_t lsb = (uint8_t)(temp_raw[1] >> 6);
+        temp_c = (float)msb + ((float)lsb * 0.25f);
+    }
+
+    // Le status (0x0F) para verificar Oscillator Stop Flag (OSF)
+    bool osc_stopped = false;
+    uint8_t stat_reg = 0x0F;
+    uint8_t stat_val = 0;
+    if (i2c_master_transmit_receive(s_rtc_dev, &stat_reg, 1, &stat_val, 1, 50) == ESP_OK) {
+        osc_stopped = (stat_val & 0x80) != 0;
+    }
+
+    info->hour = hour;
+    info->min = min;
+    info->sec = sec;
+    info->millis = millis;
+    info->day = day;
+    info->month = month;
+    info->year = year;
+    info->wday = wday;
+    info->temp_c = temp_c;
+    info->rtc_ok = true;
+    info->osc_stopped = osc_stopped;
     return ESP_OK;
 }
 

@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include "esp_err.h"
 #include "audio_player.h"
+#include "rtc_ds3231.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -350,6 +351,16 @@ void oled_display_show_podcast_sync(const char *program, const char *title,
  */
 void oled_display_show_wifi_qr(const char *ssid, const char *pass,
                                const char *tag_label, int cur_idx, int total_idx);
+
+/**
+ * @brief Exibe a tela de relógio em tempo real com telemetria direta do RTC DS3231.
+ *
+ * Apresenta horas, minutos, segundos com resolução de frações/milissegundos,
+ * data completa, dia da semana e temperatura interna do TCXO com precisão nativa de 0,25 °C.
+ *
+ * @param[in] info Ponteiro para a estrutura de telemetria do RTC (`rtc_clock_info_t`).
+ */
+void oled_display_show_clock(const rtc_clock_info_t *info);
 
 #ifdef __cplusplus
 }

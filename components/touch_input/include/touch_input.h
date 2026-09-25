@@ -57,6 +57,10 @@ typedef enum {
     UI_MODE_SORT        = 15, /**< Menu de seleção de ordenação (Nome vs Data). */
     UI_MODE_WIFI_NETS   = 16, /**< Visualizador de redes Wi-Fi e QR Code. */
     UI_MODE_DEEP_SLEEP  = 17, /**< Menu de configuração de suspensão profunda (Deep Sleep). */
+    UI_MODE_RTC_CLOCK   = 18, /**< Tela de relógio de alta precisão e telemetria do RTC DS3231. */
+    UI_MODE_CONF_AUDIO   = 19, /**< Submenu de configurações de áudio (Volume, Balanço, EQ, Ordenar). */
+    UI_MODE_CONF_DISPLAY = 20, /**< Submenu de configurações de display e LED (Tela, LED RGB). */
+    UI_MODE_CONF_SYSTEM  = 21, /**< Submenu de configurações de sistema (Relógio RTC, Deep Sleep, Wi-Fi). */
 } ui_mode_t;
 
 /**

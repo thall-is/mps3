@@ -2086,6 +2086,29 @@ esp_err_t rtc_ds3231_sync_system_time(void);
 
 ---
 
+### - [x] `rtc_ds3231_get_clock_info()`
+
+```c
+esp_err_t rtc_ds3231_get_clock_info(rtc_clock_info_t *info);
+```
+
+**Descrição Técnica:**  
+@brief Obtém data, hora de alta resolução (com milissegundos) e telemetria de temperatura do DS3231. Realiza a leitura direta dos registradores do RTC via I2C, rastreia a transição do segundo e interpola os milissegundos para atualização fluida do relógio na interface gráfica. @param[out] info Ponteiro para estrutura rtc_clock_info_t que receberá os dados. @return ESP_OK se lido com sucesso; código de erro caso contrário.
+
+**Parâmetros:**  
+- `rtc_clock_info_t *info`: Ponteiro para a estrutura que recebe hora, minuto, segundo, milissegundos, data e temperatura.
+
+**Retorno:**  
+- `esp_err_t`: `ESP_OK` em caso de sucesso; código de erro `ESP_ERR_*` em caso de falha.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Invocada pela tarefa de interface (`display_task` no Core 0) a cada quadro de renderização.
+- **Hardware Envolvido:** Barramento I2C mestre (GPIO 10 SDA, GPIO 9 SCL) operando com o RTC DS3231 (0x68).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
 ## 📁 Bluetooth Link - Co-processador & LDAC
 
 - **Cabeçalho:** [`components/bt_link/include/bt_link.h`](components/bt_link/include/bt_link.h)
@@ -3541,6 +3564,29 @@ void oled_display_show_wifi_qr(const char *ssid, const char *pass, const char *t
 - `const char *tag_label`: Parâmetro de entrada/saída para a operação.
 - `int cur_idx`: Parâmetro de entrada/saída para a operação.
 - `int total_idx`: Parâmetro de entrada/saída para a operação.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 (`display_task`, prioridade 3). Sincronizado com mutex de barramento I2C.
+- **Hardware Envolvido:** Barramento I2C Mestre (SDA GPIO 10, SCL GPIO 9) operando a 400 kHz conectado ao display SSD1306 (128x64 pixels).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_show_clock()`
+
+```c
+void oled_display_show_clock(const rtc_clock_info_t *info);
+```
+
+**Descrição Técnica:**  
+@brief Exibe a tela de relógio em tempo real com telemetria direta do RTC DS3231. Apresenta horas, minutos, segundos com resolução de frações/milissegundos, data completa, dia da semana e temperatura interna do TCXO com precisão nativa de 0,25 °C. @param[in] info Ponteiro para a estrutura de telemetria do RTC (`rtc_clock_info_t`).
+
+**Parâmetros:**  
+- `const rtc_clock_info_t *info`: Estrutura com os campos de tempo, milissegundos, data e temperatura.
 
 **Retorno:**  
 - `void`: Nenhum valor retornado.

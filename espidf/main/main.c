@@ -88,15 +88,25 @@ static void display_task(void *arg)
                 oled_display_set_power_save(true);
                 s_was_sleeping = true;
             }
+            ui_mode_t cur_ui_mode = touch_input_get_mode();
+            bool is_usb_mode = (cur_ui_mode == UI_MODE_USB_MSC || cur_ui_mode == UI_MODE_USB_DAC || cur_ui_mode == UI_MODE_USB_PROMPT);
+
             // Avalia estado do player e comuta CPU para perfil de repouso (ex: 80 MHz para MP3/pausado)
             audio_player_get_state(&state);
             bool wifi_active = (wifi_transfer_is_active() && wifi_transfer_is_transferring()) || podcast_sync_is_busy();
-            pwr_governor_update(false, wifi_active, audio_player_is_seeking(), state.playing, state.sample_rate);
+
+            if (is_usb_mode) {
+                // Em modos USB (DAC, Mass Storage ou Prompt), a CPU deve permanecer ativa e em 160 MHz
+                // para manter TinyUSB, descritores DMA e I2S operando sem jitter ou perda de pacotes.
+                pwr_governor_set_cpu_freq(PWR_FREQ_160MHZ);
+            } else {
+                pwr_governor_update(false, wifi_active, audio_player_is_seeking(), state.playing, state.sample_rate);
+            }
 
             // Gerenciamento de inatividade prolongada para Deep Sleep
             uint32_t ds_timeout_ms = touch_input_get_deepsleep_ms();
             uint32_t last_act_ms = touch_input_get_last_activity_ms();
-            if (ds_timeout_ms > 0 && !state.playing && !wifi_active && !podcast_sync_is_busy()) {
+            if (!is_usb_mode && !menu_any_active() && ds_timeout_ms > 0 && !state.playing && !wifi_active && !podcast_sync_is_busy()) {
                 if (now >= last_act_ms && (now - last_act_ms) >= ds_timeout_ms) {
                     ESP_LOGI(TAG, "Inatividade atingiu tempo limite (%u s). Entrando em Deep Sleep...", (unsigned)(ds_timeout_ms / 1000));
                     pwr_governor_enter_deep_sleep();
@@ -135,7 +145,8 @@ static void display_task(void *arg)
         uint32_t ds_timeout_ms = touch_input_get_deepsleep_ms();
         uint32_t last_act_ms = touch_input_get_last_activity_ms();
         if (ds_timeout_ms > 0 && !state.playing && !wifi_active && !podcast_sync_is_busy() &&
-            cur_ui_mode != UI_MODE_USB_MSC && cur_ui_mode != UI_MODE_USB_DAC && cur_ui_mode != UI_MODE_USB_PROMPT) {
+            cur_ui_mode != UI_MODE_USB_MSC && cur_ui_mode != UI_MODE_USB_DAC && cur_ui_mode != UI_MODE_USB_PROMPT &&
+            !menu_any_active()) {
             if (now >= last_act_ms && (now - last_act_ms) >= ds_timeout_ms) {
                 ESP_LOGI(TAG, "Inatividade prolongada atingida (%u s). Entrando em Deep Sleep...", (unsigned)(ds_timeout_ms / 1000));
                 pwr_governor_enter_deep_sleep();
@@ -217,8 +228,21 @@ static void display_task(void *arg)
                 oled_display_show_list(names, count, touch_input_get_list_cursor(), &state);
             }
                 } else if (touch_input_get_mode() == UI_MODE_CONF_MENU) {
-            const char* conf_items[] = {"Volume", "Balanco L/R", "Equalizador", "LED RGB", "Tela", "Ordenar", "Redes Wi-Fi", "Deep Sleep"};
-            oled_display_show_list(conf_items, 8, touch_input_get_list_cursor(), &state);
+            const char* conf_items[] = {"Config. de Audio", "Display e LED", "Sistema e Energia"};
+            oled_display_show_list(conf_items, 3, touch_input_get_list_cursor(), &state);
+        } else if (touch_input_get_mode() == UI_MODE_CONF_AUDIO) {
+            const char* audio_items[] = {"Volume", "Balanco L/R", "Equalizador", "Ordenar Faixas"};
+            oled_display_show_list(audio_items, 4, touch_input_get_list_cursor(), &state);
+        } else if (touch_input_get_mode() == UI_MODE_CONF_DISPLAY) {
+            const char* disp_items[] = {"Brilho e Tela", "LED RGB"};
+            oled_display_show_list(disp_items, 2, touch_input_get_list_cursor(), &state);
+        } else if (touch_input_get_mode() == UI_MODE_CONF_SYSTEM) {
+            const char* sys_items[] = {"Relogio RTC", "Deep Sleep", "Redes Wi-Fi"};
+            oled_display_show_list(sys_items, 3, touch_input_get_list_cursor(), &state);
+        } else if (touch_input_get_mode() == UI_MODE_RTC_CLOCK) {
+            rtc_clock_info_t clk_info;
+            rtc_ds3231_get_clock_info(&clk_info);
+            oled_display_show_clock(&clk_info);
         } else if (touch_input_get_mode() == UI_MODE_DEEP_SLEEP) {
             oled_display_show_deepsleep_cfg(touch_input_get_deepsleep_idx());
         } else if (touch_input_get_mode() == UI_MODE_WIFI_NETS) {

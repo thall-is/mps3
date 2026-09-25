@@ -90,6 +90,35 @@ esp_err_t rtc_ds3231_get_temperature(float *temp_c);
  */
 esp_err_t rtc_ds3231_sync_system_time(void);
 
+/**
+ * @brief Informações detalhadas de data, hora e telemetria lidas do RTC DS3231.
+ */
+typedef struct {
+    int hour;         /**< Horas (00 a 23). */
+    int min;          /**< Minutos (00 a 59). */
+    int sec;          /**< Segundos (00 a 59). */
+    int millis;       /**< Milissegundos decorridos do segundo atual (0 a 999 ms). */
+    int day;          /**< Dia do mês (01 a 31). */
+    int month;        /**< Mês (01 a 12). */
+    int year;         /**< Ano completo (ex: 2026). */
+    int wday;         /**< Dia da semana (0 = Domingo a 6 = Sábado). */
+    float temp_c;     /**< Temperatura interna do TCXO em °C (resolução nativa de 0,25 °C). */
+    bool rtc_ok;      /**< true se a comunicação I2C com o DS3231 teve sucesso. */
+    bool osc_stopped; /**< true se o bit OSF estiver ativo (troca de bateria / oscilador parado). */
+} rtc_clock_info_t;
+
+/**
+ * @brief Obtém data, hora de alta resolução (com milissegundos) e telemetria de temperatura do DS3231.
+ *
+ * Realiza a leitura direta dos registradores do RTC via I2C, rastreia a transição do segundo
+ * e interpola os milissegundos para atualização fluida do relógio na interface gráfica.
+ *
+ * @param[out] info Ponteiro para estrutura rtc_clock_info_t que receberá os dados.
+ *
+ * @return ESP_OK se lido com sucesso; código de erro caso contrário.
+ */
+esp_err_t rtc_ds3231_get_clock_info(rtc_clock_info_t *info);
+
 #ifdef __cplusplus
 }
 #endif

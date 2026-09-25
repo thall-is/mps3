@@ -119,6 +119,9 @@ static volatile uint32_t s_last_activity_ms = 0;
 static ui_mode_t s_mode = UI_MODE_LIST;
 static int s_list_cursor = 0;
 static int s_conf_cursor = 0;
+static int s_conf_audio_cursor = 0;
+static int s_conf_display_cursor = 0;
+static int s_conf_system_cursor = 0;
 static volatile bool s_locked = false;
 static volatile bool s_game_active = false;
 static TaskHandle_t s_display_task_handle = NULL;
@@ -141,6 +144,12 @@ int touch_input_get_list_cursor(void)
 {
     if (s_mode == UI_MODE_CONF_MENU) {
         return s_conf_cursor;
+    } else if (s_mode == UI_MODE_CONF_AUDIO) {
+        return s_conf_audio_cursor;
+    } else if (s_mode == UI_MODE_CONF_DISPLAY) {
+        return s_conf_display_cursor;
+    } else if (s_mode == UI_MODE_CONF_SYSTEM) {
+        return s_conf_system_cursor;
     }
     return s_list_cursor;
 }
@@ -484,11 +493,13 @@ static void touch_task(void *arg)
             (now - center_press_start) >= CENTER_LOCK_HOLD_MS) {
             center_long_fired = true;
             if (s_mode == UI_MODE_LED) {
-                s_mode = UI_MODE_CONF_MENU;
+                s_mode = UI_MODE_CONF_DISPLAY;
+                s_conf_display_cursor = 1;
                 rgb_led_save_nvs();
                 ESP_LOGI(TAG, "Saindo da configuracao de LED");
             } else if (s_mode == UI_MODE_TELA) {
-                s_mode = UI_MODE_CONF_MENU;
+                s_mode = UI_MODE_CONF_DISPLAY;
+                s_conf_display_cursor = 0;
                 nvs_handle_t h;
                 if (nvs_open("mps3_settings", NVS_READWRITE, &h) == ESP_OK) {
                     nvs_set_u8(h, "brightness", s_oled_brightness);
@@ -498,10 +509,14 @@ static void touch_task(void *arg)
                 }
                 ESP_LOGI(TAG, "Saindo da tela TELA via pressao longa");
             } else if (s_mode == UI_MODE_DEEP_SLEEP) {
-                s_mode = UI_MODE_CONF_MENU;
-                s_conf_cursor = 7;
+                s_mode = UI_MODE_CONF_SYSTEM;
+                s_conf_system_cursor = 1;
                 save_deepsleep_nvs();
                 ESP_LOGI(TAG, "Saindo da tela DEEP SLEEP via pressao longa");
+            } else if (s_mode == UI_MODE_RTC_CLOCK) {
+                s_mode = UI_MODE_CONF_SYSTEM;
+                s_conf_system_cursor = 0;
+                ESP_LOGI(TAG, "Saindo da tela RELOGIO RTC via pressao longa");
             } else if (s_mode == UI_MODE_EQ) {
                 s_mode = UI_MODE_EQ_PRESETS;
                 ESP_LOGI(TAG, "EQ bandas salvas - voltando para a lista de presets");
@@ -538,11 +553,53 @@ static void touch_task(void *arg)
                     // Nao fazemos a acao de clique curto
                 } else if (menu_any_active()) {
                     menu_request_action_active();
+                } else if (s_mode == UI_MODE_CONF_MENU) {
+                    if (s_conf_cursor == 0) {
+                        s_mode = UI_MODE_CONF_AUDIO;
+                        s_conf_audio_cursor = 0;
+                    } else if (s_conf_cursor == 1) {
+                        s_mode = UI_MODE_CONF_DISPLAY;
+                        s_conf_display_cursor = 0;
+                    } else if (s_conf_cursor == 2) {
+                        s_mode = UI_MODE_CONF_SYSTEM;
+                        s_conf_system_cursor = 0;
+                    }
+                } else if (s_mode == UI_MODE_CONF_AUDIO) {
+                    if (s_conf_audio_cursor == 0) {
+                        s_mode = UI_MODE_VOLUME;
+                    } else if (s_conf_audio_cursor == 1) {
+                        s_mode = UI_MODE_BALANCE;
+                    } else if (s_conf_audio_cursor == 2) {
+                        s_prev_mode_before_eq = UI_MODE_CONF_AUDIO;
+                        s_mode = UI_MODE_EQ_PRESETS;
+                        s_eq_preset_cursor = 0;
+                    } else if (s_conf_audio_cursor == 3) {
+                        s_mode = UI_MODE_SORT;
+                    }
+                } else if (s_mode == UI_MODE_CONF_DISPLAY) {
+                    if (s_conf_display_cursor == 0) {
+                        s_mode = UI_MODE_TELA;
+                        s_tela_cursor = 0;
+                    } else if (s_conf_display_cursor == 1) {
+                        s_mode = UI_MODE_LED;
+                        s_led_channel = 0;
+                    }
+                } else if (s_mode == UI_MODE_CONF_SYSTEM) {
+                    if (s_conf_system_cursor == 0) {
+                        s_mode = UI_MODE_RTC_CLOCK;
+                    } else if (s_conf_system_cursor == 1) {
+                        s_mode = UI_MODE_DEEP_SLEEP;
+                    } else if (s_conf_system_cursor == 2) {
+                        s_wifi_net_cursor = 0;
+                        s_mode = UI_MODE_WIFI_NETS;
+                    }
                 } else if (s_mode == UI_MODE_VOLUME || s_mode == UI_MODE_BALANCE) {
-                    s_mode = UI_MODE_CONF_MENU;
+                    s_mode = UI_MODE_CONF_AUDIO;
+                    s_conf_audio_cursor = (s_mode == UI_MODE_VOLUME) ? 0 : 1;
                     ESP_LOGI(TAG, "Saindo da tela de volume/balanco (botao central)");
                 } else if (s_mode == UI_MODE_TELA) {
-                    s_mode = UI_MODE_CONF_MENU;
+                    s_mode = UI_MODE_CONF_DISPLAY;
+                    s_conf_display_cursor = 0;
                     nvs_handle_t h;
                     if (nvs_open("mps3_settings", NVS_READWRITE, &h) == ESP_OK) {
                         nvs_set_u8(h, "brightness", s_oled_brightness);
@@ -552,10 +609,14 @@ static void touch_task(void *arg)
                     }
                     ESP_LOGI(TAG, "Saindo da tela TELA (botao central)");
                 } else if (s_mode == UI_MODE_DEEP_SLEEP) {
-                    s_mode = UI_MODE_CONF_MENU;
-                    s_conf_cursor = 7;
+                    s_mode = UI_MODE_CONF_SYSTEM;
+                    s_conf_system_cursor = 1;
                     save_deepsleep_nvs();
                     ESP_LOGI(TAG, "Saindo da tela DEEP SLEEP (botao central)");
+                } else if (s_mode == UI_MODE_RTC_CLOCK) {
+                    s_mode = UI_MODE_CONF_SYSTEM;
+                    s_conf_system_cursor = 0;
+                    ESP_LOGI(TAG, "Saindo da tela RELOGIO RTC (botao central)");
                 } else if (s_mode == UI_MODE_LED) {
                     rgb_led_toggle();
                     ESP_LOGI(TAG, "LED RGB alternado via botao central");
@@ -635,7 +696,8 @@ static void touch_task(void *arg)
                     audio_player_set_sort_mode(cur == SORT_MODE_NAME ? SORT_MODE_DATE : SORT_MODE_NAME);
 
                 } else if (s_mode == UI_MODE_WIFI_NETS) {
-                    s_mode = UI_MODE_CONF_MENU;
+                    s_mode = UI_MODE_CONF_SYSTEM;
+                    s_conf_system_cursor = 2;
 
                 } else if (s_mode == UI_MODE_TOP_SCREEN) {
                     if (s_top_cursor == 1) {
@@ -674,9 +736,40 @@ static void touch_task(void *arg)
         bool is_active_mode = menu_any_active() || podcast_sync_is_busy() || (s_mode == UI_MODE_USB_MSC) || (s_mode == UI_MODE_USB_DAC);
         if (is_active_mode) {
             if (menu_any_active()) {
+                static uint32_t s_menu_up_press_ms = 0;
+                static uint32_t s_menu_up_repeat_ms = 0;
+                static uint32_t s_menu_down_press_ms = 0;
+                static uint32_t s_menu_down_repeat_ms = 0;
+
+                bool up_fire = false;
                 if (joy_cur[JOY_UP] && !joy_prev[JOY_UP]) {
+                    s_menu_up_press_ms = now;
+                    s_menu_up_repeat_ms = now;
+                    up_fire = true;
+                } else if (joy_cur[JOY_UP]) {
+                    if ((now - s_menu_up_press_ms) >= JOY_REPEAT_INITIAL_MS &&
+                        (now - s_menu_up_repeat_ms) >= JOY_REPEAT_MS) {
+                        s_menu_up_repeat_ms = now;
+                        up_fire = true;
+                    }
+                }
+
+                bool down_fire = false;
+                if (joy_cur[JOY_DOWN] && !joy_prev[JOY_DOWN]) {
+                    s_menu_down_press_ms = now;
+                    s_menu_down_repeat_ms = now;
+                    down_fire = true;
+                } else if (joy_cur[JOY_DOWN]) {
+                    if ((now - s_menu_down_press_ms) >= JOY_REPEAT_INITIAL_MS &&
+                        (now - s_menu_down_repeat_ms) >= JOY_REPEAT_MS) {
+                        s_menu_down_repeat_ms = now;
+                        down_fire = true;
+                    }
+                }
+
+                if (up_fire) {
                     menu_nav_up_active();
-                } else if (joy_cur[JOY_DOWN] && !joy_prev[JOY_DOWN]) {
+                } else if (down_fire) {
                     menu_nav_down_active();
                 } else if (joy_cur[JOY_RIGHT] && !joy_prev[JOY_RIGHT]) {
                     menu_nav_select_active();
@@ -760,21 +853,28 @@ static void touch_task(void *arg)
                 last_interaction_ms = now;
                 switch (i) {
                                         case JOY_UP:
-                        if (s_mode == UI_MODE_USB_PROMPT && pressed_edge) {
+                        if (s_mode == UI_MODE_USB_PROMPT) {
                             s_list_cursor = (s_list_cursor == 0) ? 3 : (s_list_cursor - 1);
-                        } else if (s_mode == UI_MODE_CONF_MENU && pressed_edge) {
-                            s_conf_cursor = (s_conf_cursor == 0) ? 7 : (s_conf_cursor - 1);
-                        } else if (s_mode == UI_MODE_DEEP_SLEEP && pressed_edge) {
+                        } else if (s_mode == UI_MODE_CONF_MENU) {
+                            s_conf_cursor = (s_conf_cursor == 0) ? 2 : (s_conf_cursor - 1);
+                        } else if (s_mode == UI_MODE_CONF_AUDIO) {
+                            s_conf_audio_cursor = (s_conf_audio_cursor == 0) ? 3 : (s_conf_audio_cursor - 1);
+                        } else if (s_mode == UI_MODE_CONF_DISPLAY) {
+                            s_conf_display_cursor = (s_conf_display_cursor == 0) ? 1 : 0;
+                        } else if (s_mode == UI_MODE_CONF_SYSTEM) {
+                            s_conf_system_cursor = (s_conf_system_cursor == 0) ? 2 : (s_conf_system_cursor - 1);
+                        } else if (s_mode == UI_MODE_DEEP_SLEEP) {
                             if (s_deepsleep_idx > 0) s_deepsleep_idx--;
                             else s_deepsleep_idx = DEEPSLEEP_OPTIONS_COUNT - 1;
-                        } else if (s_mode == UI_MODE_WIFI_NETS && pressed_edge) {
+                        } else if (s_mode == UI_MODE_WIFI_NETS) {
                             int total_nets = 1 + wifi_transfer_get_known_count();
                             s_wifi_net_cursor = (s_wifi_net_cursor == 0) ? (total_nets - 1) : (s_wifi_net_cursor - 1);
                         } else if (s_mode == UI_MODE_SORT && pressed_edge) {
                             track_sort_mode_t cur = audio_player_get_sort_mode();
                             audio_player_set_sort_mode(cur == SORT_MODE_NAME ? SORT_MODE_DATE : SORT_MODE_NAME);
                         } else if (s_mode == UI_MODE_BALANCE && pressed_edge) {
-                            s_mode = UI_MODE_CONF_MENU;
+                            s_mode = UI_MODE_CONF_AUDIO;
+                            s_conf_audio_cursor = 1;
                         } else if (s_mode == UI_MODE_LED && pressed_edge) {
                             s_led_channel = (s_led_channel == 0) ? 2 : (s_led_channel - 1);
                         } else if (s_mode == UI_MODE_PLAYING && pressed_edge) {
@@ -788,10 +888,10 @@ static void touch_task(void *arg)
                             s_tela_cursor = (s_tela_cursor == 0) ? 1 : 0;
                         } else if (s_mode == UI_MODE_VOLUME) {
                             audio_player_adjust_volume(VOLUME_STEP_PERCENT);
-                        } else if (s_mode == UI_MODE_EQ_PRESETS && pressed_edge) {
+                        } else if (s_mode == UI_MODE_EQ_PRESETS) {
                             if (s_eq_preset_cursor > 0) s_eq_preset_cursor--;
                             else s_eq_preset_cursor = 9;
-                        } else if (s_mode == UI_MODE_KEYBOARD && pressed_edge) {
+                        } else if (s_mode == UI_MODE_KEYBOARD) {
                             if (!s_kbd_confirming && s_kbd_grid_y > 0) {
                                 s_kbd_grid_y--;
                                 int max_x = (s_kbd_grid_y == 1) ? 8 : 9;
@@ -813,20 +913,27 @@ static void touch_task(void *arg)
                         }
                         break;
                     case JOY_DOWN:
-                        if (s_mode == UI_MODE_USB_PROMPT && pressed_edge) {
+                        if (s_mode == UI_MODE_USB_PROMPT) {
                             s_list_cursor = (s_list_cursor + 1) % 4;
-                        } else if (s_mode == UI_MODE_CONF_MENU && pressed_edge) {
-                            s_conf_cursor = (s_conf_cursor + 1) % 8;
-                        } else if (s_mode == UI_MODE_DEEP_SLEEP && pressed_edge) {
+                        } else if (s_mode == UI_MODE_CONF_MENU) {
+                            s_conf_cursor = (s_conf_cursor + 1) % 3;
+                        } else if (s_mode == UI_MODE_CONF_AUDIO) {
+                            s_conf_audio_cursor = (s_conf_audio_cursor + 1) % 4;
+                        } else if (s_mode == UI_MODE_CONF_DISPLAY) {
+                            s_conf_display_cursor = (s_conf_display_cursor + 1) % 2;
+                        } else if (s_mode == UI_MODE_CONF_SYSTEM) {
+                            s_conf_system_cursor = (s_conf_system_cursor + 1) % 3;
+                        } else if (s_mode == UI_MODE_DEEP_SLEEP) {
                             s_deepsleep_idx = (s_deepsleep_idx + 1) % DEEPSLEEP_OPTIONS_COUNT;
-                        } else if (s_mode == UI_MODE_WIFI_NETS && pressed_edge) {
+                        } else if (s_mode == UI_MODE_WIFI_NETS) {
                             int total_nets = 1 + wifi_transfer_get_known_count();
                             s_wifi_net_cursor = (s_wifi_net_cursor + 1) % total_nets;
                         } else if (s_mode == UI_MODE_SORT && pressed_edge) {
                             track_sort_mode_t cur = audio_player_get_sort_mode();
                             audio_player_set_sort_mode(cur == SORT_MODE_NAME ? SORT_MODE_DATE : SORT_MODE_NAME);
                         } else if (s_mode == UI_MODE_BALANCE && pressed_edge) {
-                            s_mode = UI_MODE_CONF_MENU;
+                            s_mode = UI_MODE_CONF_AUDIO;
+                            s_conf_audio_cursor = 1;
                         } else if (s_mode == UI_MODE_LED && pressed_edge) {
                             s_led_channel = (s_led_channel + 1) % 3;
                         } else if (s_mode == UI_MODE_TOP_SCREEN && pressed_edge) {
@@ -842,10 +949,10 @@ static void touch_task(void *arg)
                             s_tela_cursor = (s_tela_cursor == 0) ? 1 : 0;
                         } else if (s_mode == UI_MODE_VOLUME) {
                             audio_player_adjust_volume(-VOLUME_STEP_PERCENT);
-                        } else if (s_mode == UI_MODE_EQ_PRESETS && pressed_edge) {
+                        } else if (s_mode == UI_MODE_EQ_PRESETS) {
                             if (s_eq_preset_cursor < 9) s_eq_preset_cursor++;
                             else s_eq_preset_cursor = 0;
-                        } else if (s_mode == UI_MODE_KEYBOARD && pressed_edge) {
+                        } else if (s_mode == UI_MODE_KEYBOARD) {
                             if (!s_kbd_confirming && s_kbd_grid_y < 2) {
                                 s_kbd_grid_y++;
                                 int max_x = (s_kbd_grid_y == 1) ? 8 : 9;
@@ -877,15 +984,28 @@ static void touch_task(void *arg)
                         } else if (s_mode == UI_MODE_CONF_MENU && pressed_edge) {
                             s_mode = UI_MODE_LIST;
                             s_list_cursor = 3; // Retorna para "Conf" (indice 3) no menu principal
+                        } else if (s_mode == UI_MODE_CONF_AUDIO && pressed_edge) {
+                            s_mode = UI_MODE_CONF_MENU;
+                            s_conf_cursor = 0;
+                        } else if (s_mode == UI_MODE_CONF_DISPLAY && pressed_edge) {
+                            s_mode = UI_MODE_CONF_MENU;
+                            s_conf_cursor = 1;
+                        } else if (s_mode == UI_MODE_CONF_SYSTEM && pressed_edge) {
+                            s_mode = UI_MODE_CONF_MENU;
+                            s_conf_cursor = 2;
                         } else if (s_mode == UI_MODE_DEEP_SLEEP && pressed_edge) {
-                            s_mode = UI_MODE_CONF_MENU;
-                            s_conf_cursor = 7;
+                            s_mode = UI_MODE_CONF_SYSTEM;
+                            s_conf_system_cursor = 1;
                             save_deepsleep_nvs();
+                        } else if (s_mode == UI_MODE_RTC_CLOCK && pressed_edge) {
+                            s_mode = UI_MODE_CONF_SYSTEM;
+                            s_conf_system_cursor = 0;
                         } else if (s_mode == UI_MODE_WIFI_NETS && pressed_edge) {
-                            s_mode = UI_MODE_CONF_MENU;
-                            s_conf_cursor = 6; // Retorna para "Redes Wi-Fi" no menu Conf
+                            s_mode = UI_MODE_CONF_SYSTEM;
+                            s_conf_system_cursor = 2; // Retorna para "Redes Wi-Fi" no submenu Sistema
                         } else if (s_mode == UI_MODE_SORT && pressed_edge) {
-                            s_mode = UI_MODE_CONF_MENU;
+                            s_mode = UI_MODE_CONF_AUDIO;
+                            s_conf_audio_cursor = 3;
                         } else if (s_mode == UI_MODE_TELA && pressed_edge) {
                             if (s_tela_cursor == 0) {
                                 int next_idx = 0;
@@ -941,26 +1061,43 @@ static void touch_task(void *arg)
                     case JOY_RIGHT:
                         if (s_mode == UI_MODE_CONF_MENU && pressed_edge) {
                             if (s_conf_cursor == 0) {
-                                s_mode = UI_MODE_VOLUME;
+                                s_mode = UI_MODE_CONF_AUDIO;
+                                s_conf_audio_cursor = 0;
                             } else if (s_conf_cursor == 1) {
-                                s_mode = UI_MODE_BALANCE;
+                                s_mode = UI_MODE_CONF_DISPLAY;
+                                s_conf_display_cursor = 0;
                             } else if (s_conf_cursor == 2) {
-                                s_prev_mode_before_eq = UI_MODE_CONF_MENU;
+                                s_mode = UI_MODE_CONF_SYSTEM;
+                                s_conf_system_cursor = 0;
+                            }
+                        } else if (s_mode == UI_MODE_CONF_AUDIO && pressed_edge) {
+                            if (s_conf_audio_cursor == 0) {
+                                s_mode = UI_MODE_VOLUME;
+                            } else if (s_conf_audio_cursor == 1) {
+                                s_mode = UI_MODE_BALANCE;
+                            } else if (s_conf_audio_cursor == 2) {
+                                s_prev_mode_before_eq = UI_MODE_CONF_AUDIO;
                                 s_mode = UI_MODE_EQ_PRESETS;
                                 s_eq_preset_cursor = 0;
-                            } else if (s_conf_cursor == 3) {
-                                s_mode = UI_MODE_LED;
-                                s_led_channel = 0;
-                            } else if (s_conf_cursor == 4) {
+                            } else if (s_conf_audio_cursor == 3) {
+                                s_mode = UI_MODE_SORT;
+                            }
+                        } else if (s_mode == UI_MODE_CONF_DISPLAY && pressed_edge) {
+                            if (s_conf_display_cursor == 0) {
                                 s_mode = UI_MODE_TELA;
                                 s_tela_cursor = 0;
-                            } else if (s_conf_cursor == 5) {
-                                s_mode = UI_MODE_SORT;
-                            } else if (s_conf_cursor == 6) {
+                            } else if (s_conf_display_cursor == 1) {
+                                s_mode = UI_MODE_LED;
+                                s_led_channel = 0;
+                            }
+                        } else if (s_mode == UI_MODE_CONF_SYSTEM && pressed_edge) {
+                            if (s_conf_system_cursor == 0) {
+                                s_mode = UI_MODE_RTC_CLOCK;
+                            } else if (s_conf_system_cursor == 1) {
+                                s_mode = UI_MODE_DEEP_SLEEP;
+                            } else if (s_conf_system_cursor == 2) {
                                 s_wifi_net_cursor = 0;
                                 s_mode = UI_MODE_WIFI_NETS;
-                            } else if (s_conf_cursor == 7) {
-                                s_mode = UI_MODE_DEEP_SLEEP;
                             }
                         } else if (s_mode == UI_MODE_DEEP_SLEEP && pressed_edge) {
                             ESP_LOGI(TAG, "JOY_RIGHT: Forcando Deep Sleep imediato como teste de bancada...");
