@@ -806,41 +806,47 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     size_t content_len = req->content_len;
     progress_begin(display_name, content_len, idx, count, batch_total > 0 ? batch_total : (long long)content_len);
 
-    size_t buf_size = 16384;
+    size_t buf_size = 32768;
     char *buf = (char *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    char *io_buf = (char *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    if (!buf || !io_buf) {
-        if (buf) heap_caps_free(buf);
-        if (io_buf) heap_caps_free(io_buf);
-        buf_size = 4096;
+    if (!buf) {
+        buf_size = 16384;
         buf = (char *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        io_buf = (char *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     }
-    if (!buf || !io_buf) {
-        if (buf) heap_caps_free(buf);
-        if (io_buf) heap_caps_free(io_buf);
+    if (!buf) {
+        buf_size = 8192;
+        buf = (char *)malloc(buf_size);
+    }
+
+    size_t io_buf_size = 65536;
+    char *io_buf = (char *)heap_caps_malloc(io_buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!io_buf) {
+        io_buf_size = 16384;
+        io_buf = (char *)malloc(io_buf_size);
+    }
+    if (!buf) {
+        if (io_buf) free(io_buf);
         fclose(fp);
         remove(abs_path);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sem memoria para o buffer de upload");
         progress_end();
         return ESP_FAIL;
     }
-    setvbuf(fp, io_buf, _IOFBF, buf_size);
+    if (io_buf) {
+        setvbuf(fp, io_buf, _IOFBF, io_buf_size);
+    }
 
     size_t remaining = content_len;
     bool ok = true;
-    // Reenviar em HTTPD_SOCK_ERR_TIMEOUT e' esperado (o cliente pode
-    // pausar entre pacotes), mas sem um teto isso deixava o loop rodando
-    // pra' sempre se a conexao travasse (rede caiu sem RST, por exemplo) -
-    // a worker do httpd ficava presa indefinidamente numa unica
-    // transferencia. 100 timeouts CONSECUTIVOS (zerado a cada recv com
-    // sucesso) e' bastante folga pra' uma rede real lenta/instavel, sem
-    // deixar a conexao pendurada pra sempre.
     int consecutive_timeouts = 0;
     const int max_consecutive_timeouts = 100;
+    uint32_t last_prog_update_ms = 0;
+    size_t buf_fill = 0;
+
     while (remaining > 0) {
-        int to_read = remaining < buf_size ? (int)remaining : (int)buf_size;
-        int received = httpd_req_recv(req, buf, to_read);
+        int to_read = (int)(buf_size - buf_fill);
+        if (to_read > (int)remaining) to_read = (int)remaining;
+
+        int received = httpd_req_recv(req, buf + buf_fill, to_read);
         if (received == HTTPD_SOCK_ERR_TIMEOUT) {
             if (++consecutive_timeouts > max_consecutive_timeouts) {
                 ESP_LOGE(TAG, "Upload de %s abortado: timeout demais seguidos", display_name);
@@ -854,16 +860,29 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
             ok = false;
             break;
         }
-        if (fwrite(buf, 1, received, fp) != (size_t)received) {
-            ok = false;
-            break;
+
+        buf_fill += (size_t)received;
+        remaining -= (size_t)received;
+
+        // Grava em blocos alinhados de 32 KB para velocidade maxima no SDMMC
+        if (buf_fill >= buf_size || remaining == 0) {
+            if (fwrite(buf, 1, buf_fill, fp) != buf_fill) {
+                ok = false;
+                break;
+            }
+            buf_fill = 0;
         }
-        remaining -= received;
-        progress_update(content_len - remaining);
+
+        // Throttle progress_update: atualiza a cada 150ms para eliminar disputa de mutex
+        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        if (now_ms - last_prog_update_ms >= 150 || remaining == 0) {
+            last_prog_update_ms = now_ms;
+            progress_update(content_len - remaining);
+        }
     }
-    heap_caps_free(buf);
+    free(buf);
     fclose(fp);
-    heap_caps_free(io_buf);
+    if (io_buf) free(io_buf);
 
     if (!ok) {
         remove(abs_path);
@@ -1150,6 +1169,39 @@ static void known_networks_load(void)
             known_networks_save();
             ESP_LOGI(TAG, "Migrada credencial WiFi unica antiga para a lista de redes conhecidas");
         }
+    }
+}
+
+int wifi_transfer_get_known_count(void)
+{
+    known_networks_load();
+    return s_known_count;
+}
+
+bool wifi_transfer_get_known_network(int idx, char *out_ssid, size_t ssid_len, char *out_pass, size_t pass_len)
+{
+    known_networks_load();
+    if (idx < 0 || idx >= s_known_count) return false;
+    if (out_ssid && ssid_len > 0) {
+        strncpy(out_ssid, s_known[idx].ssid, ssid_len - 1);
+        out_ssid[ssid_len - 1] = '\0';
+    }
+    if (out_pass && pass_len > 0) {
+        strncpy(out_pass, s_known[idx].pass, pass_len - 1);
+        out_pass[pass_len - 1] = '\0';
+    }
+    return true;
+}
+
+void wifi_transfer_get_ap_credentials(char *out_ssid, size_t ssid_len, char *out_pass, size_t pass_len)
+{
+    if (out_ssid && ssid_len > 0) {
+        strncpy(out_ssid, CONFIG_WIFI_AP_SSID, ssid_len - 1);
+        out_ssid[ssid_len - 1] = '\0';
+    }
+    if (out_pass && pass_len > 0) {
+        strncpy(out_pass, CONFIG_WIFI_AP_PASSWORD, pass_len - 1);
+        out_pass[pass_len - 1] = '\0';
     }
 }
 
@@ -1918,6 +1970,68 @@ static esp_err_t api_ota_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t api_podcasts_local_get_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr_chunk(req, "{\"podcasts\":[");
+
+    char base_dir[128];
+    snprintf(base_dir, sizeof(base_dir), "%s/Podcasts", SD_MOUNT_POINT);
+
+    DIR *d_base = opendir(base_dir);
+    if (!d_base) {
+        httpd_resp_sendstr_chunk(req, "]}");
+        httpd_resp_sendstr_chunk(req, NULL);
+        return ESP_OK;
+    }
+
+    struct dirent *prog_entry;
+    bool first = true;
+    char chunk[384];
+
+    while ((prog_entry = readdir(d_base)) != NULL) {
+        if (prog_entry->d_name[0] == '.') continue;
+        if (prog_entry->d_type != DT_DIR) continue;
+
+        char prog_path[512];
+        snprintf(prog_path, sizeof(prog_path), "%s/%s", base_dir, prog_entry->d_name);
+        DIR *d_prog = opendir(prog_path);
+        if (!d_prog) continue;
+
+        struct dirent *ep_entry;
+        while ((ep_entry = readdir(d_prog)) != NULL) {
+            if (ep_entry->d_name[0] == '.') continue;
+            if (ep_entry->d_type == DT_DIR) continue;
+            if (strstr(ep_entry->d_name, ".part") != NULL) continue;
+
+            char file_path[768];
+            snprintf(file_path, sizeof(file_path), "%s/%s", prog_path, ep_entry->d_name);
+            struct stat st;
+            long size = 0;
+            if (stat(file_path, &st) == 0) {
+                size = (long)st.st_size;
+            }
+
+            char prog_esc[96];
+            char name_esc[160];
+            json_escape(prog_entry->d_name, prog_esc, sizeof(prog_esc));
+            json_escape(ep_entry->d_name, name_esc, sizeof(name_esc));
+
+            snprintf(chunk, sizeof(chunk), "%s{\"program\":\"%s\",\"filename\":\"%s\",\"size\":%ld}",
+                     first ? "" : ",", prog_esc, name_esc, size);
+            first = false;
+            httpd_resp_sendstr_chunk(req, chunk);
+        }
+        closedir(d_prog);
+    }
+    closedir(d_base);
+
+    httpd_resp_sendstr_chunk(req, "]}");
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
+
 static esp_err_t start_httpd(void)
 {
     if (s_httpd) return ESP_OK;
@@ -2016,6 +2130,9 @@ static esp_err_t start_httpd(void)
     httpd_uri_t ota_post_uri = { .uri = "/api/ota", .method = HTTP_POST, .handler = api_ota_post_handler };
     httpd_register_uri_handler(s_httpd, &ota_get_uri);
     httpd_register_uri_handler(s_httpd, &ota_post_uri);
+
+    httpd_uri_t podcasts_local_get_uri = { .uri = "/api/podcasts_local", .method = HTTP_GET, .handler = api_podcasts_local_get_handler };
+    httpd_register_uri_handler(s_httpd, &podcasts_local_get_uri);
 
     httpd_register_err_handler(s_httpd, HTTPD_404_NOT_FOUND, http_404_error_handler);
 
@@ -2417,8 +2534,26 @@ void wifi_transfer_request_exit(void)
     s_exit_requested = true;
 }
 
-bool wifi_transfer_is_active(void)    { return s_active; }
-bool wifi_transfer_is_ota_busy(void)  { return s_ota_in_progress; }
+bool wifi_transfer_is_active(void)        { return s_active; }
+bool wifi_transfer_is_ota_busy(void)      { return s_ota_in_progress; }
+bool wifi_transfer_is_transferring(void)  { return s_progress_active || s_ota_in_progress; }
+bool wifi_transfer_has_sta_ip(void)       { return s_got_ip; }
+
+bool wifi_transfer_get_gateway_ip(char *out_gw, size_t max_len)
+{
+    if (!out_gw || max_len < 8) return false;
+    out_gw[0] = '\0';
+    if (!s_netif_sta) return false;
+
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(s_netif_sta, &ip_info) == ESP_OK) {
+        if (ip_info.gw.addr != 0) {
+            snprintf(out_gw, max_len, IPSTR, IP2STR(&ip_info.gw));
+            return true;
+        }
+    }
+    return false;
+}
 
 void wifi_transfer_get_status(char *out, size_t out_len, int *files_received)
 {
@@ -2468,7 +2603,11 @@ static void wifi_menu_draw_status(void)
 
     switch (s_ui_state) {
         case WIFI_UI_IDLE:
-            oled_display_show_wifi_idle(ip, "mps3.local", dns_active, rssi);
+            if (s_mode == WIFI_TRANSFER_MODE_AP || s_mode == WIFI_TRANSFER_MODE_APSTA) {
+                oled_display_show_wifi_qr(CONFIG_WIFI_AP_SSID, CONFIG_WIFI_AP_PASSWORD, "AP MPS3", 1, 1);
+            } else {
+                oled_display_show_wifi_idle(ip, "mps3.local", dns_active, rssi);
+            }
             break;
         case WIFI_UI_CONNECTED: {
             int clients = (s_mode == WIFI_TRANSFER_MODE_AP || s_mode == WIFI_TRANSFER_MODE_APSTA) ? wifi_transfer_get_connected_clients() : 0;

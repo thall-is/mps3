@@ -165,10 +165,21 @@ uint32_t i2s_output_get_rate(void)
 esp_err_t i2s_output_write(const int32_t *samples, size_t sample_count, size_t *samples_written)
 {
     if (s_i2s_mutex) xSemaphoreTake(s_i2s_mutex, portMAX_DELAY);
-    if (!s_channel_enabled || !s_tx_handle) {
+    if (!s_tx_handle) {
         if (s_i2s_mutex) xSemaphoreGive(s_i2s_mutex);
         if (samples_written) *samples_written = 0;
         return ESP_ERR_INVALID_STATE;
+    }
+    if (!s_channel_enabled) {
+        esp_err_t en_err = i2s_channel_enable(s_tx_handle);
+        if (en_err == ESP_OK) {
+            s_channel_enabled = true;
+            ESP_LOGI(TAG, "Canal I2S auto-reativado durante escrita de audio.");
+        } else {
+            if (s_i2s_mutex) xSemaphoreGive(s_i2s_mutex);
+            if (samples_written) *samples_written = 0;
+            return en_err;
+        }
     }
     size_t bytes_to_write = sample_count * sizeof(int32_t);
     size_t bytes_written = 0;

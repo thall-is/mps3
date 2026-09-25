@@ -26,4 +26,5 @@ idf_component_register(
         oled_display
         app_update
         esp_partition
+        podcast_sync
 )

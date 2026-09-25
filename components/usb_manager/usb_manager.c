@@ -347,7 +347,7 @@ void usb_manager_set_mode(usb_mode_t mode)
         s_usb_pkt_count = 0;
         s_last_packet_time_us = 0;
         tud_audio_clear_ep_out_ff();
-        i2s_output_disable();
+        i2s_output_enable();
         audio_player_reacquire_sd_after_usb();
     }
 

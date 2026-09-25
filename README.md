@@ -4,6 +4,7 @@
 [![Hardware](https://img.shields.io/badge/Hardware-ESP32--S3%20%2B%20ESP32-darkblue.svg)](docs/WIRING.md)
 [![Hi-Res Audio DAC](https://img.shields.io/badge/DAC%20PCM5102A-24--bit%20%2F%20192kHz%20(4--Fios)-gold.svg)](#o-que-funciona-muito-bem)
 [![Bluetooth](https://img.shields.io/badge/Bluetooth-Sony%20LDAC%20(24b%2F96k%20%7C%20990kbps)%20%7C%20SBC-purple.svg)](#o-que-funciona-muito-bem)
+[![Power DFS](https://img.shields.io/badge/Power-DFS%20(40--240MHz)%20%7C%20Deep%20Sleep-brightgreen.svg)](#o-que-funciona-muito-bem)
 [![Licença](https://img.shields.io/badge/Licenca-MIT%20%2F%20Apache%202.0-green.svg)](LICENSE)
 
 O **mps3** é um player de áudio digital portátil de alta fidelidade (**Hi-Res Digital Audio Player / DAP**) de arquitetura aberta, construído em torno de **dois microcontroladores (Dual-MCU)** e um pipeline interno **Dual-Core assimétrico**. O projeto foi projetado para entregar uma experiência sonora pura e sem perdas, reproduzindo músicas do cartão micro SD com resolução de estúdio tanto pela saída analógica cabeada via DAC dedicado TI PCM5102A em até **24-bit / 192 kHz reais** (modo 4-fios com MCLK dedicado), quanto sem fio pelo Bluetooth com o codec audiófilo **Sony LDAC em 24-bit / 96 kHz**.
@@ -39,6 +40,29 @@ Este projeto preza pela honestidade técnica e relata com clareza o estado real 
 * **Interface Monocromática Fluida no OLED SSD1306**: Navegação intuitiva com joystick de 5 direções, menus em carrossel, visualização da biblioteca por pastas e arquivos, além da tela "Now Playing" com dados da faixa, formato, taxa de amostragem, profundidade de bits e tempo decorrido.
 * **Persistência de Estado (NVS)**: Grava e recupera automaticamente a última música tocada, o ponto exato onde a reprodução foi pausada, o volume atual, a preferência de codec e o modo de ordenação das faixas.
 * **Ordenação Flexível de Faixas (Nome A-Z vs Data / Tracklist Original)**: Configurado diretamente no menu **"Conf" (Opção 6 — "Ordenar")**. Permite alternar instantaneamente entre a ordem alfabética clássica e a ordem por data de modificação (`mtime` do cartão SD), preservando a sequência original de faixas das gravações/álbuns. A preferência é gravada na NVS e a pasta ativa é reordenada imediatamente.
+* **Governador Dinâmico de Clock e Gerenciamento de Energia (DFS)**:
+  * **Escalonamento Inteligente de Frequência**: Ajusta a CPU Xtensa LX7 dinamicamente entre **240 MHz**, **160 MHz**, **80 MHz** e **40 MHz** conforme a demanda de carga em tempo real.
+  * **240 MHz**: Operações intensivas de I/O e rede (transferência Wi-Fi, upload OTA, busca/seek veloz, decodificação Hi-Res extrema >96 kHz e USB MSC).
+  * **160 MHz**: Interface gráfica ativa, renderização do display OLED a 25.0 FPS cravados e navegação de menus com equalizador paramétrico de 10 bandas.
+  * **80 MHz**: Reprodução contínua de áudio padrão (MP3, WAV, FLAC até 48 kHz) com tela apagada/repouso, mantendo o PLL base (`BBPLL`) travado e estável para nunca causar jitter no barramento I2S ou falhas de leitura no SDMMC.
+  * **40 MHz**: Repouso ocioso com economia drástica de bateria e redução de aquecimento.
+* **Deep Sleep (< 100 µA) e Suspensão Inteligente**:
+  * **Modo Suspensão Profunda**: Desativa núcleos de processamento, rádios e barramentos, reduzindo a drenagem do circuito a níveis sub-miliampere.
+  * **Configurável no Menu "Conf"**: Opção para ajustar o tempo de inatividade até o Deep Sleep (1 min, 5 min, 15 min, etc.), com atalho de disparo imediato via direcional direito `[>]`.
+  * **Wakeup por Hardware no Botão Físico**: Acorda instantaneamente ao pressionar o botão Direcional CIMA (`JOY_UP`, GPIO 2), roteado no domínio de energia `RTC_PERIPH` com resistor pull-up ativo.
+  * **Auto-Wakeup ao Conectar Carregador**: O monitor de carga (`PIN_BATTERY_CHRG`, GPIO 11) religa o dispositivo automaticamente assim que o cabo USB de recarga é conectado.
+  * **Proteção contra Phantom Powering e Pad Hold**: Liberação e retenção de pads estruturadas para evitar retenção de nível lógico nas linhas de controle e I2C.
+* **Relógio de Tempo Real (RTC DS3231) em Barramento I2C Compartilhado**:
+  * Chip Maxim/Analog Devices DS3231 de altíssima precisão com oscilador a cristal compensado por temperatura (TCXO) integrado.
+  * Barramento I2C mestre compartilhado de forma thread-safe com o display OLED SSD1306 (SDA no GPIO 10 e SCL no GPIO 9).
+  * Sincronização com o relógio POSIX (`settimeofday()`) no boot, garantindo que faixas criadas, modificadas ou recebidas via Wi-Fi recebam carimbo de data e hora reais.
+  * Sensor interno de temperatura ambiente com leitura exposta ao sistema.
+* **QR Code Nativo no Display OLED SSD1306**:
+  * Renderização em tempo real de matrizes QR Code monocromáticas diretamente na tela de 128x64 pixels.
+  * Permite apontar a câmera de qualquer smartphone para conectar instantaneamente ao Hotspot Wi-Fi (SoftAP) do MPS3 sem digitar credenciais, ou acessar o endereço web `http://mps3.local`.
+* **Sincronização Automática de Podcasts (`podcast_sync`)**:
+  * Subsistema autônomo em segundo plano para download de episódios novos e parciais via Wi-Fi diretamente para a biblioteca do micro SD.
+  * Integração com scripts de automação de bancada e servidor de relay para Android/Termux (`tools/mobile_relay` e `tools/podcast_server`).
 * **Atualização de Firmware Over-The-Air (OTA) Dual-Bank com Rollback Anti-Brick**:
   * **Layout Dual-Bank Seguro na Flash de 16MB**: Dois bancos de aplicação de 4MB cada (`ota_0` em `0x20000` e `ota_1` em `0x420000`) com partição de controle `otadata` em `0x10000`, permitindo gravação em segundo plano sem risco de perda de configurações na NVS.
   * **Rollback Automático Anti-Brick**: Habilitado via `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`. A aplicação precisa inicializar com sucesso todos os periféricos vitais (SDMMC, I2S, tarefas FreeRTOS) e chamar `esp_ota_mark_app_valid_cancel_rollback()` para ser confirmada; em caso de falha de boot ou crash prematuro, o bootloader reverte autonomamente para a partição anterior saudável.
@@ -150,13 +174,13 @@ O projeto adota o **ESP-IDF v6.0.1 puro** como *Single Source of Truth* para com
 | Diretório / Arquivo | Finalidade |
 |---|---|
 | **[`espidf/`](espidf/)** | **Ponto de entrada oficial ESP-IDF (ESP32-S3)**: `CMakeLists.txt`, `main/`, `sdkconfig.defaults` (configuração de 8KB USB MSC, PSRAM Octal 8MB, Flash 16MB QIO, Rollback OTA). |
-| **[`components/`](components/)** | Componentes modulares independentes: `audio_player`, `usb_manager`, `sd_card`, `oled_display`, `touch_input`, `eq`, `i2s_output`, `wifi_transfer` (servidor web + OTA backend), etc. |
+| **[`components/`](components/)** | Componentes modulares independentes: `audio_player`, `board_io` (RTC DS3231 & Power Governor), `usb_manager`, `sd_card`, `oled_display` (com QR Code), `touch_input`, `eq`, `i2s_output`, `wifi_transfer` (servidor web + OTA backend), `podcast_sync`, etc. |
 | **[`versionamento/`](versionamento/)** | **Scripts de Versionamento e Upload**: `mps3_version.ps1` (PowerShell), `mps3_version.sh` (Bash) e `ota_upload.py` (upload OTA com auto-descoberta inteligente por MAC de hardware). |
 | **[`bt_companion/`](bt_companion/)** | **Firmware do Co-Processador Bluetooth (ESP32)**: Transmissor de áudio Sony LDAC 24-bit / 96 kHz e SBC de alta qualidade com controle de volume AVRCP. |
 | **[`bt_audio_sink/`](bt_audio_sink/)** | **Firmware Receptor de Teste (ESP32)**: Receptor Bluetooth A2DP Sink para validação e auditoria em bancada do áudio transmitido pelo mps3. |
 | **[`tests/`](tests/)** | Scripts de bancada e automação: benchmark Win32 unbuffered de MSC (`benchmark_msc.py`), verificadores de áudio e testes de descoberta OTA. |
 | **[`docs/`](docs/)** | Diagramas de ligação elétrica ([WIRING.md](docs/WIRING.md)) e especificação do protocolo binário UART ([PROTOCOL.md](docs/PROTOCOL.md)). |
-| **[`tools/`](tools/)** | Utilitários de empacotamento web (`pack_web.py`) e monitoramento em Python. |
+| **[`tools/`](tools/)** | Utilitários de empacotamento web (`pack_web.py`), relay móvel para podcasts (`mobile_relay/`) e servidor local de sincronização (`podcast_server/`). |
 | **[`partitions.csv`](partitions.csv)** | Tabela de partições dual-bank (`otadata` @ 0x10000, `ota_0` de 4MB @ 0x20000, `ota_1` de 4MB @ 0x420000). |
 
 ---
@@ -186,10 +210,11 @@ O projeto adota o **ESP-IDF v6.0.1 puro** como *Single Source of Truth* para com
 
 | Periférico | Função | Pinos no ESP32-S3 |
 |---|---|---|
-| **Display OLED SSD1306** | I2C (128x64 monocromático) | **SDA: GPIO 10** \| **SCL: GPIO 9** (alimentação 3.3V) |
+| **Display OLED SSD1306** | I2C Mestre (128x64 monocromático) | **SDA: GPIO 10** \| **SCL: GPIO 9** (alimentação 3.3V) |
+| **RTC DS3231** | Relógio de alta precisão I2C (compartilhado) | **SDA: GPIO 10** \| **SCL: GPIO 9** (mesmo barramento I2C, thread-safe) |
 | **Cartão micro SD** | Barramento SDMMC 4-Bit (Slot nativo) | **CLK: GPIO 5** \| **CMD: GPIO 6** \| **D0: GPIO 4** \| **D1: GPIO 17** \| **D2: GPIO 16** \| **D3: GPIO 7** |
-| **Joystick de 5 Vias** | Botões de navegação | **UP: GPIO 2** \| **LEFT: GPIO 39** \| **DOWN: GPIO 41** \| **RIGHT: GPIO 42** \| **CENTER: GPIO 40** |
-| **Monitor de Bateria & TP4056** | Divisor Li-Ion + status TP4056 | **ADC: GPIO 1** (Tensão Li-Ion) \| **CHRG: GPIO 11** (LED Carregando) |
+| **Joystick de 5 Vias** | Botões de navegação & Wakeup | **UP: GPIO 2 (RTC IO / Wakeup)** \| **LEFT: GPIO 39** \| **DOWN: GPIO 41** \| **RIGHT: GPIO 42** \| **CENTER: GPIO 40** |
+| **Monitor de Bateria & TP4056** | Divisor Li-Ion + status TP4056 | **ADC: GPIO 1** (Tensão Li-Ion) \| **CHRG: GPIO 11 (Wakeup Carga)** |
 | **LED RGB WS2812** | Feedback visual on-board | **DIN: GPIO 38** |
 | **I2S MCLK (Master Clock)** | Clock dedicado para o DAC PCM5102A | **MCLK: GPIO 8** (Ligue ao pino SCK do DAC) |
 | **Porta USB Dados & Debug** | Conexão OTG Nativa ESP32-S3 (CDC / DAC / MSC) | **D-: GPIO 19** \| **D+: GPIO 20** |

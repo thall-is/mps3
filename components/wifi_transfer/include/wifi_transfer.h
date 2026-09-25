@@ -44,6 +44,16 @@ void wifi_transfer_request_exit(void);
 
 bool wifi_transfer_is_active(void);
 bool wifi_transfer_is_ota_busy(void);
+bool wifi_transfer_is_transferring(void);
+bool wifi_transfer_has_sta_ip(void);
+bool wifi_transfer_get_gateway_ip(char *out_gw, size_t max_len);
+
+// Consulta credenciais do Hotspot AP gerado pelo MPS3
+void wifi_transfer_get_ap_credentials(char *out_ssid, size_t ssid_len, char *out_pass, size_t pass_len);
+
+// Consulta redes Wi-Fi salvas na NVS
+int wifi_transfer_get_known_count(void);
+bool wifi_transfer_get_known_network(int idx, char *out_ssid, size_t ssid_len, char *out_pass, size_t pass_len);
 
 // Preenche "out" com uma linha de status pronta pra' mostrar na tela:
 // "Conectando..." / "192.168.x.x" (IP assim que pronto pra' receber

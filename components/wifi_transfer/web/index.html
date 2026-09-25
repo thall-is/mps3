@@ -180,6 +180,7 @@
 
     <h2>Arquivos 
         <div style="display:flex; gap:6px; margin-left:auto;">
+            <button id="podBtn" style="background:#f0f0f0;font-size:.85em;padding:.3em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">🎙️ Podcasts</button>
             <button id="eqBtn" style="background:#f0f0f0;font-size:.85em;padding:.3em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">🎚️ Equalizador</button>
             <button id="mkdirBtn" style="background:#f0f0f0;font-size:.85em;padding:.3em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">📁 Nova Pasta</button>
             <button id="configBtn" style="background:#f0f0f0;font-size:.85em;padding:.3em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">⚙️ Config</button>
@@ -385,6 +386,69 @@
             <div style="display:flex;justify-content:flex-end;gap:10px;border-top:1px solid #eee;padding-top:12px;">
                 <button type="button" id="btnCancelOta" class="btn-secondary">Cancelar</button>
                 <button type="button" id="btnStartOta" class="btn-primary" disabled style="background:#0077ff;">Iniciar Atualização</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE SINCRONIZAÇÃO DE PODCASTS (MOBILE / TAILSCALE BRIDGE) -->
+    <div id="podModal" class="modal-backdrop" style="display:none;">
+        <div class="modal-card" style="max-width:480px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:14px;">
+                <h3 style="margin:0;display:flex;align-items:center;gap:8px;">🎙️ Podcasts (Ponte Móvel)</h3>
+                <button type="button" id="btnClosePod" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:#888;padding:0 4px;">✕</button>
+            </div>
+
+            <!-- Servidor Tailscale / LAN -->
+            <div style="margin-bottom:12px;">
+                <label style="font-size:0.85em;font-weight:bold;display:block;margin-bottom:4px;">Servidor Radxa (Tailscale / LAN):</label>
+                <div style="display:flex;gap:6px;">
+                    <input type="text" id="podServerUrl" placeholder="http://100.120.93.115:8088" style="flex:1;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.9em;">
+                    <button type="button" id="btnTestPodServer" class="btn-secondary" style="white-space:nowrap;">Testar</button>
+                </div>
+                <div style="display:flex;gap:6px;margin-top:6px;">
+                    <button type="button" class="btn-secondary" style="font-size:0.75em;padding:3px 8px;" onclick="document.getElementById('podServerUrl').value='http://100.120.93.115:8088'; document.getElementById('btnTestPodServer').click();">🌐 Tailscale (100.120.93.115)</button>
+                    <button type="button" class="btn-secondary" style="font-size:0.75em;padding:3px 8px;" onclick="document.getElementById('podServerUrl').value='http://192.168.15.216:8088'; document.getElementById('btnTestPodServer').click();">🏠 Rede Local (192.168.15.216)</button>
+                </div>
+                <div id="podServerStatus" style="font-size:0.8em;margin-top:4px;color:#64748b;">Dica: No celular 4G/5G, mantenha o Tailscale ativo para acessar o servidor de casa.</div>
+            </div>
+
+            <!-- Ações de Verificação -->
+            <div style="display:flex;gap:8px;margin-bottom:12px;">
+                <button type="button" id="btnCheckPodcasts" class="btn-secondary" style="flex:1;font-weight:600;padding:8px;">🔍 Verificar Novos Episódios</button>
+            </div>
+
+            <!-- Lista de Novos Episódios -->
+            <div id="podDiffSection" style="margin-bottom:12px;">
+                <div style="display:flex;justify-content:space-between;font-size:0.85em;font-weight:bold;margin-bottom:6px;">
+                    <span>Episódios Pendentes para o SD:</span>
+                    <span id="podPendingCount" style="color:#0077ff;">0</span>
+                </div>
+                <div id="podList" style="border:1px solid #dbe2ea;border-radius:8px;max-height:160px;overflow-y:auto;background:#f8fafc;padding:6px;font-size:0.85em;">
+                    <div style="color:#888;text-align:center;padding:12px;">Clique em "Verificar Novos Episódios" para comparar com o SD card.</div>
+                </div>
+            </div>
+
+            <!-- Progresso de Transferência -->
+            <div id="podProgressBox" style="display:none;margin-bottom:12px;background:#f0f7ff;border:1px solid #bae6fd;border-radius:8px;padding:10px;">
+                <div style="display:flex;justify-content:space-between;font-size:0.85em;margin-bottom:4px;">
+                    <span id="podCurrentItem" style="font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px;color:#0369a1;">Transferindo...</span>
+                    <span id="podItemPct" style="font-weight:bold;color:#0369a1;">0%</span>
+                </div>
+                <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;margin-bottom:6px;">
+                    <div id="podItemBar" style="width:0%;height:100%;background:#0284c7;transition:width 0.1s linear;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:0.78em;color:#0284c7;">
+                    <span id="podOverallInfo">Total: 0/0</span>
+                    <span id="podSpeedInfo">-- KB/s</span>
+                </div>
+            </div>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #eee;padding-top:12px;">
+                <span id="podStatusMsg" style="font-size:0.82em;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;"></span>
+                <div style="display:flex;gap:10px;">
+                    <button type="button" id="btnCancelPodSync" class="btn-secondary">Fechar</button>
+                    <button type="button" id="btnStartPodSync" class="btn-primary" disabled style="background:#0077ff;">Baixar e Gravar no SD</button>
+                </div>
             </div>
         </div>
     </div>
@@ -1764,6 +1828,256 @@
             };
 
             otaXhr.send(otaFile);
+        };
+
+        // --- 11. PODCAST SYNC MOBILE BRIDGE (TAILSCALE -> MPS3) ---
+        let podPendingList = [];
+        let podSyncXhr = null;
+        let isPodSyncing = false;
+
+        function getPodServerUrl() {
+            let srv = (document.getElementById('podServerUrl').value || '').trim();
+            if (!srv) srv = localStorage.getItem('mps3_pod_srv') || 'http://100.120.93.115:8088';
+            srv = srv.replace(/\/+$/, '');
+            return srv;
+        }
+
+        function openPodModal() {
+            const saved = localStorage.getItem('mps3_pod_srv') || 'http://100.120.93.115:8088';
+            document.getElementById('podServerUrl').value = saved;
+            document.getElementById('podModal').style.display = 'flex';
+        }
+
+        function closePodModal() {
+            if (isPodSyncing) {
+                if (!confirm("Sincronização em andamento! Deseja cancelar?")) return;
+                if (podSyncXhr) {
+                    podSyncXhr.abort();
+                    podSyncXhr = null;
+                }
+                isPodSyncing = false;
+            }
+            document.getElementById('podModal').style.display = 'none';
+        }
+
+        document.getElementById('podBtn').onclick = openPodModal;
+        document.getElementById('btnClosePod').onclick = closePodModal;
+        document.getElementById('btnCancelPodSync').onclick = closePodModal;
+
+        document.getElementById('btnTestPodServer').onclick = async () => {
+            const srv = getPodServerUrl();
+            localStorage.setItem('mps3_pod_srv', srv);
+            const statusEl = document.getElementById('podServerStatus');
+            statusEl.style.color = '#64748b';
+            statusEl.textContent = 'Testando conexão com ' + srv + '...';
+
+            try {
+                const ctrl = new AbortController();
+                const timeoutId = setTimeout(() => ctrl.abort(), 12000);
+                const res = await fetch(srv + '/api/status', { signal: ctrl.signal });
+                clearTimeout(timeoutId);
+                if (res.ok) {
+                    const data = await res.json();
+                    statusEl.style.color = '#16a34a';
+                    statusEl.textContent = `✓ Conectado ao ${data.server || 'servidor'} (${data.storage_free_mb || 0} MB livres)`;
+                } else {
+                    statusEl.style.color = '#dc2626';
+                    statusEl.textContent = 'Servidor respondeu com erro: ' + res.status;
+                }
+            } catch (err) {
+                statusEl.style.color = '#dc2626';
+                if (err.name === 'AbortError') {
+                    statusEl.textContent = 'Timeout após 12s. Verifique se o app do Tailscale está conectado no celular.';
+                } else {
+                    statusEl.textContent = `Falha (${err.message || err.name || 'Erro de rede'}). Verifique se o Tailscale está ativo.`;
+                }
+            }
+        };
+
+        document.getElementById('btnCheckPodcasts').onclick = async () => {
+            const srv = getPodServerUrl();
+            localStorage.setItem('mps3_pod_srv', srv);
+            const listEl = document.getElementById('podList');
+            const countEl = document.getElementById('podPendingCount');
+            const startBtn = document.getElementById('btnStartPodSync');
+            const statusMsg = document.getElementById('podStatusMsg');
+
+            listEl.innerHTML = '<div style="color:#64748b;text-align:center;padding:12px;">Consultando servidor e catálogo local do SD...</div>';
+            startBtn.disabled = true;
+            statusMsg.textContent = '';
+
+            try {
+                // 1. Busca catálogo do servidor Radxa
+                const ctrl = new AbortController();
+                const timeoutId = setTimeout(() => ctrl.abort(), 15000);
+                const srvRes = await fetch(srv + '/api/podcasts?limit=60', { signal: ctrl.signal });
+                clearTimeout(timeoutId);
+                if (!srvRes.ok) throw new Error('Servidor retornou HTTP ' + srvRes.status);
+                const srvData = await srvRes.json();
+                const remotePodcasts = srvData.podcasts || [];
+
+                // 2. Busca catálogo local do MPS3
+                let localPodcasts = [];
+                try {
+                    const localRes = await fetch('/api/podcasts_local');
+                    if (localRes.ok) {
+                        const localData = await localRes.json();
+                        localPodcasts = localData.podcasts || [];
+                    }
+                } catch (e) {
+                    console.warn('Erro ao consultar /api/podcasts_local:', e);
+                }
+
+                // Cria mapa de arquivos já presentes no SD: "programa/arquivo" -> tamanho
+                const localMap = new Map();
+                for (const lp of localPodcasts) {
+                    const key = (lp.program + '/' + lp.filename).toLowerCase();
+                    localMap.set(key, lp.size || 0);
+                }
+
+                // Compara e filtra o que está faltando
+                podPendingList = [];
+                for (const rp of remotePodcasts) {
+                    const key = (rp.program + '/' + rp.filename).toLowerCase();
+                    if (!localMap.has(key)) {
+                        podPendingList.push(rp);
+                    }
+                }
+
+                countEl.textContent = podPendingList.length;
+
+                if (podPendingList.length === 0) {
+                    listEl.innerHTML = '<div style="color:#16a34a;text-align:center;padding:12px;font-weight:bold;">🎉 Todos os episódios do servidor já estão no seu MPS3!</div>';
+                    startBtn.disabled = true;
+                    return;
+                }
+
+                let html = '';
+                podPendingList.forEach((ep, i) => {
+                    const mb = (ep.size_bytes / (1024 * 1024)).toFixed(1);
+                    html += `<div id="podItemRow_${i}" style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border-bottom:1px solid #e2e8f0;">
+                        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px;">
+                            <strong>[${ep.program}]</strong> ${ep.title}
+                        </div>
+                        <span style="color:#64748b;font-size:0.85em;flex-shrink:0;">${mb} MB</span>
+                    </div>`;
+                });
+                listEl.innerHTML = html;
+                startBtn.disabled = false;
+                statusMsg.textContent = `${podPendingList.length} novos para baixar.`;
+
+            } catch (err) {
+                listEl.innerHTML = `<div style="color:#dc2626;padding:12px;text-align:center;">Erro ao verificar: ${err.message}</div>`;
+            }
+        };
+
+        document.getElementById('btnStartPodSync').onclick = async () => {
+            if (!podPendingList.length || isPodSyncing) return;
+
+            const srv = getPodServerUrl();
+            const totalCount = podPendingList.length;
+            const batchTotal = podPendingList.reduce((acc, ep) => acc + (ep.size_bytes || 0), 0);
+
+            if (!confirm(`Iniciar sincronização de ${totalCount} episódio(s) (${(batchTotal / (1024 * 1024)).toFixed(1)} MB) do servidor para o MPS3?`)) {
+                return;
+            }
+
+            isPodSyncing = true;
+            document.getElementById('btnStartPodSync').disabled = true;
+            document.getElementById('btnCheckPodcasts').disabled = true;
+            document.getElementById('podProgressBox').style.display = 'block';
+
+            let successCount = 0;
+
+            for (let i = 0; i < totalCount; i++) {
+                if (!isPodSyncing) break;
+
+                const ep = podPendingList[i];
+                const rowEl = document.getElementById('podItemRow_' + i);
+                if (rowEl) rowEl.style.background = '#e0f2fe';
+
+                document.getElementById('podCurrentItem').textContent = `[${i + 1}/${totalCount}] Baixando: ${ep.filename}`;
+                document.getElementById('podItemBar').style.width = '0%';
+                document.getElementById('podItemPct').textContent = '0%';
+                document.getElementById('podOverallInfo').textContent = `Episódio ${i + 1} de ${totalCount}`;
+
+                try {
+                    // Passo 1: Download do Servidor Radxa (via celular / Tailscale)
+                    const downloadUrl = `${srv}/podcasts/${encodeURI(ep.rel_path)}`;
+                    const resp = await fetch(downloadUrl);
+                    if (!resp.ok) throw new Error(`Falha no download (HTTP ${resp.status})`);
+                    const blob = await resp.blob();
+
+                    // Passo 2: Upload para o MPS3 (/api/upload direto para /Podcasts/<Program>/<Filename>)
+                    document.getElementById('podCurrentItem').textContent = `[${i + 1}/${totalCount}] Gravando no SD: ${ep.filename}`;
+                    
+                    const uploadDest = `/Podcasts/${ep.program}/${ep.filename}`;
+                    await new Promise((resolve, reject) => {
+                        podSyncXhr = new XMLHttpRequest();
+                        const uploadUrl = `/api/upload?path=${encodeURIComponent(uploadDest)}&idx=${i + 1}&count=${totalCount}&batchTotal=${batchTotal}`;
+                        podSyncXhr.open('PUT', uploadUrl, true);
+                        podSyncXhr.timeout = 300000;
+
+                        let t0 = performance.now(), lastT = t0, lastB = 0;
+                        podSyncXhr.upload.onprogress = (ev) => {
+                            if (!ev.lengthComputable) return;
+                            const now = performance.now();
+                            const pct = Math.round((ev.loaded * 100) / ev.total);
+                            const dt = (now - lastT) / 1000;
+                            const db = ev.loaded - lastB;
+                            const kbps = dt > 0.05 ? (db / 1024) / dt : 0;
+                            lastB = ev.loaded; lastT = now;
+
+                            document.getElementById('podItemBar').style.width = pct + '%';
+                            document.getElementById('podItemPct').textContent = pct + '%';
+                            document.getElementById('podSpeedInfo').textContent = kbps >= 1024 ? (kbps / 1024).toFixed(1) + ' MB/s' : Math.round(kbps) + ' KB/s';
+                        };
+
+                        podSyncXhr.onload = () => {
+                            if (podSyncXhr.status >= 200 && podSyncXhr.status < 300) {
+                                resolve();
+                            } else {
+                                reject(new Error('Erro HTTP ' + podSyncXhr.status));
+                            }
+                        };
+                        podSyncXhr.onerror = () => reject(new Error('Falha de rede'));
+                        podSyncXhr.ontimeout = () => reject(new Error('Timeout de envio'));
+                        podSyncXhr.send(blob);
+                    });
+
+                    successCount++;
+                    if (rowEl) {
+                        rowEl.style.background = '#dcfce7';
+                        const badge = document.createElement('span');
+                        badge.style.color = '#16a34a';
+                        badge.style.fontWeight = 'bold';
+                        badge.style.marginLeft = '6px';
+                        badge.textContent = '✓ OK';
+                        rowEl.appendChild(badge);
+                    }
+
+                } catch (err) {
+                    console.error('Erro na transferência do podcast:', err);
+                    if (rowEl) {
+                        rowEl.style.background = '#fee2e2';
+                        const badge = document.createElement('span');
+                        badge.style.color = '#dc2626';
+                        badge.style.fontWeight = 'bold';
+                        badge.style.marginLeft = '6px';
+                        badge.textContent = '✗ Falhou';
+                        rowEl.appendChild(badge);
+                    }
+                }
+            }
+
+            isPodSyncing = false;
+            podSyncXhr = null;
+            document.getElementById('podProgressBox').style.display = 'none';
+            document.getElementById('btnCheckPodcasts').disabled = false;
+            document.getElementById('btnStartPodSync').disabled = true;
+            document.getElementById('podStatusMsg').textContent = `Concluído: ${successCount}/${totalCount} transferidos.`;
+            fetchStatus();
+            load();
         };
 
         fetchStatus(); setInterval(fetchStatus, 8000); load();

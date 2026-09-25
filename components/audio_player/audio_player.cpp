@@ -620,6 +620,11 @@ void audio_player_seek_backward(uint32_t seconds)
              (unsigned)base, (unsigned)seconds, (unsigned)target);
 }
 
+bool audio_player_is_seeking(void)
+{
+    return s_forced_restart_pending;
+}
+
 int audio_player_get_file_count(void)
 {
     scan_lock();
@@ -795,6 +800,8 @@ void audio_player_reacquire_sd_after_usb(void)
     scan_dir(s_playback_dir, s_playback_scan);
     if (s_current_index >= s_playback_scan.audio_count) s_current_index = 0;
     scan_unlock();
+    i2s_output_enable();
+    s_dsp_current_rate = 0; // Força reconfiguração de taxa no próximo bloco de áudio
     s_usb_takeover_requested = false; // libera o player_task pra continuar
 }
 

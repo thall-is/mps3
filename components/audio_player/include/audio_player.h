@@ -104,6 +104,7 @@ void audio_player_seek_forward(uint32_t seconds);
 // subtraindo em vez de somar. Se o resultado for <= 0, volta pro
 // comeco da faixa.
 void audio_player_seek_backward(uint32_t seconds);
+bool audio_player_is_seeking(void);
 
 // Lista de arquivos de audio da pasta ONDE A FAIXA ATUAL ESTA' TOCANDO
 // (playlist ativa - usada pro proprio player e pra tela de "proximas

@@ -3,6 +3,8 @@ idf_component_register(
         "i2s_output.c"
         "battery.c"
         "rgb_led.c"
+        "rtc_ds3231.c"
+        "pwr_governor.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
@@ -10,7 +12,9 @@ idf_component_register(
         esp_driver_gpio
         esp_driver_i2s
         esp_driver_rmt
+        esp_driver_i2c
         esp_adc
         esp_timer
+        esp_pm
         nvs_flash
 )

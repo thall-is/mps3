@@ -3,6 +3,7 @@ idf_component_register(
         "oled_display.c"
         "bitmaps.c"
         "u8g2_hal.c"
+        "qrcode.c"
     INCLUDE_DIRS
         "include"
     REQUIRES

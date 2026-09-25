@@ -97,7 +97,15 @@ void oled_display_show_eq_preset_list(int cursor, int active_preset, bool eq_ena
 void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int grid_y, int page, bool is_confirming);
 void oled_display_show_unsupported(const char *filename);
 void oled_display_show_sort_mode(int mode);
+void oled_display_show_deepsleep_cfg(int current_idx);
 void oled_display_show_ota_progress(int percent, const char *status_msg);
+void oled_display_show_podcast_sync(const char *program, const char *title,
+                                   int cur_idx, int total_idx,
+                                   int percent, float speed_kbs,
+                                   const char *status_msg);
+
+void oled_display_show_wifi_qr(const char *ssid, const char *pass,
+                               const char *tag_label, int cur_idx, int total_idx);
 
 #ifdef __cplusplus
 }

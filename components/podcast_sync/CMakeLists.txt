@@ -1,17 +1,19 @@
 idf_component_register(
     SRCS
-        "touch_input.c"
+        "podcast_sync.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
+        esp_http_client
+        esp_timer
+        fatfs
+        sd_card
         board_io
-        audio_player
         oled_display
-        menu
-        usb_manager
-        driver
-        esp_driver_gpio
         nvs_flash
-        podcast_sync
         wifi_transfer
+        esp_wifi
+        esp_netif
+        audio_player
 )
+

@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "i2s_output.h"
+#include "qrcode.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1172,6 +1173,9 @@ void oled_display_update_animations(void) {
 void oled_display_show_main_menu(int cursor) {
     if (!s_ready) return;
 
+    if (cursor < 0) cursor = 0;
+    if (cursor > 5) cursor = 5;
+
     u8g2_ClearBuffer(&s_u8g2);
     u8g2_SetFontMode(&s_u8g2, 1);
     u8g2_SetBitmapMode(&s_u8g2, 1);
@@ -2322,6 +2326,58 @@ void oled_display_show_sort_mode(int mode)
     u8g2_SendBuffer(&s_u8g2);
 }
 
+void oled_display_show_deepsleep_cfg(int current_idx)
+{
+    if (!s_ready) return;
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Titulo
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont12_tr);
+    u8g2_DrawStr(&s_u8g2, 28, 10, "DEEP SLEEP");
+    u8g2_DrawLine(&s_u8g2, 0, 13, 127, 13);
+
+    // Subtitulo / Label
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    u8g2_DrawStr(&s_u8g2, 8, 26, "Auto desligar apos:");
+
+    // Opcoes
+    static const char *labels[] = {
+        "Desativado",
+        "1 minuto",
+        "3 minutos",
+        "5 minutos",
+        "10 minutos",
+        "15 minutos",
+        "30 minutos"
+    };
+    int idx = current_idx;
+    if (idx < 0) idx = 0;
+    if (idx >= 7) idx = 6;
+
+    // Moldura de selecao
+    u8g2_DrawFrame(&s_u8g2, 8, 31, 112, 18);
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont12_tr);
+    int text_w = u8g2_GetStrWidth(&s_u8g2, labels[idx]);
+    int text_x = (128 - text_w) / 2;
+    u8g2_DrawStr(&s_u8g2, text_x, 44, labels[idx]);
+
+    // Setas indicativas laterais
+    if (idx > 0) {
+        u8g2_DrawStr(&s_u8g2, 14, 44, "<");
+    }
+    if (idx < 6) {
+        u8g2_DrawStr(&s_u8g2, 108, 44, ">");
+    }
+
+    // Rodape com instrucoes
+    u8g2_SetFont(&s_u8g2, u8g2_font_tom_thumb_4x6_t_all);
+    u8g2_DrawStr(&s_u8g2, 4, 60, "[>] Dormir Agora  |  [OK] Salvar");
+
+    apply_brightness_if_needed();
+    u8g2_SendBuffer(&s_u8g2);
+}
+
 void oled_display_show_ota_progress(int percent, const char *status_msg)
 {
     if (!s_ready) return;
@@ -2371,6 +2427,225 @@ void oled_display_show_ota_progress(int percent, const char *status_msg)
     const char *warn = "NAO DESLIGUE O MPS3!";
     int ww = u8g2_GetStrWidth(&s_u8g2, warn);
     u8g2_DrawStr(&s_u8g2, (OLED_WIDTH - ww) / 2, 60, warn);
+
+    apply_brightness_if_needed();
+    u8g2_SendBuffer(&s_u8g2);
+}
+
+static marquee_t s_podcast_marquee;
+
+void oled_display_show_podcast_sync(const char *program, const char *title,
+                                   int cur_idx, int total_idx,
+                                   int percent, float speed_kbs,
+                                   const char *status_msg)
+{
+    if (!s_ready) return;
+
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_SetBitmapMode(&s_u8g2, 1);
+    u8g2_SetFontMode(&s_u8g2, 1);
+
+    // Linha 1: Titulo / Top Bar
+    u8g2_SetFont(&s_u8g2, u8g2_font_5x8_tf);
+    char header[48];
+    if (total_idx > 0) {
+        snprintf(header, sizeof(header), "[%d/%d] %.16s", cur_idx, total_idx,
+                 (program && program[0]) ? program : "PODCAST");
+    } else {
+        snprintf(header, sizeof(header), "SINCRONIZANDO PODCASTS");
+    }
+    u8g2_DrawStr(&s_u8g2, 2, 8, header);
+
+    // Linha divisoria
+    u8g2_DrawHLine(&s_u8g2, 0, 10, OLED_WIDTH);
+
+    // Linha 2: Titulo do Episodio (com marquee se longo)
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont11_tr);
+    char safe_title[80];
+    sanitize_for_display((title && title[0]) ? title : status_msg, safe_title, sizeof(safe_title));
+    int title_w = u8g2_GetStrWidth(&s_u8g2, safe_title);
+    if (title_w <= OLED_WIDTH - 4) {
+        u8g2_DrawStr(&s_u8g2, 2, 22, safe_title);
+    } else {
+        u8g2_SetClipWindow(&s_u8g2, 2, 12, OLED_WIDTH - 2, 24);
+        draw_marquee(&s_podcast_marquee, safe_title, 2, 22, 2);
+        u8g2_SetMaxClipWindow(&s_u8g2);
+    }
+
+    // Linha 3: Barra de Progresso
+    const int bar_x = 4;
+    const int bar_y = 27;
+    const int bar_w = OLED_WIDTH - 8; // 120 px
+    const int bar_h = 12;
+
+    u8g2_DrawFrame(&s_u8g2, bar_x, bar_y, bar_w, bar_h);
+    int fill = ((bar_w - 2) * percent) / 100;
+    if (fill > 0) {
+        u8g2_DrawBox(&s_u8g2, bar_x + 1, bar_y + 1, fill, bar_h - 2);
+    }
+
+    // Porcentagem invertida sobre a barra
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    char pct_str[16];
+    snprintf(pct_str, sizeof(pct_str), "%d%%", percent);
+    int pw = u8g2_GetStrWidth(&s_u8g2, pct_str);
+    u8g2_SetDrawColor(&s_u8g2, 2); // XOR
+    u8g2_DrawStr(&s_u8g2, bar_x + (bar_w - pw) / 2, bar_y + 10, pct_str);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Linha 4: Velocidade e Status
+    u8g2_SetFont(&s_u8g2, u8g2_font_5x8_tf);
+    char info_str[48];
+    if (speed_kbs >= 1024.0f) {
+        snprintf(info_str, sizeof(info_str), "%.1f MB/s", speed_kbs / 1024.0f);
+    } else if (speed_kbs > 0.0f) {
+        snprintf(info_str, sizeof(info_str), "%.0f KB/s", speed_kbs);
+    } else {
+        snprintf(info_str, sizeof(info_str), "%.24s", (status_msg && status_msg[0]) ? status_msg : "Aguardando...");
+    }
+    u8g2_DrawStr(&s_u8g2, 4, 51, info_str);
+
+    // Linha 5: Atalho de cancelamento no rodape
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    const char *footer = "< Voltar / Cancelar";
+    u8g2_DrawStr(&s_u8g2, OLED_WIDTH - u8g2_GetStrWidth(&s_u8g2, footer) - 4, 61, footer);
+
+    apply_brightness_if_needed();
+    u8g2_SendBuffer(&s_u8g2);
+}
+
+void oled_display_show_wifi_qr(const char *ssid, const char *pass,
+                               const char *tag_label, int cur_idx, int total_idx)
+{
+    if (!s_ready) return;
+
+    // Constroi payload padronizado no formato WIFI:S:<SSID>;T:<WPA|nopass>;P:<PASS>;;
+    char qr_text[128];
+    if (pass && pass[0] != '\0') {
+        snprintf(qr_text, sizeof(qr_text), "WIFI:S:%s;T:WPA;P:%s;;", (ssid && ssid[0]) ? ssid : "", pass);
+    } else {
+        snprintf(qr_text, sizeof(qr_text), "WIFI:S:%s;T:nopass;;", (ssid && ssid[0]) ? ssid : "");
+    }
+
+    // Cache local de geracao do QR Code para economizar CPU
+    static char s_last_qr_text[128] = {0};
+    static QRCode s_cached_qrcode;
+    static uint8_t s_cached_modules[200]; // Suficiente para QR Code ate Versao 5 (172 bytes)
+    static int8_t s_cached_res = -1;
+
+    if (strcmp(qr_text, s_last_qr_text) != 0) {
+        strncpy(s_last_qr_text, qr_text, sizeof(s_last_qr_text) - 1);
+        s_last_qr_text[sizeof(s_last_qr_text) - 1] = '\0';
+        s_cached_res = -1;
+
+        // Tenta versoes 3, 4, 5 e depois 2
+        for (uint8_t v = 3; v <= 5; v++) {
+            if (qrcode_initText(&s_cached_qrcode, s_cached_modules, v, ECC_LOW, qr_text) == 0) {
+                s_cached_res = 0;
+                break;
+            }
+        }
+        if (s_cached_res != 0) {
+            if (qrcode_initText(&s_cached_qrcode, s_cached_modules, 2, ECC_LOW, qr_text) == 0) {
+                s_cached_res = 0;
+            }
+        }
+    }
+
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_SetBitmapMode(&s_u8g2, 1);
+    u8g2_SetFontMode(&s_u8g2, 1);
+
+    // Fundo branco do QR Code de 62x62 pixels no lado esquerdo
+    u8g2_DrawBox(&s_u8g2, 1, 1, 62, 62);
+
+    if (s_cached_res == 0) {
+        int scale = 1;
+        if (s_cached_qrcode.size * 2 <= 62) {
+            scale = 2;
+        }
+        int qr_px = s_cached_qrcode.size * scale;
+        int ox = 1 + (62 - qr_px) / 2;
+        int oy = 1 + (62 - qr_px) / 2;
+
+        u8g2_SetDrawColor(&s_u8g2, 0); // Modulos escuros no fundo branco
+        for (uint8_t y = 0; y < s_cached_qrcode.size; y++) {
+            for (uint8_t x = 0; x < s_cached_qrcode.size; x++) {
+                if (qrcode_getModule(&s_cached_qrcode, x, y)) {
+                    u8g2_DrawBox(&s_u8g2, ox + x * scale, oy + y * scale, scale, scale);
+                }
+            }
+        }
+    } else {
+        u8g2_SetDrawColor(&s_u8g2, 0);
+        u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+        u8g2_DrawStr(&s_u8g2, 6, 32, "QR ERRO");
+    }
+
+    // Lado direito da tela: informacoes da rede (cor branca)
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Linha 1: Tag e contador de paginas [X/N] (garantia matematica de nao sobreposicao)
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    if (total_idx > 1) {
+        char idx_str[16];
+        snprintf(idx_str, sizeof(idx_str), "[%d/%d]", cur_idx, total_idx);
+        int iw = u8g2_GetStrWidth(&s_u8g2, idx_str);
+        
+        // Desenha marcador de pagina alinhado a direita
+        u8g2_DrawStr(&s_u8g2, OLED_WIDTH - iw, 8, idx_str);
+
+        // Prepara tag com corte de seguranca caso exceda o espaco restante
+        int max_tag_w = (OLED_WIDTH - iw - 2) - 66;
+        if (max_tag_w > 0) {
+            char safe_tag[16];
+            strncpy(safe_tag, tag_label ? tag_label : "WIFI", sizeof(safe_tag) - 1);
+            safe_tag[sizeof(safe_tag) - 1] = '\0';
+            while (strlen(safe_tag) > 0 && u8g2_GetStrWidth(&s_u8g2, safe_tag) > max_tag_w) {
+                safe_tag[strlen(safe_tag) - 1] = '\0';
+            }
+            u8g2_DrawStr(&s_u8g2, 66, 8, safe_tag);
+        }
+    } else {
+        u8g2_DrawStr(&s_u8g2, 66, 8, tag_label ? tag_label : "HOTSPOT AP");
+    }
+    u8g2_DrawHLine(&s_u8g2, 65, 11, OLED_WIDTH - 65);
+
+    // Linha 2 e 3: SSID
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    u8g2_DrawStr(&s_u8g2, 66, 19, "REDE:");
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    char disp_ssid[24];
+    strncpy(disp_ssid, (ssid && ssid[0]) ? ssid : "Sem SSID", sizeof(disp_ssid) - 1);
+    disp_ssid[sizeof(disp_ssid) - 1] = '\0';
+    while (strlen(disp_ssid) > 0 && u8g2_GetStrWidth(&s_u8g2, disp_ssid) > (OLED_WIDTH - 66)) {
+        disp_ssid[strlen(disp_ssid) - 1] = '\0';
+    }
+    u8g2_DrawStr(&s_u8g2, 66, 28, disp_ssid);
+
+    // Linha 4 e 5: Senha
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    u8g2_DrawStr(&s_u8g2, 66, 38, "SENHA:");
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    char disp_pass[24];
+    if (pass && pass[0]) {
+        strncpy(disp_pass, pass, sizeof(disp_pass) - 1);
+        disp_pass[sizeof(disp_pass) - 1] = '\0';
+    } else {
+        strncpy(disp_pass, "<aberta>", sizeof(disp_pass) - 1);
+        disp_pass[sizeof(disp_pass) - 1] = '\0';
+    }
+    while (strlen(disp_pass) > 0 && u8g2_GetStrWidth(&s_u8g2, disp_pass) > (OLED_WIDTH - 66)) {
+        disp_pass[strlen(disp_pass) - 1] = '\0';
+    }
+    u8g2_DrawStr(&s_u8g2, 66, 47, disp_pass);
+
+    // Linha 6: Dica de leitura da camera
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    u8g2_DrawStr(&s_u8g2, 66, 56, "Aponte cam.");
+    u8g2_DrawStr(&s_u8g2, 66, 63, "p/ conectar");
 
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);

@@ -90,6 +90,20 @@ esp_err_t u8g2_hal_i2c_init(int sda_gpio, int scl_gpio, uint8_t i2c_addr_7bit)
     return ret;
 }
 
+i2c_master_bus_handle_t u8g2_hal_get_bus_handle(void)
+{
+    return s_bus;
+}
+
+esp_err_t u8g2_hal_i2c_probe(uint16_t addr, int timeout_ms)
+{
+    if (!s_bus) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return i2c_master_probe(s_bus, addr, timeout_ms);
+}
+
+
 uint8_t u8g2_hal_byte_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr)
 {
     (void)u8x8; // assinatura fixa exigida por u8x8_msg_cb - nao usado aqui

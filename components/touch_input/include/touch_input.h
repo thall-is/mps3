@@ -4,10 +4,18 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// Registra o handle da display_task para suspensao e despertar instantaneo
+void touch_input_set_display_task_handle(TaskHandle_t handle);
+
+// Dispara notificacao para acordar a display_task imediatamente
+void touch_input_wake_display(void);
 
 typedef enum {
     UI_MODE_LIST = 0,        // menu de selecao/navegacao de pastas
@@ -25,6 +33,8 @@ typedef enum {
     UI_MODE_VOLUME = 7,
     UI_MODE_BALANCE = 14,
     UI_MODE_SORT = 15,
+    UI_MODE_WIFI_NETS = 16,
+    UI_MODE_DEEP_SLEEP = 17,
 } ui_mode_t;
 
 // Configura os 5 GPIOs do joystick de navegação (UP/DOWN/LEFT/RIGHT/CENTER)
@@ -78,6 +88,9 @@ int touch_input_get_tela_cursor(void);
 int touch_input_get_timeout_idx(void);
 bool touch_input_is_sleeping(void);
 int touch_input_get_eq_preset_cursor(void);
+int touch_input_get_wifi_net_cursor(void);
+int touch_input_get_deepsleep_idx(void);
+uint32_t touch_input_get_deepsleep_ms(void);
 
 typedef void (*keyboard_callback_t)(const char *text, bool confirmed);
 void keyboard_start(const char *initial_text, keyboard_callback_t cb);
