@@ -786,9 +786,9 @@ static SemaphoreHandle_t s_upload_lock = NULL;
 static uint8_t *s_upload_dma_bounce = NULL;
 static size_t   s_upload_dma_bounce_size = 0;
 
-#define UPLOAD_WRITER_STACK_WORDS    2048 // 2048 * sizeof(StackType_t) = 8192 bytes
+#define UPLOAD_WRITER_STACK_WORDS    1024 // 1024 * sizeof(StackType_t) = 4096 bytes em SRAM interna (.bss)
 static StaticTask_t s_writer_task_tcb;
-static StackType_t *s_writer_stack = NULL;
+static StackType_t  s_writer_stack[UPLOAD_WRITER_STACK_WORDS];
 
 typedef struct {
     FILE *fp;
@@ -950,21 +950,17 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
 
     bool writer_started = false;
     if (ctx.rb && ctx.done_sem && buf) {
-        if (s_writer_stack) {
-            TaskHandle_t th = xTaskCreateStaticPinnedToCore(
-                upload_writer_task,
-                "up_wr",
-                UPLOAD_WRITER_STACK_WORDS,
-                &ctx,
-                5,
-                s_writer_stack,
-                &s_writer_task_tcb,
-                0 // Core 0 dedicado ao SDMMC
-            );
-            writer_started = (th != NULL);
-        } else {
-            writer_started = (xTaskCreatePinnedToCore(upload_writer_task, "up_wr", 4096, &ctx, 5, NULL, 0) == pdPASS);
-        }
+        TaskHandle_t th = xTaskCreateStaticPinnedToCore(
+            upload_writer_task,
+            "up_wr",
+            UPLOAD_WRITER_STACK_WORDS,
+            &ctx,
+            5,
+            s_writer_stack,
+            &s_writer_task_tcb,
+            0 // Core 0 dedicado ao SDMMC
+        );
+        writer_started = (th != NULL);
     }
     if (!writer_started) {
         if (ctx.rb) vRingbufferDeleteWithCaps(ctx.rb);
@@ -2531,16 +2527,6 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
         }
     }
 
-    // Pre-aloca stack do escritor em PSRAM
-    if (!s_writer_stack) {
-        s_writer_stack = (StackType_t *)heap_caps_malloc(UPLOAD_WRITER_STACK_WORDS * sizeof(StackType_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_writer_stack) {
-            ESP_LOGI(TAG, "Stack de upload pre-alocada em PSRAM (%u bytes)", (unsigned)(UPLOAD_WRITER_STACK_WORDS * sizeof(StackType_t)));
-        } else {
-            ESP_LOGE(TAG, "Falha ao alocar stack de upload em PSRAM!");
-        }
-    }
-
     esp_err_t err = ensure_stack_ready();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Falha ao inicializar o WiFi: %s", esp_err_to_name(err));
@@ -2741,11 +2727,6 @@ bool wifi_transfer_poll(void)
             heap_caps_free(s_upload_dma_bounce);
             s_upload_dma_bounce = NULL;
             s_upload_dma_bounce_size = 0;
-        }
-
-        if (s_writer_stack) {
-            heap_caps_free(s_writer_stack);
-            s_writer_stack = NULL;
         }
 
         // Remontagem robusta do cartao SD (reinicializa o host SDMMC e remonta o FatFS do zero)
