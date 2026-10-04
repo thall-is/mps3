@@ -30,6 +30,11 @@ versionamento/binarios/*
 perf_test.tmp
 __pycache__/
 *.pyc
+*.png
+*.jpg
+*.jpeg
+*.xml
+scratch/
 tools/read_*.py
 tools/generate_function_docs.py
 

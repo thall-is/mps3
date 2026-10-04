@@ -3,58 +3,310 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <title>mps3 - Web Player & Central</title>
+    <title>mps3 - Web Player &amp; Central</title>
+    <link id="siteFavicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%201000%201000%22%3E%3Cstyle%3Epolygon%2Cpath%7Bstroke%3A%230077ff%3Btransition%3Astroke%200.3s%3B%7D%40media%28prefers-color-scheme%3Adark%29%7Bpolygon%2Cpath%7Bstroke%3A%23f5a623%3B%7D%7D%3C/style%3E%3Cg%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%2244%22%3E%3Cpolygon%20points%3D%22500.00%2C60.00%20735.11%2C783.61%20119.58%2C336.39%20880.42%2C336.39%20264.89%2C783.61%22/%3E%3Cpath%20d%3D%22M%20500.00%2C60.00%20C%20671.49%2C131.35%20782.38%2C275.30%20816.25%2C417.34%20C%20850.12%2C559.38%20809.80%2C696.43%20735.11%2C783.61%20C%20660.42%2C870.78%20554.63%2C908.47%20464.67%2C901.25%20C%20374.72%2C894.03%20301.86%2C844.16%20264.89%2C783.61%20C%20227.91%2C723.06%20225.96%2C653.68%20247.39%2C602.18%20C%20268.81%2C550.68%20312.04%2C517.38%20354.69%2C507.21%20C%20397.34%2C497.04%20438.50%2C509.15%20464.67%2C531.58%20C%20490.85%2C554.01%20502.17%2C585.77%20500.00%2C612.79%20C%20497.83%2C639.80%20482.86%2C661.68%20464.67%2C672.78%20C%20446.49%2C683.88%20425.66%2C684.47%20410.19%2C678.03%20C%20394.73%2C671.60%20384.73%2C658.62%20381.68%2C645.81%20C%20378.62%2C633.00%20382.26%2C620.65%20388.99%2C612.79%20C%20395.73%2C604.93%20405.27%2C601.53%20413.38%2C602.18%20C%20421.49%2C602.83%20428.06%2C607.33%20431.39%2C612.79%20C%20434.73%2C618.25%20434.90%2C624.50%20432.97%2C629.15%20C%20431.04%2C633.79%20427.14%2C636.79%20423.30%2C637.71%20C%20419.45%2C638.63%20415.74%2C637.53%20413.38%2C635.51%20C%20411.02%2C633.49%20410.00%2C630.63%20410.19%2C628.19%20C%20410.39%2C625.75%20411.74%2C623.78%20413.38%2C622.78%20C%20415.02%2C621.78%20416.90%2C621.73%20418.29%2C622.31%20C%20419.69%2C622.89%20420.59%2C624.06%20420.86%2C625.21%20C%20421.14%2C626.37%20420.81%2C627.48%20420.20%2C628.19%20C%20419.60%2C628.90%20418.74%2C629.20%20418.00%2C629.15%20C%20417.27%2C629.09%20416.68%2C628.68%20416.38%2C628.19%20C%20416.08%2C627.70%20416.06%2C627.13%20416.24%2C626.71%20C%20416.41%2C626.30%20416.76%2C626.02%20417.11%2C625.94%20C%20417.46%2C625.86%20417.79%2C625.96%20418.00%2C626.14%20C%20418.22%2C626.32%20418.31%2C626.58%20418.29%2C626.80%20C%20418.27%2C627.02%20418.15%2C627.20%20418.00%2C627.29%20C%20417.86%2C627.38%20417.69%2C627.38%20417.56%2C627.33%20C%20417.44%2C627.28%20417.35%2C627.17%20417.33%2C627.07%20C%20417.31%2C626.96%20417.33%2C626.86%20417.39%2C626.80%20C%20417.44%2C626.74%20417.52%2C626.71%20417.59%2C626.71%20C%20417.65%2C626.72%20417.71%2C626.76%20417.73%2C626.80%20C%20417.76%2C626.84%20417.76%2C626.90%20417.75%2C626.93%20C%20417.73%2C626.97%20417.70%2C627.00%20417.67%2C627.00%20C%20417.64%2C627.01%20417.61%2C627.00%20417.59%2C626.99%20C%20417.57%2C626.97%20417.56%2C626.95%20417.56%2C626.93%20C%20417.56%2C626.91%20417.57%2C626.89%20417.59%2C626.88%20C%20417.60%2C626.87%20417.62%2C626.87%20417.63%2C626.88%20C%20417.64%2C626.88%20417.65%2C626.89%20417.65%2C626.90%20C%20417.65%2C626.91%20417.65%2C626.92%20417.64%2C626.93%20C%20417.64%2C626.93%20417.63%2C626.93%20417.63%2C626.93%20C%20417.62%2C626.93%20417.61%2C626.93%20417.61%2C626.93%22/%3E%3C/g%3E%3C/svg%3E">
+    <script>
+
+        /* --- Gerenciamento de Tema e Favicon Adaptativo --- */
+        const FAV_AUTO = "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%201000%201000%22%3E%3Cstyle%3Epolygon%2Cpath%7Bstroke%3A%230077ff%3Btransition%3Astroke%200.3s%3B%7D%40media%28prefers-color-scheme%3Adark%29%7Bpolygon%2Cpath%7Bstroke%3A%23f5a623%3B%7D%7D%3C/style%3E%3Cg%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%2244%22%3E%3Cpolygon%20points%3D%22500.00%2C60.00%20735.11%2C783.61%20119.58%2C336.39%20880.42%2C336.39%20264.89%2C783.61%22/%3E%3Cpath%20d%3D%22M%20500.00%2C60.00%20C%20671.49%2C131.35%20782.38%2C275.30%20816.25%2C417.34%20C%20850.12%2C559.38%20809.80%2C696.43%20735.11%2C783.61%20C%20660.42%2C870.78%20554.63%2C908.47%20464.67%2C901.25%20C%20374.72%2C894.03%20301.86%2C844.16%20264.89%2C783.61%20C%20227.91%2C723.06%20225.96%2C653.68%20247.39%2C602.18%20C%20268.81%2C550.68%20312.04%2C517.38%20354.69%2C507.21%20C%20397.34%2C497.04%20438.50%2C509.15%20464.67%2C531.58%20C%20490.85%2C554.01%20502.17%2C585.77%20500.00%2C612.79%20C%20497.83%2C639.80%20482.86%2C661.68%20464.67%2C672.78%20C%20446.49%2C683.88%20425.66%2C684.47%20410.19%2C678.03%20C%20394.73%2C671.60%20384.73%2C658.62%20381.68%2C645.81%20C%20378.62%2C633.00%20382.26%2C620.65%20388.99%2C612.79%20C%20395.73%2C604.93%20405.27%2C601.53%20413.38%2C602.18%20C%20421.49%2C602.83%20428.06%2C607.33%20431.39%2C612.79%20C%20434.73%2C618.25%20434.90%2C624.50%20432.97%2C629.15%20C%20431.04%2C633.79%20427.14%2C636.79%20423.30%2C637.71%20C%20419.45%2C638.63%20415.74%2C637.53%20413.38%2C635.51%20C%20411.02%2C633.49%20410.00%2C630.63%20410.19%2C628.19%20C%20410.39%2C625.75%20411.74%2C623.78%20413.38%2C622.78%20C%20415.02%2C621.78%20416.90%2C621.73%20418.29%2C622.31%20C%20419.69%2C622.89%20420.59%2C624.06%20420.86%2C625.21%20C%20421.14%2C626.37%20420.81%2C627.48%20420.20%2C628.19%20C%20419.60%2C628.90%20418.74%2C629.20%20418.00%2C629.15%20C%20417.27%2C629.09%20416.68%2C628.68%20416.38%2C628.19%20C%20416.08%2C627.70%20416.06%2C627.13%20416.24%2C626.71%20C%20416.41%2C626.30%20416.76%2C626.02%20417.11%2C625.94%20C%20417.46%2C625.86%20417.79%2C625.96%20418.00%2C626.14%20C%20418.22%2C626.32%20418.31%2C626.58%20418.29%2C626.80%20C%20418.27%2C627.02%20418.15%2C627.20%20418.00%2C627.29%20C%20417.86%2C627.38%20417.69%2C627.38%20417.56%2C627.33%20C%20417.44%2C627.28%20417.35%2C627.17%20417.33%2C627.07%20C%20417.31%2C626.96%20417.33%2C626.86%20417.39%2C626.80%20C%20417.44%2C626.74%20417.52%2C626.71%20417.59%2C626.71%20C%20417.65%2C626.72%20417.71%2C626.76%20417.73%2C626.80%20C%20417.76%2C626.84%20417.76%2C626.90%20417.75%2C626.93%20C%20417.73%2C626.97%20417.70%2C627.00%20417.67%2C627.00%20C%20417.64%2C627.01%20417.61%2C627.00%20417.59%2C626.99%20C%20417.57%2C626.97%20417.56%2C626.95%20417.56%2C626.93%20C%20417.56%2C626.91%20417.57%2C626.89%20417.59%2C626.88%20C%20417.60%2C626.87%20417.62%2C626.87%20417.63%2C626.88%20C%20417.64%2C626.88%20417.65%2C626.89%20417.65%2C626.90%20C%20417.65%2C626.91%20417.65%2C626.92%20417.64%2C626.93%20C%20417.64%2C626.93%20417.63%2C626.93%20417.63%2C626.93%20C%20417.62%2C626.93%20417.61%2C626.93%20417.61%2C626.93%22/%3E%3C/g%3E%3C/svg%3E";
+        const FAV_DARK = "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%201000%201000%22%3E%3Cstyle%3Epolygon%2Cpath%7Bstroke%3A%23f5a623%3B%7D%3C/style%3E%3Cg%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%2244%22%3E%3Cpolygon%20points%3D%22500.00%2C60.00%20735.11%2C783.61%20119.58%2C336.39%20880.42%2C336.39%20264.89%2C783.61%22/%3E%3Cpath%20d%3D%22M%20500.00%2C60.00%20C%20671.49%2C131.35%20782.38%2C275.30%20816.25%2C417.34%20C%20850.12%2C559.38%20809.80%2C696.43%20735.11%2C783.61%20C%20660.42%2C870.78%20554.63%2C908.47%20464.67%2C901.25%20C%20374.72%2C894.03%20301.86%2C844.16%20264.89%2C783.61%20C%20227.91%2C723.06%20225.96%2C653.68%20247.39%2C602.18%20C%20268.81%2C550.68%20312.04%2C517.38%20354.69%2C507.21%20C%20397.34%2C497.04%20438.50%2C509.15%20464.67%2C531.58%20C%20490.85%2C554.01%20502.17%2C585.77%20500.00%2C612.79%20C%20497.83%2C639.80%20482.86%2C661.68%20464.67%2C672.78%20C%20446.49%2C683.88%20425.66%2C684.47%20410.19%2C678.03%20C%20394.73%2C671.60%20384.73%2C658.62%20381.68%2C645.81%20C%20378.62%2C633.00%20382.26%2C620.65%20388.99%2C612.79%20C%20395.73%2C604.93%20405.27%2C601.53%20413.38%2C602.18%20C%20421.49%2C602.83%20428.06%2C607.33%20431.39%2C612.79%20C%20434.73%2C618.25%20434.90%2C624.50%20432.97%2C629.15%20C%20431.04%2C633.79%20427.14%2C636.79%20423.30%2C637.71%20C%20419.45%2C638.63%20415.74%2C637.53%20413.38%2C635.51%20C%20411.02%2C633.49%20410.00%2C630.63%20410.19%2C628.19%20C%20410.39%2C625.75%20411.74%2C623.78%20413.38%2C622.78%20C%20415.02%2C621.78%20416.90%2C621.73%20418.29%2C622.31%20C%20419.69%2C622.89%20420.59%2C624.06%20420.86%2C625.21%20C%20421.14%2C626.37%20420.81%2C627.48%20420.20%2C628.19%20C%20419.60%2C628.90%20418.74%2C629.20%20418.00%2C629.15%20C%20417.27%2C629.09%20416.68%2C628.68%20416.38%2C628.19%20C%20416.08%2C627.70%20416.06%2C627.13%20416.24%2C626.71%20C%20416.41%2C626.30%20416.76%2C626.02%20417.11%2C625.94%20C%20417.46%2C625.86%20417.79%2C625.96%20418.00%2C626.14%20C%20418.22%2C626.32%20418.31%2C626.58%20418.29%2C626.80%20C%20418.27%2C627.02%20418.15%2C627.20%20418.00%2C627.29%20C%20417.86%2C627.38%20417.69%2C627.38%20417.56%2C627.33%20C%20417.44%2C627.28%20417.35%2C627.17%20417.33%2C627.07%20C%20417.31%2C626.96%20417.33%2C626.86%20417.39%2C626.80%20C%20417.44%2C626.74%20417.52%2C626.71%20417.59%2C626.71%20C%20417.65%2C626.72%20417.71%2C626.76%20417.73%2C626.80%20C%20417.76%2C626.84%20417.76%2C626.90%20417.75%2C626.93%20C%20417.73%2C626.97%20417.70%2C627.00%20417.67%2C627.00%20C%20417.64%2C627.01%20417.61%2C627.00%20417.59%2C626.99%20C%20417.57%2C626.97%20417.56%2C626.95%20417.56%2C626.93%20C%20417.56%2C626.91%20417.57%2C626.89%20417.59%2C626.88%20C%20417.60%2C626.87%20417.62%2C626.87%20417.63%2C626.88%20C%20417.64%2C626.88%20417.65%2C626.89%20417.65%2C626.90%20C%20417.65%2C626.91%20417.65%2C626.92%20417.64%2C626.93%20C%20417.64%2C626.93%20417.63%2C626.93%20417.63%2C626.93%20C%20417.62%2C626.93%20417.61%2C626.93%20417.61%2C626.93%22/%3E%3C/g%3E%3C/svg%3E";
+        const FAV_LIGHT = "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%201000%201000%22%3E%3Cstyle%3Epolygon%2Cpath%7Bstroke%3A%230077ff%3B%7D%3C/style%3E%3Cg%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%2244%22%3E%3Cpolygon%20points%3D%22500.00%2C60.00%20735.11%2C783.61%20119.58%2C336.39%20880.42%2C336.39%20264.89%2C783.61%22/%3E%3Cpath%20d%3D%22M%20500.00%2C60.00%20C%20671.49%2C131.35%20782.38%2C275.30%20816.25%2C417.34%20C%20850.12%2C559.38%20809.80%2C696.43%20735.11%2C783.61%20C%20660.42%2C870.78%20554.63%2C908.47%20464.67%2C901.25%20C%20374.72%2C894.03%20301.86%2C844.16%20264.89%2C783.61%20C%20227.91%2C723.06%20225.96%2C653.68%20247.39%2C602.18%20C%20268.81%2C550.68%20312.04%2C517.38%20354.69%2C507.21%20C%20397.34%2C497.04%20438.50%2C509.15%20464.67%2C531.58%20C%20490.85%2C554.01%20502.17%2C585.77%20500.00%2C612.79%20C%20497.83%2C639.80%20482.86%2C661.68%20464.67%2C672.78%20C%20446.49%2C683.88%20425.66%2C684.47%20410.19%2C678.03%20C%20394.73%2C671.60%20384.73%2C658.62%20381.68%2C645.81%20C%20378.62%2C633.00%20382.26%2C620.65%20388.99%2C612.79%20C%20395.73%2C604.93%20405.27%2C601.53%20413.38%2C602.18%20C%20421.49%2C602.83%20428.06%2C607.33%20431.39%2C612.79%20C%20434.73%2C618.25%20434.90%2C624.50%20432.97%2C629.15%20C%20431.04%2C633.79%20427.14%2C636.79%20423.30%2C637.71%20C%20419.45%2C638.63%20415.74%2C637.53%20413.38%2C635.51%20C%20411.02%2C633.49%20410.00%2C630.63%20410.19%2C628.19%20C%20410.39%2C625.75%20411.74%2C623.78%20413.38%2C622.78%20C%20415.02%2C621.78%20416.90%2C621.73%20418.29%2C622.31%20C%20419.69%2C622.89%20420.59%2C624.06%20420.86%2C625.21%20C%20421.14%2C626.37%20420.81%2C627.48%20420.20%2C628.19%20C%20419.60%2C628.90%20418.74%2C629.20%20418.00%2C629.15%20C%20417.27%2C629.09%20416.68%2C628.68%20416.38%2C628.19%20C%20416.08%2C627.70%20416.06%2C627.13%20416.24%2C626.71%20C%20416.41%2C626.30%20416.76%2C626.02%20417.11%2C625.94%20C%20417.46%2C625.86%20417.79%2C625.96%20418.00%2C626.14%20C%20418.22%2C626.32%20418.31%2C626.58%20418.29%2C626.80%20C%20418.27%2C627.02%20418.15%2C627.20%20418.00%2C627.29%20C%20417.86%2C627.38%20417.69%2C627.38%20417.56%2C627.33%20C%20417.44%2C627.28%20417.35%2C627.17%20417.33%2C627.07%20C%20417.31%2C626.96%20417.33%2C626.86%20417.39%2C626.80%20C%20417.44%2C626.74%20417.52%2C626.71%20417.59%2C626.71%20C%20417.65%2C626.72%20417.71%2C626.76%20417.73%2C626.80%20C%20417.76%2C626.84%20417.76%2C626.90%20417.75%2C626.93%20C%20417.73%2C626.97%20417.70%2C627.00%20417.67%2C627.00%20C%20417.64%2C627.01%20417.61%2C627.00%20417.59%2C626.99%20C%20417.57%2C626.97%20417.56%2C626.95%20417.56%2C626.93%20C%20417.56%2C626.91%20417.57%2C626.89%20417.59%2C626.88%20C%20417.60%2C626.87%20417.62%2C626.87%20417.63%2C626.88%20C%20417.64%2C626.88%20417.65%2C626.89%20417.65%2C626.90%20C%20417.65%2C626.91%20417.65%2C626.92%20417.64%2C626.93%20C%20417.64%2C626.93%20417.63%2C626.93%20417.63%2C626.93%20C%20417.62%2C626.93%20417.61%2C626.93%20417.61%2C626.93%22/%3E%3C/g%3E%3C/svg%3E";
+
+        function updateFaviconAndUI(theme, isDark) {
+            const faviconEl = document.getElementById('siteFavicon');
+            const toggleBtn = document.getElementById('themeToggleBtn');
+            const btnAuto = document.getElementById('themeBtnAuto');
+            const btnDark = document.getElementById('themeBtnDark');
+            const btnLight = document.getElementById('themeBtnLight');
+
+            if (isDark) {
+                document.body.classList.add('dark-theme');
+                document.documentElement.classList.add('dark-theme');
+                if (faviconEl) faviconEl.href = (theme === 'auto') ? FAV_AUTO : FAV_DARK;
+                if (toggleBtn) toggleBtn.textContent = '☀️';
+            } else {
+                document.body.classList.remove('dark-theme');
+                document.documentElement.classList.remove('dark-theme');
+                if (faviconEl) faviconEl.href = (theme === 'auto') ? FAV_AUTO : FAV_LIGHT;
+                if (toggleBtn) toggleBtn.textContent = '🌙';
+            }
+
+            if (btnAuto && btnDark && btnLight) {
+                btnAuto.style.borderColor = (theme === 'auto') ? 'var(--accent-color)' : '';
+                btnAuto.style.fontWeight = (theme === 'auto') ? 'bold' : 'normal';
+                btnDark.style.borderColor = (theme === 'dark') ? 'var(--accent-color)' : '';
+                btnDark.style.fontWeight = (theme === 'dark') ? 'bold' : 'normal';
+                btnLight.style.borderColor = (theme === 'light') ? 'var(--accent-color)' : '';
+                btnLight.style.fontWeight = (theme === 'light') ? 'bold' : 'normal';
+            }
+        }
+
+        function setTheme(theme) {
+            localStorage.setItem('mps3_theme', theme);
+            const isDark = (theme === 'dark') || (theme === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            updateFaviconAndUI(theme, isDark);
+        }
+
+        function toggleTheme() {
+            const curTheme = localStorage.getItem('mps3_theme') || 'auto';
+            const isCurrentlyDark = document.body.classList.contains('dark-theme');
+            setTheme(isCurrentlyDark ? 'light' : 'dark');
+        }
+
+        // Listener para mudanca dinamica de tema no sistema operacional
+        if (window.matchMedia) {
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+                const savedTheme = localStorage.getItem('mps3_theme') || 'auto';
+                if (savedTheme === 'auto') {
+                    updateFaviconAndUI('auto', e.matches);
+                }
+            });
+        }
+
+        // Inicializa estado dos botoes na carga da pagina
+        window.addEventListener('DOMContentLoaded', () => {
+            const savedTheme = localStorage.getItem('mps3_theme') || 'auto';
+            const isDark = savedTheme === 'dark' || (savedTheme === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            updateFaviconAndUI(savedTheme, isDark);
+        });
+
+        (function() {
+            var theme = localStorage.getItem('mps3_theme') || 'auto';
+            var isDark = theme === 'dark' || (theme === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            if (isDark) {
+                document.documentElement.classList.add('dark-theme');
+                document.addEventListener('DOMContentLoaded', function() {
+                    if (document.body) document.body.classList.add('dark-theme');
+                });
+            }
+        })();
+    </script>
     <style>
+        /* --- Sistema de Temas Claro / Escuro --- */
+        :root {
+            --bg-page: #f4f6f9;
+            --bg-card: #ffffff;
+            --bg-card-hover: #fbfcfd;
+            --bg-subtle: #f0f4f8;
+            --border-color: #e8ecef;
+            --border-input: #d0d7de;
+            --text-primary: #1a1a1a;
+            --text-regular: #2a323c;
+            --text-muted: #606d7b;
+            --accent-color: #0077ff;
+            --accent-hover: #0066dd;
+            --card-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+
+        body.dark-theme, html.dark-theme body {
+            --bg-page: #12141a;
+            --bg-card: #1a1d26;
+            --bg-card-hover: #222634;
+            --bg-subtle: #242938;
+            --border-color: #2b3040;
+            --border-input: #3b4255;
+            --text-primary: #f0f3f6;
+            --text-regular: #d8e0eb;
+            --text-muted: #94a3b8;
+            --accent-color: #f5a623;
+            --accent-hover: #e09419;
+            --card-shadow: 0 4px 16px rgba(0,0,0,0.45);
+        }
+
+        body {
+            background: var(--bg-page);
+            color: var(--text-regular);
+            transition: background 0.3s, color 0.3s;
+        }
+
+        h2, h3, h4 { color: var(--text-primary); }
+
+        #header-status, table, .modal-card, #configModal, #eqModal, #player-bar, #dropzone {
+            background: var(--bg-card);
+            border-color: var(--border-color);
+            box-shadow: var(--card-shadow);
+            color: var(--text-regular);
+        }
+
+        tr:hover td { background: var(--bg-card-hover); }
+        td { border-bottom-color: var(--border-color); }
+        .file .name { color: var(--text-regular); }
+        .dir .name { color: var(--accent-color); }
+
+        .search-box, input[type="text"], input[type="password"] {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border-color: var(--border-input);
+        }
+
+        .btn-secondary, .upload-btns button, .toolbar button, .tool-btn {
+            background: var(--bg-subtle);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-secondary:hover, .upload-btns button:hover, .toolbar button:hover, .tool-btn:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--accent-color);
+        }
+
+        /* Semáforo de Atividade do SD / Barramento */
+        .sd-traffic-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.82em;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 12px;
+            background: var(--bg-subtle);
+            border: 1px solid var(--border-color);
+        }
+        .sd-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            display: inline-block;
+            background: #10b981;
+            box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+        }
+        .sd-dot.busy-read {
+            background: #f59e0b;
+            box-shadow: 0 0 6px rgba(245, 158, 11, 0.7);
+        }
+        .sd-dot.busy-write {
+            background: #ef4444;
+            box-shadow: 0 0 6px rgba(239, 68, 68, 0.8);
+            animation: pulse-red 1s infinite alternate;
+        }
+        @keyframes pulse-red {
+            from { opacity: 0.6; transform: scale(0.9); }
+            to { opacity: 1; transform: scale(1.15); }
+        }
+
+        /* Modo de Seleção Múltipla */
+        .batch-bar {
+            display: none;
+            position: sticky;
+            top: 8px;
+            z-index: 100;
+            background: var(--bg-card);
+            border: 1px solid var(--accent-color);
+            box-shadow: var(--card-shadow);
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin-bottom: 12px;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .batch-bar.active { display: flex; }
+        .batch-summary { font-weight: bold; font-size: 0.9em; color: var(--accent-color); }
+        .batch-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+        .batch-actions button {
+            background: var(--bg-subtle);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 5px 10px;
+            border-radius: 6px;
+            font-size: 0.82em;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .batch-actions button:hover { background: var(--bg-card-hover); color: var(--accent-color); }
+        .batch-actions button.btn-danger {
+            color: #ef4444;
+            border-color: rgba(239, 68, 68, 0.4);
+        }
+        .batch-actions button.btn-danger:hover { background: rgba(239, 68, 68, 0.1); }
+        
+        /* Checkbox de seleção na tabela */
+        .col-check { width: 34px; text-align: center; padding-left: 10px !important; }
+        .item-chk {
+            width: 17px;
+            height: 17px;
+            cursor: pointer;
+            accent-color: var(--accent-color);
+            vertical-align: middle;
+        }
+
+        .folder-picker-list {
+            background: var(--bg-card);
+            border-color: var(--border-color);
+        }
+        .folder-picker-item {
+            color: var(--text-regular);
+            border-bottom-color: var(--border-color);
+        }
+        .folder-picker-item:hover { background: var(--bg-card-hover); color: var(--accent-color); }
+        .folder-picker-item.up-dir { background: var(--bg-subtle); color: var(--accent-color); }
+
+        #crumbs { color: var(--text-muted); }
+        #crumbs a { color: var(--accent-color); }
+        #dropzone { color: var(--text-muted); border-color: var(--border-input); }
+        .track-title { color: var(--text-primary); }
+        .track-artist { color: var(--text-muted); }
+        .btn-icon { color: var(--text-muted); }
+        .actions { color: var(--text-muted); }
+        .actions:hover { background: var(--bg-subtle); color: var(--text-primary); }
+        #netList { border-color: var(--border-color); }
+        #queue { border-top-color: var(--border-color); }
+        .q-item { color: var(--text-muted); }
+
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 12px 14px 140px 14px; color: #222; background: #f4f6f9; transition: background 0.3s; line-height: 1.4; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 12px 14px 140px 14px; color: var(--text-regular); background: var(--bg-page); transition: background 0.3s, color 0.3s; line-height: 1.4; }
         body.fullscreen-active { overflow: hidden; }
         
-        h2 { margin: 12px 0 8px 0; display: flex; align-items: center; justify-content: space-between; font-size: 1.35em; color: #1a1a1a; }
+        h2 { margin: 12px 0 8px 0; display: flex; align-items: center; justify-content: space-between; font-size: 1.35em; color: var(--text-primary); }
         
-        #header-status { background: #fff; padding: 12px 16px; border-radius: 10px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); font-size: 0.9em; border: 1px solid #e8ecef; }
-        .bat-info { color: #2e3842; font-weight: 600; display: flex; align-items: center; gap: 6px; }
-        .sd-info { color: #505c68; text-align: right; font-weight: 600; }
+        #header-status { background: var(--bg-card); padding: 12px 16px; border-radius: 10px; margin-bottom: 12px; box-shadow: var(--card-shadow); font-size: 0.9em; border: 1px solid var(--border-color); color: var(--text-regular); }
+        .bat-info { color: var(--text-primary); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+        .sd-info { color: var(--text-muted); text-align: right; font-weight: 600; }
         
-        .search-box { width: 100%; padding: 10px 14px; border: 1px solid #d0d7de; border-radius: 8px; font-size: 0.95em; margin-bottom: 12px; background: #fff; outline: none; transition: border-color 0.2s, box-shadow 0.2s; }
-        .search-box:focus { border-color: #0077ff; box-shadow: 0 0 0 3px rgba(0,119,255,0.15); }
+        .search-box { width: 100%; padding: 10px 14px; border: 1px solid var(--border-input); border-radius: 8px; font-size: 0.95em; margin-bottom: 12px; background: var(--bg-card); color: var(--text-primary); outline: none; transition: border-color 0.2s, box-shadow 0.2s; }
+        .search-box:focus { border-color: var(--accent-color); box-shadow: 0 0 0 3px rgba(0,119,255,0.15); }
 
-        #crumbs { color: #606d7b; margin-bottom: 10px; word-break: break-all; font-size: 0.92em; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-        #crumbs a { color: #0077ff; text-decoration: none; cursor: pointer; font-weight: 600; padding: 2px 4px; border-radius: 4px; }
-        #crumbs a:hover { background: #e6f2ff; }
+        #crumbs { color: var(--text-muted); margin-bottom: 10px; word-break: break-all; font-size: 0.92em; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+        #crumbs a { color: var(--accent-color); text-decoration: none; cursor: pointer; font-weight: 600; padding: 2px 4px; border-radius: 4px; }
+        #crumbs a:hover { background: var(--bg-card-hover); }
         
-        table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid #e8ecef; }
-        td { padding: 10px 12px; border-bottom: 1px solid #f0f3f6; vertical-align: middle; }
+        table { width: 100%; border-collapse: collapse; background: var(--bg-card); border-radius: 10px; overflow: hidden; box-shadow: var(--card-shadow); border: 1px solid var(--border-color); color: var(--text-regular); }
+        td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
         tr:last-child td { border-bottom: none; }
-        tr:hover td { background: #fbfcfd; }
+        tr:hover td { background: var(--bg-card-hover); }
         .name { cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
         .name span { flex: 1; word-break: break-word; font-size: 0.94em; }
-        .dir .name { font-weight: 600; color: #0066cc; }
-        .file .name { color: #2a323c; }
+        .dir .name { font-weight: 600; color: var(--accent-color); }
+        .file .name { color: var(--text-regular); }
         
-        .actions { color: #788591; cursor: pointer; padding: 4px 8px; font-size: 1.25em; border-radius: 4px; transition: background 0.15s; }
-        .actions:hover { background: #eef2f6; color: #111; }
+        .actions { color: var(--text-muted); cursor: pointer; padding: 4px 8px; font-size: 1.25em; border-radius: 4px; transition: background 0.15s, color 0.15s; }
+        .actions:hover { background: var(--bg-card-hover); color: var(--text-primary); }
         
         /* Dropzone and Uploads */
-        #dropzone { border: 2px dashed #b8c7d9; border-radius: 10px; padding: 1.4em 1em; text-align: center; color: #4e5d6c; margin: 14px 0; background: #fff; cursor: pointer; transition: all 0.2s; font-size: 0.95em; }
-        #dropzone.dragover { border-color: #0077ff; background: #f0f7ff; color: #0077ff; }
+        #dropzone { border: 2px dashed var(--border-input); border-radius: 10px; padding: 1.4em 1em; text-align: center; color: var(--text-muted); margin: 14px 0; background: var(--bg-card); cursor: pointer; transition: all 0.2s; font-size: 0.95em; }
+        #dropzone.dragover { border-color: var(--accent-color); background: var(--bg-card-hover); color: var(--accent-color); }
         .upload-btns { display: flex; gap: 10px; margin-bottom: 1.2em; }
-        .upload-btns button { flex: 1; min-height: 40px; padding: 8px 12px; border: 1px solid #ccd5df; border-radius: 8px; background: #fff; cursor: pointer; font-weight: 600; font-size: 0.9em; color: #333; transition: all 0.15s; }
-        .upload-btns button:hover { background: #f0f4f8; border-color: #b8c4d0; }
+        .upload-btns button { flex: 1; min-height: 40px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-subtle); cursor: pointer; font-weight: 600; font-size: 0.9em; color: var(--text-primary); transition: all 0.15s; }
+        .upload-btns button:hover { background: var(--bg-card-hover); border-color: var(--accent-color); }
 
         /* Modern Modals Backdrop */
-        .modal-backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.55); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 2500; padding: 12px; }
-        .modal-card { background: #fff; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); max-width: 580px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; padding: 18px 20px; border: 1px solid #eee; }
-        .btn-secondary { background: #eef2f6; border: 1px solid #ccd5df; color: #333; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.88em; }
-        .btn-secondary:hover { background: #e2e8f0; }
-        .btn-primary { background: #0077ff; border: none; color: #fff; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.88em; }
-        .btn-primary:hover { background: #0066dd; }
+        .modal-backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 2500; padding: 12px; }
+        .modal-card { background: var(--bg-card); color: var(--text-regular); border-radius: 12px; box-shadow: var(--card-shadow); max-width: 580px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; padding: 18px 20px; border: 1px solid var(--border-color); }
+        .btn-secondary { background: var(--bg-subtle); border: 1px solid var(--border-color); color: var(--text-primary); padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.88em; }
+        .btn-secondary:hover { background: var(--bg-card-hover); border-color: var(--accent-color); }
+        .btn-primary { background: var(--accent-color); border: none; color: #fff; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.88em; }
+        .btn-primary:hover { background: var(--accent-hover); }
 
         /* Folder Picker in Move Modal */
-        .folder-picker-list { border: 1px solid #dbe2ea; border-radius: 8px; max-height: 220px; overflow-y: auto; background: #fff; margin-bottom: 14px; }
-        .folder-picker-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #f0f3f6; cursor: pointer; transition: background 0.15s; font-size: 0.92em; color: #222; }
+        .folder-picker-list { border: 1px solid var(--border-color); border-radius: 8px; max-height: 220px; overflow-y: auto; background: var(--bg-card); margin-bottom: 14px; }
+        .folder-picker-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border-color); cursor: pointer; transition: background 0.15s; font-size: 0.92em; color: var(--text-regular); }
         .folder-picker-item:last-child { border-bottom: none; }
-        .folder-picker-item:hover { background: #f0f7ff; color: #0066cc; }
-        .folder-picker-item.up-dir { background: #f8fafc; color: #0066cc; font-weight: bold; }
+        .folder-picker-item:hover { background: var(--bg-card-hover); color: var(--accent-color); }
+        .folder-picker-item.up-dir { background: var(--bg-subtle); color: var(--accent-color); font-weight: bold; }
 
         /* Vertical Equalizer Studio Console */
         .eq-faders-wrapper { display: flex; justify-content: space-between; align-items: center; background: #14181c; border-radius: 10px; padding: 16px 8px; margin-bottom: 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; box-shadow: inset 0 2px 8px rgba(0,0,0,0.6); }
@@ -66,34 +318,35 @@
         .v-fader { -webkit-appearance: slider-vertical; writing-mode: vertical-lr; direction: rtl; width: 22px; height: 130px; background: transparent; cursor: pointer; accent-color: #0077ff; }
         .eq-fader-freq { font-size: 0.72em; font-weight: 600; color: #8fa0b0; margin-top: 6px; text-align: center; }
         /* Upload Progress Bar */
-        #upload-status-box { display: none; background: #fff; border: 1px solid #06c; border-radius: 8px; padding: 12px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,102,204,0.15); }
-        .up-row { display: flex; justify-content: space-between; font-size: 0.85em; color: #333; margin-bottom: 4px; }
-        .up-bar-track { background: #eee; border-radius: 4px; height: 8px; overflow: hidden; margin-bottom: 6px; }
-        .up-bar-fill { height: 100%; background: #06c; width: 0%; transition: width 0.1s; }
-        .up-bar-fill.overall { background: #28a745; }
-        .up-stats { font-size: 0.8em; color: #666; display: flex; justify-content: space-between; }
+        #upload-status-box { display: none; background: var(--bg-card); border: 1px solid var(--accent-color); border-radius: 8px; padding: 12px; margin-bottom: 15px; box-shadow: var(--card-shadow); color: var(--text-primary); }
+        .up-row { display: flex; justify-content: space-between; font-size: 0.85em; color: var(--text-primary); margin-bottom: 4px; }
+        .up-bar-track { background: var(--bg-subtle); border-radius: 4px; height: 8px; overflow: hidden; margin-bottom: 6px; }
+        .up-bar-fill { height: 100%; background: var(--accent-color); width: 0%; transition: width 0.35s ease-out; }
+        .up-bar-fill.overall { background: #28a745; transition: width 0.35s ease-out; }
+        .up-stats { font-size: 0.8em; color: var(--text-muted); display: flex; justify-content: space-between; }
         
-        #queue { max-height: 120px; overflow-y: auto; font-size: 0.8em; border-top: 1px solid #eee; margin-top: 8px; padding-top: 4px; }
-        .q-item { display: flex; justify-content: space-between; padding: 3px 0; color: #666; }
-        .q-item.active { color: #06c; font-weight: bold; }
+        #queue { max-height: 120px; overflow-y: auto; font-size: 0.8em; border-top: 1px solid var(--border-color); margin-top: 8px; padding-top: 4px; }
+        .q-item { display: flex; justify-content: space-between; padding: 3px 0; color: var(--text-muted); }
+        .q-item.active { color: var(--accent-color); font-weight: bold; }
         .q-item.done { color: #28a745; }
         .q-item.error { color: #dc3545; }
 
         /* Floating Mini Player */
-        #player-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; box-shadow: 0 -4px 15px rgba(0,0,0,0.12); padding: 10px 15px; display: flex; flex-direction: column; z-index: 1000; transform: translateY(100%); transition: transform 0.3s ease-out; border-top: 1px solid #eee; }
+        #player-bar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg-card); box-shadow: 0 -4px 15px rgba(0,0,0,0.3); padding: 10px 15px; display: flex; flex-direction: column; z-index: 1000; transform: translateY(100%); transition: transform 0.3s ease-out; border-top: 1px solid var(--border-color); color: var(--text-regular); }
         #player-bar.active { transform: translateY(0); }
         .player-row { display: flex; align-items: center; justify-content: space-between; }
         .track-info { display: flex; align-items: center; flex: 1; overflow: hidden; cursor: pointer; }
-        .album-art { width: 48px; height: 48px; border-radius: 6px; background: #eee; margin-right: 12px; object-fit: cover; flex-shrink: 0; box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
+        .album-art { width: 48px; height: 48px; border-radius: 6px; background: var(--bg-subtle); margin-right: 12px; object-fit: cover; flex-shrink: 0; box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
         .track-text { display: flex; flex-direction: column; overflow: hidden; }
-        .track-title { font-weight: bold; font-size: 0.95em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #111; }
-        .track-artist { font-size: 0.82em; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+        .track-title { font-weight: bold; font-size: 0.95em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
+        .track-artist { font-size: 0.82em; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
         .controls { display: flex; align-items: center; gap: 8px; margin-left: 8px; }
-        .btn-icon { background: none; border: none; font-size: 1.4em; color: #444; cursor: pointer; padding: 5px; }
-        .play-btn { width: 42px; height: 42px; border-radius: 50%; background: #06c; color: #fff; border: none; font-size: 1.1em; display: flex; align-items: center; justify-content: center; cursor: pointer; }
-        .progress-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 0.78em; color: #666; }
-        .progress-bar-container { flex: 1; height: 6px; background: #eee; border-radius: 3px; cursor: pointer; position: relative; }
-        .progress-bar-fill { height: 100%; background: #06c; border-radius: 3px; width: 0%; pointer-events: none; }
+        .btn-icon { background: none; border: none; font-size: 1.4em; color: var(--text-muted); cursor: pointer; padding: 5px; }
+        .btn-icon:hover { color: var(--text-primary); }
+        .play-btn { width: 42px; height: 42px; border-radius: 50%; background: var(--accent-color); color: #fff; border: none; font-size: 1.1em; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        .progress-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 0.78em; color: var(--text-muted); }
+        .progress-bar-container { flex: 1; height: 6px; background: var(--bg-subtle); border-radius: 3px; cursor: pointer; position: relative; }
+        .progress-bar-fill { height: 100%; background: var(--accent-color); border-radius: 3px; width: 0%; pointer-events: none; }
         
         /* Fullscreen Player */
         #fs-player { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #111; z-index: 2000; display: flex; flex-direction: column; opacity: 0; pointer-events: none; transition: opacity 0.3s; color: #fff; }
@@ -128,20 +381,20 @@
         .fs-progress-fill { height: 100%; background: #fff; border-radius: 4px; width: 0%; pointer-events: none;}
         
         /* Dropdown Menu */
-        .dropdown { position: absolute; background: #fff; box-shadow: 0 4px 15px rgba(0,0,0,0.2); border-radius: 6px; z-index: 1500; display: none; flex-direction: column; overflow: hidden; border: 1px solid #eee; }
+        .dropdown { position: absolute; background: var(--bg-card); box-shadow: var(--card-shadow); border-radius: 6px; z-index: 1500; display: none; flex-direction: column; overflow: hidden; border: 1px solid var(--border-color); }
         .dropdown.active { display: flex; }
-        .dropdown div { padding: 10px 18px; cursor: pointer; font-size: 0.88em; border-bottom: 1px solid #eee; color: #333; }
-        .dropdown div:hover { background: #f0f0f0; }
+        .dropdown div { padding: 10px 18px; cursor: pointer; font-size: 0.88em; border-bottom: 1px solid var(--border-color); color: var(--text-primary); }
+        .dropdown div:hover { background: var(--bg-card-hover); color: var(--accent-color); }
         .dropdown div:last-child { border-bottom: none; }
         @keyframes spin { 100% { transform: rotate(360deg); } }
         .loading-spin { animation: spin 1s linear infinite; opacity: 0.6; }
     
-        .eq-curve-btn { background:#eee; border:1px solid #ddd; border-radius:4px; padding:4px 8px; font-size:0.75em; cursor:pointer; font-weight:500; }
-        .eq-curve-btn:hover { background:#06c; color:#fff; border-color:#06c; }
-        .band-card { background:#fafafa; border:1px solid #eee; border-radius:6px; padding:6px 4px; text-align:center; display:flex; flex-direction:column; align-items:center; gap:4px; }
-        .band-card span.freq { font-size:0.75em; font-weight:bold; color:#444; }
-        .band-card span.val { font-size:0.72em; color:#06c; font-weight:600; min-height:14px; }
-        .band-card input[type=range] { width:100%; accent-color:#06c; }
+        .eq-curve-btn { background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 8px; font-size: 0.75em; cursor: pointer; font-weight: 500; color: var(--text-primary); }
+        .eq-curve-btn:hover { background: var(--accent-color); color: #fff; border-color: var(--accent-color); }
+        .band-card { background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 4px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .band-card span.freq { font-size: 0.75em; font-weight: bold; color: var(--text-muted); }
+        .band-card span.val { font-size: 0.72em; color: var(--accent-color); font-weight: 600; min-height: 14px; }
+        .band-card input[type=range] { width: 100%; accent-color: var(--accent-color); }
 
         /* Mobile Responsive Enhancements */
         @media (max-width: 600px) {
@@ -174,12 +427,18 @@
     
     
     <div id="header-status" style="display:flex; flex-direction:column; gap:8px;">
-        <div style="display:flex; align-items:center; justify-content:space-between;">
-            <div id="batInfo" style="display:flex; align-items:center; gap:6px; color:#444; font-weight:bold;">🔋 --</div>
-            <div id="sdInfoText" style="color:#555; font-size:0.9em; font-weight:bold;">SD: --</div>
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+            <div id="batInfo" class="bat-info" style="display:flex; align-items:center; gap:6px; font-weight:bold;">🔋 --</div>
+            <div style="display:flex; align-items:center; gap:10px;">
+                <div class="sd-traffic-indicator" id="sdTrafficBox" title="Estado de I/O do Cartão SD (MicroSD 128GB)">
+                    <span class="sd-dot" id="sdDot"></span>
+                    <span id="sdTrafficText">Livre</span>
+                </div>
+                <div id="sdInfoText" class="sd-info" style="font-size:0.9em; font-weight:bold;">SD: --</div>
+            </div>
         </div>
-        <div style="width:100%; background:#eee; height:6px; border-radius:3px; overflow:hidden;">
-            <div id="sdBar" style="height:100%; width:0%; background:#06c; transition: width 0.3s;"></div>
+        <div style="width:100%; background:var(--bg-subtle); height:6px; border-radius:3px; overflow:hidden;">
+            <div id="sdBar" style="height:100%; width:0%; background:var(--accent-color); transition: width 0.3s;"></div>
         </div>
     </div>
 
@@ -206,17 +465,42 @@
 
     <h2>Arquivos 
         <div class="toolbar" style="display:flex; gap:6px; margin-left:auto; flex-wrap:wrap;">
-            <button id="podBtn" style="background:#f0f0f0;font-size:.85em;padding:.4em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">🎙️ Podcasts</button>
-            <button id="eqBtn" style="background:#f0f0f0;font-size:.85em;padding:.4em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">🎚️ Equalizador</button>
-            <button id="mkdirBtn" style="background:#f0f0f0;font-size:.85em;padding:.4em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">📁 Nova Pasta</button>
-            <button id="configBtn" style="background:#f0f0f0;font-size:.85em;padding:.4em .6em;border:1px solid #ccc;border-radius:6px;cursor:pointer;">⚙️ Config</button>
-            <button id="otaBtn" style="background:#0077ff;color:#fff;font-size:.85em;padding:.4em .7em;border:none;border-radius:6px;cursor:pointer;font-weight:600;">🚀 Atualizar</button>
+            <button id="podBtn" class="tool-btn" style="font-size:.85em;padding:.4em .6em;">🎙️ Podcasts</button>
+            <button id="eqBtn" class="tool-btn" style="font-size:.85em;padding:.4em .6em;">🎚️ Equalizador</button>
+            <button id="mkdirBtn" class="tool-btn" style="font-size:.85em;padding:.4em .6em;">📁 Nova Pasta</button>
+            <button id="themeToggleBtn" class="tool-btn" title="Alternar Tema Claro / Escuro" onclick="toggleTheme()" style="font-size:.9em;padding:.4em .65em;">🌙</button>
+            <button id="configBtn" class="tool-btn" style="font-size:.85em;padding:.4em .6em;">⚙️ Config</button>
+            <button id="otaBtn" class="btn-primary" style="font-size:.85em;padding:.4em .7em;font-weight:600;">🚀 Atualizar</button>
         </div>
     </h2>
+
+    <!-- Barra de Ações em Lote (Seleção Múltipla) -->
+    <div id="batchBar" class="batch-bar">
+        <div class="batch-summary">
+            <span id="batchCountText">0 itens selecionados</span>
+        </div>
+        <div class="batch-actions">
+            <button type="button" id="btnBatchDownload">📥 Baixar</button>
+            <button type="button" id="btnBatchMove">📁 Mover</button>
+            <button type="button" id="btnBatchCopy">📋 Copiar</button>
+            <button type="button" id="btnBatchDelete" class="btn-danger">🗑️ Excluir</button>
+            <button type="button" id="btnBatchClear" style="background:none;border:none;cursor:pointer;">✕ Cancelar</button>
+        </div>
+    </div>
     <input type="text" id="filterInput" class="search-box" placeholder="🔍 Filtrar músicas e pastas...">
     
     <div id="crumbs">/</div>
-    <table><tbody id="tbody"></tbody></table>
+    <table>
+        <thead>
+            <tr style="background:var(--bg-subtle);border-bottom:1px solid var(--border-color);font-size:0.82em;color:var(--text-muted);text-align:left;">
+                <th style="width:38px;text-align:center;padding:8px 0 8px 10px;">
+                    <input type="checkbox" id="chkSelectAll" class="item-chk" title="Selecionar Todos">
+                </th>
+                <th style="padding:8px 10px;">Nome</th>
+            </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+    </table>
 
     <div id="dropzone">
         📁 <strong>Arraste arquivos ou pastas de música aqui</strong>
@@ -319,20 +603,40 @@
     
     
     
-    <!-- MODAL DE MOVER ARQUIVO / EXPLORADOR DE PASTAS -->
+        <!-- MODAL DE CRIAR NOVA PASTA NATIVO -->
+    <div id="mkdirModal" class="modal-backdrop" style="display:none;">
+        <div class="modal-card" style="max-width:400px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:10px;margin-bottom:14px;">
+                <h3 style="margin:0;font-size:1.1em;display:flex;align-items:center;gap:8px;">
+                    <span>📁 Nova Pasta</span>
+                </h3>
+                <button type="button" onclick="closeMkdirModal()" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:var(--text-muted);padding:0 4px;">✕</button>
+            </div>
+            <div style="margin-bottom:14px;">
+                <label style="font-size:0.85em;color:var(--text-muted);display:block;margin-bottom:6px;">Criar dentro de: <strong id="mkdirCurrentPathLabel" style="color:var(--text-primary);font-family:monospace;">/</strong></label>
+                <input type="text" id="mkdirInputName" class="search-box" style="margin-bottom:0;width:100%;" placeholder="Nome da pasta (ex: Rock 2026)">
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:8px;">
+                <button type="button" class="btn-secondary" onclick="closeMkdirModal()">Cancelar</button>
+                <button type="button" id="btnConfirmMkdir" class="btn-primary">Criar Pasta</button>
+            </div>
+        </div>
+    </div>
+
+<!-- MODAL DE MOVER ARQUIVO / EXPLORADOR DE PASTAS -->
     <div id="moveModal" class="modal-backdrop" style="display:none;">
         <div class="modal-card">
-            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:10px;margin-bottom:12px;">
                 <h3 style="margin:0;font-size:1.1em;display:flex;align-items:center;gap:8px;">
                     <span>📁 Mover:</span>
-                    <span id="moveItemName" style="color:#0077ff;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                    <span id="moveItemName" style="color:var(--accent-color);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
                 </h3>
-                <button type="button" onclick="closeMoveModal()" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:#888;padding:0 4px;">✕</button>
+                <button type="button" onclick="closeMoveModal()" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:var(--text-muted);padding:0 4px;">✕</button>
             </div>
 
-            <div style="background:#edf2f7;padding:8px 12px;border-radius:6px;margin-bottom:10px;display:flex;align-items:center;gap:6px;font-size:0.88em;">
-                <strong style="color:#4a5568;">Destino:</strong>
-                <span id="moveCurrentPath" style="font-family:monospace;color:#1a202c;word-break:break-all;">/</span>
+            <div style="background:var(--bg-subtle);padding:8px 12px;border-radius:6px;margin-bottom:10px;display:flex;align-items:center;gap:6px;font-size:0.88em;border:1px solid var(--border-color);">
+                <strong style="color:var(--text-muted);">Destino:</strong>
+                <span id="moveCurrentPath" style="font-family:monospace;color:var(--text-primary);word-break:break-all;">/</span>
             </div>
 
             <div style="display:flex;gap:8px;margin-bottom:10px;">
@@ -345,7 +649,7 @@
                 <!-- Pastas inseridas dinamicamente -->
             </div>
 
-            <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #eee;padding-top:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border-color);padding-top:12px;">
                 <button type="button" class="btn-secondary" onclick="closeMoveModal()">Cancelar</button>
                 <button type="button" id="btnConfirmMove" class="btn-primary">✓ Mover para esta pasta</button>
             </div>
@@ -355,63 +659,63 @@
     <!-- MODAL DE ATUALIZAÇÃO DE FIRMWARE (OTA) -->
     <div id="otaModal" class="modal-backdrop" style="display:none;">
         <div class="modal-card" style="max-width:440px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:10px;margin-bottom:14px;">
                 <h3 style="margin:0;display:flex;align-items:center;gap:8px;">🚀 Atualização de Firmware (OTA)</h3>
-                <button type="button" id="btnCloseOta" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:#888;padding:0 4px;">✕</button>
+                <button type="button" id="btnCloseOta" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:var(--text-muted);padding:0 4px;">✕</button>
             </div>
 
             <!-- Informações do Dispositivo -->
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:14px;font-size:0.88em;display:flex;flex-direction:column;gap:6px;">
+            <div style="background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:8px;padding:12px;margin-bottom:14px;font-size:0.88em;display:flex;flex-direction:column;gap:6px;">
                 <div style="display:flex;justify-content:space-between;">
-                    <span style="color:#64748b;">Versão Atual:</span>
+                    <span style="color:var(--text-muted);">Versão Atual:</span>
                     <strong id="otaRunningVer">Carregando...</strong>
                 </div>
                 <div style="display:flex;justify-content:space-between;">
-                    <span style="color:#64748b;">Partição em Execução:</span>
+                    <span style="color:var(--text-muted);">Partição em Execução:</span>
                     <span id="otaRunningPart" style="font-family:monospace;font-weight:bold;">--</span>
                 </div>
                 <div style="display:flex;justify-content:space-between;">
-                    <span style="color:#64748b;">Partição Alvo:</span>
-                    <span id="otaNextPart" style="font-family:monospace;font-weight:bold;color:#0077ff;">--</span>
+                    <span style="color:var(--text-muted);">Partição Alvo:</span>
+                    <span id="otaNextPart" style="font-family:monospace;font-weight:bold;color:var(--accent-color);">--</span>
                 </div>
                 <div style="display:flex;justify-content:space-between;">
-                    <span style="color:#64748b;">Bateria do MPS3:</span>
+                    <span style="color:var(--text-muted);">Bateria do MPS3:</span>
                     <strong id="otaBatteryInfo">--</strong>
                 </div>
             </div>
 
             <!-- Alerta Crítico -->
-            <div id="otaWarnBox" style="background:#fff3cd;border:1px solid #ffeeba;color:#856404;border-radius:8px;padding:10px;margin-bottom:14px;font-size:0.82em;line-height:1.4;">
+            <div id="otaWarnBox" style="background:rgba(245,166,35,0.15);border:1px solid var(--accent-color);color:var(--text-primary);border-radius:8px;padding:10px;margin-bottom:14px;font-size:0.82em;line-height:1.4;">
                 ⚠️ <strong>ATENÇÃO:</strong> Não desligue o MPS3 nem feche o navegador durante a gravação. O sistema conta com rollback anti-brick caso ocorra falha de boot.
             </div>
 
             <!-- Seletor de Arquivo .bin -->
             <div id="otaFileSection" style="margin-bottom:14px;">
                 <label style="font-size:0.85em;font-weight:bold;display:block;margin-bottom:6px;">Selecione o arquivo de firmware (.bin):</label>
-                <input type="file" id="otaFileInput" accept=".bin" style="width:100%;padding:8px;border:1px dashed #cbd5e1;border-radius:6px;background:#f8fafc;font-size:0.88em;cursor:pointer;">
+                <input type="file" id="otaFileInput" accept=".bin" style="width:100%;padding:8px;border:1px dashed var(--border-input);border-radius:6px;background:var(--bg-subtle);color:var(--text-primary);font-size:0.88em;cursor:pointer;">
                 <div id="otaFileErr" style="color:#dc2626;font-size:0.8em;margin-top:4px;display:none;"></div>
             </div>
 
             <!-- Barra de Progresso OTA -->
             <div id="otaProgressBox" style="display:none;margin-bottom:14px;">
                 <div style="display:flex;justify-content:space-between;font-size:0.85em;margin-bottom:4px;">
-                    <span id="otaStatusText" style="font-weight:bold;color:#0077ff;">Enviando firmware...</span>
+                    <span id="otaStatusText" style="font-weight:bold;color:var(--accent-color);">Enviando firmware...</span>
                     <span id="otaPctText" style="font-weight:bold;">0%</span>
                 </div>
-                <div style="width:100%;height:10px;background:#e2e8f0;border-radius:5px;overflow:hidden;">
-                    <div id="otaProgressBar" style="width:0%;height:100%;background:#0077ff;transition:width 0.15s ease;"></div>
+                <div style="width:100%;height:10px;background:var(--bg-subtle);border-radius:5px;overflow:hidden;border:1px solid var(--border-color);">
+                    <div id="otaProgressBar" style="width:0%;height:100%;background:var(--accent-color);transition:width 0.15s ease;"></div>
                 </div>
             </div>
 
             <!-- Contagem Regressiva de Reinicialização -->
-            <div id="otaCountdownBox" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:8px;padding:12px;text-align:center;margin-bottom:14px;font-size:0.9em;">
+            <div id="otaCountdownBox" style="display:none;background:rgba(16,185,129,0.15);border:1px solid #10b981;color:var(--text-primary);border-radius:8px;padding:12px;text-align:center;margin-bottom:14px;font-size:0.9em;">
                 <div>🎉 <strong>Firmware gravado com sucesso!</strong></div>
                 <div style="margin-top:6px;">O MPS3 está reiniciando. Reconectando em <strong id="otaCountdownSec">10</strong>s...</div>
             </div>
 
-            <div style="display:flex;justify-content:flex-end;gap:10px;border-top:1px solid #eee;padding-top:12px;">
+            <div style="display:flex;justify-content:flex-end;gap:10px;border-top:1px solid var(--border-color);padding-top:12px;">
                 <button type="button" id="btnCancelOta" class="btn-secondary">Cancelar</button>
-                <button type="button" id="btnStartOta" class="btn-primary" disabled style="background:#0077ff;">Iniciar Atualização</button>
+                <button type="button" id="btnStartOta" class="btn-primary" disabled>Iniciar Atualização</button>
             </div>
         </div>
     </div>
@@ -419,23 +723,23 @@
     <!-- MODAL DE SINCRONIZAÇÃO DE PODCASTS (MOBILE / TAILSCALE BRIDGE) -->
     <div id="podModal" class="modal-backdrop" style="display:none;">
         <div class="modal-card" style="max-width:520px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:10px;margin-bottom:12px;">
                 <h3 style="margin:0;display:flex;align-items:center;gap:8px;font-size:1.15em;">🎙️ Podcasts (Ponte Móvel)</h3>
-                <button type="button" id="btnClosePod" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:#888;padding:4px 8px;">✕</button>
+                <button type="button" id="btnClosePod" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:var(--text-muted);padding:4px 8px;">✕</button>
             </div>
 
             <!-- Servidor Tailscale / LAN -->
             <div style="margin-bottom:10px;">
                 <label style="font-size:0.85em;font-weight:bold;display:block;margin-bottom:4px;">Servidor Radxa (Tailscale / LAN):</label>
                 <div style="display:flex;gap:6px;">
-                    <input type="text" id="podServerUrl" placeholder="http://100.120.93.115:8088" style="flex:1;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.9em;">
+                    <input type="text" id="podServerUrl" placeholder="http://100.120.93.115:8088" style="flex:1;padding:8px 10px;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:6px;font-size:0.9em;">
                     <button type="button" id="btnTestPodServer" class="btn-secondary" style="white-space:nowrap;padding:8px 12px;">Testar</button>
                 </div>
                 <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
                     <button type="button" class="btn-secondary" style="font-size:0.75em;padding:4px 8px;" onclick="document.getElementById('podServerUrl').value='http://100.120.93.115:8088'; document.getElementById('btnTestPodServer').click();">🌐 Tailscale (100.120.93.115)</button>
                     <button type="button" class="btn-secondary" style="font-size:0.75em;padding:4px 8px;" onclick="document.getElementById('podServerUrl').value='http://192.168.15.216:8088'; document.getElementById('btnTestPodServer').click();">🏠 Rede Local (192.168.15.216)</button>
                 </div>
-                <div id="podServerStatus" style="font-size:0.8em;margin-top:4px;color:#64748b;">Dica: No celular 4G/5G, mantenha o Tailscale ativo para acessar o servidor de casa.</div>
+                <div id="podServerStatus" style="font-size:0.8em;margin-top:4px;color:var(--text-muted);">Dica: No celular 4G/5G, mantenha o Tailscale ativo para acessar o servidor de casa.</div>
             </div>
 
             <!-- Ações de Verificação -->
@@ -444,13 +748,13 @@
             </div>
 
             <!-- Barra de Seleção e Filtros de Recência -->
-            <div id="podSelectToolbar" style="display:none;background:#f1f5f9;border-radius:8px;padding:8px 10px;margin-bottom:10px;flex-direction:column;gap:6px;">
+            <div id="podSelectToolbar" style="display:none;background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:8px;padding:8px 10px;margin-bottom:10px;flex-direction:column;gap:6px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
-                    <div style="font-size:0.84em;font-weight:bold;color:#334155;">
+                    <div style="font-size:0.84em;font-weight:bold;color:var(--text-primary);">
                         <span id="podSelectedSummary">0 selecionados (0 MB)</span>
                     </div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                        <button type="button" id="btnSelectRecent" class="btn-secondary" style="font-size:0.75em;padding:4px 8px;background:#e0f2fe;color:#0369a1;border-color:#bae6fd;font-weight:bold;" title="Seleciona apenas o episódio mais recente de cada canal">⚡ Apenas Recentes (1 por canal)</button>
+                        <button type="button" id="btnSelectRecent" class="btn-secondary" style="font-size:0.75em;padding:4px 8px;font-weight:bold;color:var(--accent-color);" title="Seleciona apenas o episódio mais recente de cada canal">⚡ Apenas Recentes (1 por canal)</button>
                         <button type="button" id="btnSelectAll" class="btn-secondary" style="font-size:0.75em;padding:4px 8px;">✓ Todos</button>
                         <button type="button" id="btnSelectNone" class="btn-secondary" style="font-size:0.75em;padding:4px 8px;">✗ Nenhum</button>
                     </div>
@@ -461,77 +765,87 @@
             <div id="podDiffSection" style="margin-bottom:12px;flex:1;min-height:0;display:flex;flex-direction:column;">
                 <div style="display:flex;justify-content:space-between;font-size:0.85em;font-weight:bold;margin-bottom:6px;">
                     <span>Episódios Pendentes para o SD:</span>
-                    <span id="podPendingCount" style="color:#0077ff;">0</span>
+                    <span id="podPendingCount" style="color:var(--accent-color);">0</span>
                 </div>
-                <div id="podList" style="border:1px solid #dbe2ea;border-radius:8px;max-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;background:#f8fafc;padding:6px;font-size:0.85em;">
-                    <div style="color:#888;text-align:center;padding:14px;">Clique em "Verificar Novos Episódios" para comparar com o SD card.</div>
+                <div id="podList" style="border:1px solid var(--border-color);border-radius:8px;max-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;background:var(--bg-card);padding:6px;font-size:0.85em;color:var(--text-regular);">
+                    <div style="color:var(--text-muted);text-align:center;padding:14px;">Clique em "Verificar Novos Episódios" para comparar com o SD card.</div>
                 </div>
             </div>
 
             <!-- Progresso de Transferência -->
-            <div id="podProgressBox" style="display:none;margin-bottom:12px;background:#f0f7ff;border:1px solid #bae6fd;border-radius:8px;padding:10px;">
+            <div id="podProgressBox" style="display:none;margin-bottom:12px;background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:8px;padding:10px;">
                 <div style="display:flex;justify-content:space-between;font-size:0.85em;margin-bottom:4px;">
-                    <span id="podCurrentItem" style="font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px;color:#0369a1;">Transferindo...</span>
-                    <span id="podItemPct" style="font-weight:bold;color:#0369a1;">0%</span>
+                    <span id="podCurrentItem" style="font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px;color:var(--accent-color);">Transferindo...</span>
+                    <span id="podItemPct" style="font-weight:bold;color:var(--accent-color);">0%</span>
                 </div>
-                <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;margin-bottom:6px;">
-                    <div id="podItemBar" style="width:0%;height:100%;background:#0284c7;transition:width 0.1s linear;"></div>
+                <div style="width:100%;height:8px;background:var(--bg-card);border:1px solid var(--border-color);border-radius:4px;overflow:hidden;margin-bottom:6px;">
+                    <div id="podItemBar" style="width:0%;height:100%;background:var(--accent-color);transition:width 0.1s linear;"></div>
                 </div>
-                <div style="display:flex;justify-content:space-between;font-size:0.78em;color:#0284c7;">
+                <div style="display:flex;justify-content:space-between;font-size:0.78em;color:var(--text-muted);">
                     <span id="podOverallInfo">Total: 0/0</span>
                     <span id="podSpeedInfo">-- KB/s</span>
                 </div>
             </div>
 
-            <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #eee;padding-top:12px;gap:8px;flex-wrap:wrap;">
-                <span id="podStatusMsg" style="font-size:0.82em;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px;"></span>
+            <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border-color);padding-top:12px;gap:8px;flex-wrap:wrap;">
+                <span id="podStatusMsg" style="font-size:0.82em;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px;"></span>
                 <div style="display:flex;gap:8px;margin-left:auto;">
                     <button type="button" id="btnCancelPodSync" class="btn-secondary" style="min-height:38px;">Fechar</button>
-                    <button type="button" id="btnStartPodSync" class="btn-primary" disabled style="background:#0077ff;min-height:38px;white-space:nowrap;">Baixar Selecionados</button>
+                    <button type="button" id="btnStartPodSync" class="btn-primary" disabled style="min-height:38px;white-space:nowrap;">Baixar Selecionados</button>
                 </div>
             </div>
         </div>
     </div>
 
     <!-- MODAL DE CONFIGURAÇÃO -->
-    <div id='configModal' style='display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border:1px solid #ccc;border-radius:10px;padding:20px;box-shadow:0 4px 20px rgba(0,0,0,0.3);z-index:2000;max-width:320px;width:90%'>
+    <div id='configModal' style='display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg-card);color:var(--text-regular);border:1px solid var(--border-color);border-radius:10px;padding:20px;box-shadow:var(--card-shadow);z-index:2000;max-width:320px;width:90%'>
         <h3 style='margin-top:0'>Redes WiFi conhecidas</h3>
-        <ul id='netList' style='list-style:none;margin:.4em 0;padding:0;max-height:140px;overflow-y:auto;border:1px solid #eee;border-radius:4px'></ul>
-        <div id='netEmpty' style='display:none;color:#999;font-size:.85em;padding:.4em 0'>Nenhuma rede salva ainda.</div>
-        <label>Adicionar rede:</label><br>
-        <input type='text' id='cfgSSID' placeholder='Nome da rede (SSID)' style='width:100%;padding:6px;margin:4px 0;border:1px solid #ccc;border-radius:4px'><br>
-        <input type='password' id='cfgPass' placeholder='Senha' style='width:100%;padding:6px;margin:4px 0;border:1px solid #ccc;border-radius:4px'><br>
+        <ul id='netList' style='list-style:none;margin:.4em 0;padding:0;max-height:140px;overflow-y:auto;border:1px solid var(--border-color);border-radius:4px;background:var(--bg-subtle)'></ul>
+        <div id='netEmpty' style='display:none;color:var(--text-muted);font-size:.85em;padding:.4em 0'>Nenhuma rede salva ainda.</div>
+        <label style='font-size:0.9em;color:var(--text-muted)'>Adicionar rede:</label><br>
+        <input type='text' id='cfgSSID' placeholder='Nome da rede (SSID)' style='width:100%;padding:6px;margin:4px 0;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:4px'><br>
+        <input type='password' id='cfgPass' placeholder='Senha' style='width:100%;padding:6px;margin:4px 0;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:4px'><br>
+        
+        <hr style='border:none;border-top:1px solid var(--border-color);margin:14px 0;'>
+        <div style="margin-bottom:8px;">
+            <label style="font-weight:bold;font-size:0.9em;display:block;margin-bottom:6px;">Tema da Interface:</label>
+            <div style="display:flex;gap:6px;">
+                <button type="button" id="themeBtnAuto" class="btn-secondary" style="flex:1;padding:6px;font-size:0.82em;" onclick="setTheme('auto')">🌓 Auto</button>
+                <button type="button" id="themeBtnDark" class="btn-secondary" style="flex:1;padding:6px;font-size:0.82em;" onclick="setTheme('dark')">🌙 Escuro</button>
+                <button type="button" id="themeBtnLight" class="btn-secondary" style="flex:1;padding:6px;font-size:0.82em;" onclick="setTheme('light')">☀️ Claro</button>
+            </div>
+        </div>
         <div class='btn-row' style='display:flex;justify-content:space-between;margin-top:12px'>
-            <button id='btnSaveCfg' style='padding:.5em 1em;border:1px solid #ccc;border-radius:6px;cursor:pointer'>+ Adicionar</button>
-            <button id='btnCloseCfg' style='padding:.5em 1em;border:1px solid #ccc;border-radius:6px;cursor:pointer'>Fechar</button>
+            <button id='btnSaveCfg' class='btn-secondary'>+ Adicionar</button>
+            <button id='btnCloseCfg' class='btn-secondary'>Fechar</button>
         </div>
         <div id='cfgStatus' style='margin-top:8px;font-size:.85em;color:#2a7'></div>
     </div>
 
 
     <!-- MODAL DE EQUALIZADOR (10 BANDAS) -->
-    <div id='eqModal' style='display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border:1px solid #ccc;border-radius:12px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,0.3);z-index:2000;max-width:560px;width:95%;max-height:90vh;overflow-y:auto;'>
-        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:14px;">
+    <div id='eqModal' style='display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg-card);color:var(--text-regular);border:1px solid var(--border-color);border-radius:12px;padding:20px;box-shadow:var(--card-shadow);z-index:2000;max-width:560px;width:95%;max-height:90vh;overflow-y:auto;'>
+        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:10px;margin-bottom:14px;">
             <h3 style="margin:0;display:flex;align-items:center;gap:8px;">🎚️ Equalizador de 10 Bandas</h3>
             <div style="display:flex;align-items:center;gap:12px;">
                 <label style="cursor:pointer;display:flex;align-items:center;gap:5px;font-size:0.9em;font-weight:bold;">
-                    <input type="checkbox" id="eqMasterEnable" style="cursor:pointer;width:16px;height:16px;"> EQ Ativado
+                    <input type="checkbox" id="eqMasterEnable" style="cursor:pointer;width:16px;height:16px;accent-color:var(--accent-color);"> EQ Ativado
                 </label>
-                <button id="btnCloseEq" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:#888;padding:0 4px;">✕</button>
+                <button id="btnCloseEq" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:var(--text-muted);padding:0 4px;">✕</button>
             </div>
         </div>
 
         <!-- Seleção de Preset e Nome -->
-        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;background:#f7f9fa;padding:10px;border-radius:8px;">
-            <label style="font-size:0.85em;font-weight:bold;">Preset:</label>
-            <select id="eqPresetSelect" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-weight:bold;"></select>
-            <input type="text" id="eqPresetName" placeholder="Nome do Preset" maxlength="15" style="flex:1;min-width:110px;padding:6px 10px;border:1px solid #ccc;border-radius:6px;">
-            <button id="btnActivatePreset" style="padding:6px 12px;background:#06c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85em;font-weight:bold;">Ativar no MPS3</button>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;background:var(--bg-subtle);border:1px solid var(--border-color);padding:10px;border-radius:8px;">
+            <label style="font-size:0.85em;font-weight:bold;color:var(--text-primary);">Preset:</label>
+            <select id="eqPresetSelect" style="padding:6px 8px;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:6px;font-weight:bold;"></select>
+            <input type="text" id="eqPresetName" placeholder="Nome do Preset" maxlength="15" style="flex:1;min-width:110px;padding:6px 10px;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:6px;">
+            <button id="btnActivatePreset" class="btn-primary" style="padding:6px 12px;font-size:0.85em;font-weight:bold;">Ativar no MPS3</button>
         </div>
 
         <!-- Curvas Rápidas (Templates) -->
         <div style="margin-bottom:14px;">
-            <div style="font-size:0.8em;color:#666;margin-bottom:6px;font-weight:bold;">Carregar Curva Pronta:</div>
+            <div style="font-size:0.8em;color:var(--text-muted);margin-bottom:6px;font-weight:bold;">Carregar Curva Pronta:</div>
             <div style="display:flex;flex-wrap:wrap;gap:5px;">
                 <button class="eq-curve-btn" onclick="applyEqCurve('flat')">Flat</button>
                 <button class="eq-curve-btn" onclick="applyEqCurve('rock')">Rock / Metal</button>
@@ -561,9 +875,9 @@
         </div>
 
         <!-- Rodapé do Modal -->
-        <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #eee;padding-top:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border-color);padding-top:12px;">
             <div id="eqStatusMsg" style="font-size:0.85em;color:#28a745;font-weight:bold;"></div>
-            <button id="btnSaveEq" style="padding:8px 18px;background:#28a745;color:#fff;border:none;border-radius:6px;font-weight:bold;cursor:pointer;">💾 Salvar no MPS3</button>
+            <button id="btnSaveEq" class="btn-primary" style="padding:8px 18px;background:#28a745;font-weight:bold;">💾 Salvar no MPS3</button>
         </div>
     </div>
 
@@ -630,6 +944,7 @@
         let queueItems = [];
         let queueId = 0;
         let currentEntries = [];
+        let selectedItems = new Map(); // path -> { path, name, isDir }
 
         const defaultCover = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23333'/><text x='50' y='55' font-family='sans-serif' font-size='40' text-anchor='middle' fill='%23777'>🎵</text></svg>";
 
@@ -749,48 +1064,129 @@
         }
 
         // --- SYSTEM STATUS & DIRECTORY RENDER ---
+        let isSdTransferring = false;
         async function fetchStatus(){
             try{
                 let r=await fetch('/api/status'), j=await r.json();
                 el.sdInfoText.textContent = 'SD: '+fmtSize(j.total-j.free)+' / '+fmtSize(j.total);
                 if (j.total > 0) el.sdBar.style.width = ((j.total-j.free)/j.total*100) + '%';
                 el.batInfo.innerHTML = '🔋 ' + j.battery_percent + '% <span style="color:#888;font-size:0.85em;font-weight:normal;">(' + (j.battery_mv/1000).toFixed(2) + 'V)</span>' + (j.battery_time_left>0?' <span style="font-size:0.8em;color:#666;font-weight:normal">~'+Math.floor(j.battery_time_left/60)+'h '+j.battery_time_left%60+'m</span>':'');
+                
+                // Atualiza o Semáforo do Cartão SD
+                updateSdTraffic(j.sd_status || 'free');
             }catch(e){}
+        }
+
+        function updateSdTraffic(status) {
+            const dot = document.getElementById('sdDot');
+            const txt = document.getElementById('sdTrafficText');
+            if (!dot || !txt) return;
+            
+            // Prioridade: se o player estiver tocando localmente no navegador, indica leitura suave
+            const isAudioPlaying = el.audio && !el.audio.paused;
+            
+            if (status === 'writing' || isUploading) {
+                dot.className = 'sd-dot busy-write';
+                txt.textContent = 'Gravando (Ocupado)';
+                txt.style.color = '#ef4444';
+            } else if (isAudioPlaying || status === 'reading') {
+                dot.className = 'sd-dot busy-read';
+                txt.textContent = 'Tocando (Leitura)';
+                txt.style.color = '#f59e0b';
+            } else {
+                dot.className = 'sd-dot';
+                txt.textContent = 'Livre';
+                txt.style.color = '#10b981';
+            }
+        }
+
+        function updateBatchBar() {
+            const bar = document.getElementById('batchBar');
+            const countTxt = document.getElementById('batchCountText');
+            const chkAll = document.getElementById('chkSelectAll');
+            if (!bar || !countTxt) return;
+
+            const sz = selectedItems.size;
+            if (sz > 0) {
+                bar.classList.add('active');
+                countTxt.textContent = sz + (sz === 1 ? ' item selecionado' : ' itens selecionados');
+            } else {
+                bar.classList.remove('active');
+            }
+
+            if (chkAll) {
+                let visibleCheckboxes = el.tbody.querySelectorAll('.item-chk');
+                if (visibleCheckboxes.length === 0) {
+                    chkAll.checked = false;
+                    chkAll.indeterminate = false;
+                } else {
+                    let checkedCount = 0;
+                    visibleCheckboxes.forEach(c => { if (c.checked) checkedCount++; });
+                    if (checkedCount === 0) {
+                        chkAll.checked = false;
+                        chkAll.indeterminate = false;
+                    } else if (checkedCount === visibleCheckboxes.length) {
+                        chkAll.checked = true;
+                        chkAll.indeterminate = false;
+                    } else {
+                        chkAll.checked = false;
+                        chkAll.indeterminate = true;
+                    }
+                }
+            }
         }
 
         function renderTable(entries) {
             let filter = el.filter.value.toLowerCase().trim();
             el.tbody.innerHTML='';
             if(curDir!=='/'){
-                let tr=document.createElement('tr'); tr.innerHTML='<td class="name dir"><span>📁 ..</span></td>';
+                let tr=document.createElement('tr'); 
+                tr.innerHTML='<td class="col-check"></td><td class="name dir"><span>📁 ..</span></td>';
                 tr.querySelector('span').onclick=()=>{ curDir=curDir.split('/').slice(0,-1).join('/')||'/'; load(); };
                 el.tbody.appendChild(tr);
             }
             let filtered = entries.filter(e => e.name.toLowerCase().includes(filter));
             if (!filtered.length) {
-                el.tbody.innerHTML += '<tr><td style="text-align:center; color:#888; padding:1.5em;">Nenhum arquivo encontrado</td></tr>';
+                el.tbody.innerHTML += '<tr><td class="col-check"></td><td style="text-align:center; color:#888; padding:1.5em;">Nenhum arquivo encontrado</td></tr>';
+                updateBatchBar();
                 return;
             }
             filtered.forEach(e=>{
                 let tr=document.createElement('tr');
                 let isAudio = !e.dir && ['mp3','flac','wav','m4a'].includes(e.name.toLowerCase().split('.').pop());
+                let itemPath = joinPath(curDir, e.name);
+                let isChecked = selectedItems.has(itemPath);
                 
                 tr.innerHTML = `
+                    <td class="col-check">
+                        <input type="checkbox" class="item-chk" ${isChecked ? 'checked' : ''} title="Selecionar item">
+                    </td>
                     <td class="name ${e.dir?'dir':'file'}">
                         <span>${e.dir?'📁 ':'🎵 '}${e.name}</span>
                         <div class="actions">⋮</div>
                     </td>
                 `;
                 
+                let chk = tr.querySelector('.item-chk');
+                chk.onchange = (ev)=>{
+                    ev.stopPropagation();
+                    if(chk.checked) {
+                        selectedItems.set(itemPath, { path: itemPath, name: e.name, isDir: e.dir });
+                    } else {
+                        selectedItems.delete(itemPath);
+                    }
+                    updateBatchBar();
+                };
+
                 let span = tr.querySelector('span');
-                if(e.dir) span.onclick = ()=>{ curDir=joinPath(curDir,e.name); el.filter.value=''; load(); };
+                if(e.dir) span.onclick = ()=>{ curDir=itemPath; el.filter.value=''; load(); };
                 else if(isAudio) span.onclick = ()=>playFromFolder(e.name);
                 
                 let act = tr.querySelector('.actions');
                 if(act) {
                     act.onclick = (ev)=>{
                         ev.stopPropagation();
-                        currentCtxItem = { name: e.name, path: joinPath(curDir, e.name), isAudio: isAudio, isDir: e.dir };
+                        currentCtxItem = { name: e.name, path: itemPath, isAudio: isAudio, isDir: e.dir };
                         document.getElementById('ctxNext').style.display = isAudio ? 'block' : 'none';
                         document.getElementById('ctxQueue').style.display = isAudio ? 'block' : 'none';
                         document.getElementById('ctxDownload').style.display = e.dir ? 'none' : 'block';
@@ -801,6 +1197,7 @@
                 }
                 el.tbody.appendChild(tr);
             });
+            updateBatchBar();
         }
 
         el.filter.oninput = () => renderTable(currentEntries);
@@ -865,62 +1262,66 @@
         }
 
         async function loadTrack() {
-        if (isUploading) {
-            if (el.audio) el.audio.pause();
-            return;
-        }
-        if(playIndex < 0 || playIndex >= playlist.length) return;
-        let trk = playlist[playIndex];
-        
-        // --- 1. UI DE CARREGAMENTO ANIMADO ---
-        el.playerBar.classList.add('active');
-        el.title.textContent = el.fsTitle.textContent = "⏳ Extraindo Capa...";
-        el.artist.textContent = el.fsArtist.textContent = trk.name;
-        el.art.src = el.fsArt.src = defaultCover;
-        el.fsBg.style.backgroundImage = 'none';
-        
-        el.art.classList.add('loading-spin');
-        el.fsArt.classList.add('loading-spin');
+            if (isUploading) {
+                if (el.audio) el.audio.pause();
+                return;
+            }
+            if(playIndex < 0 || playIndex >= playlist.length) return;
+            let trk = playlist[playIndex];
+            
+            el.playerBar.classList.add('active');
+            let url = '/api/download?path=' + encodeURIComponent(trk.path);
+            let coverUrl = '/api/cover?path=' + encodeURIComponent(trk.path);
+            
+            // Inicia o áudio imediatamente para resposta instantânea ao usuário
+            el.audio.src = url;
+            el.audio.play().catch(()=>{});
+            updatePlayBtn(true);
+            
+            // Dados preliminares inteligentes a partir do caminho e nome
+            let parts = trk.path.split('/').filter(x => x);
+            let defaultArtist = parts.length >= 2 ? parts[parts.length - 2] : 'Cartão SD';
+            let title = trk.name.replace(/\.[^.]+$/, '');
+            let artist = defaultArtist;
+            
+            el.title.textContent = el.fsTitle.textContent = title;
+            el.artist.textContent = el.fsArtist.textContent = artist;
+            el.art.src = el.fsArt.src = defaultCover;
+            el.fsBg.style.backgroundImage = 'none';
 
-        let url = '/api/download?path=' + encodeURIComponent(trk.path);
-        
-        // --- 2. EXTRAIR METADATA E CAPA *PRIMEIRO* ---
-        let cached = await getCachedMetadata(trk.path);
-        let title = trk.name;
-        let artist = 'Desconhecido';
-        let picture = null;
-        
-        if (cached) {
-            title = cached.title || trk.name;
-            artist = cached.artist || 'Desconhecido';
-            picture = cached.picture;
-        } else {
-            try {
-                let t = await extractMetadata(url);
-                title = t.title || trk.name;
-                artist = t.artist || 'Desconhecido';
-                picture = t.picture;
-                setCachedMetadata(trk.path, { title: title, artist: artist, picture: picture });
-            } catch(e) {}
-        }
-        
-        // --- 3. ATUALIZAR UI COM OS DADOS ---
-        el.title.textContent = el.fsTitle.textContent = title;
-        el.artist.textContent = el.fsArtist.textContent = artist;
-        if (picture) {
-            el.art.src = el.fsArt.src = picture;
-            el.fsBg.style.backgroundImage = 'url("'+picture+'")';
-        }
-        updateMediaSession(title, artist, picture);
-        
-        el.art.classList.remove('loading-spin');
-        el.fsArt.classList.remove('loading-spin');
-        
-        // --- 4. TOCAR AUDIO DEPOIS QUE A REDE ESTA LIVRE ---
-        el.audio.src = url;
-        el.audio.play().catch(()=>{});
-        updatePlayBtn(true);
-    }function togglePlay() {
+            // Carregamento de capa nativo pelo navegador via /api/cover com cache HTTP
+            let coverImg = new Image();
+            coverImg.onload = () => {
+                el.art.src = el.fsArt.src = coverUrl;
+                el.fsBg.style.backgroundImage = 'url("' + coverUrl + '")';
+                updateMediaSession(el.title.textContent, el.artist.textContent, coverUrl);
+            };
+            coverImg.onerror = () => {
+                el.art.src = el.fsArt.src = defaultCover;
+                el.fsBg.style.backgroundImage = 'none';
+            };
+            coverImg.src = coverUrl;
+            
+            // Busca metadados de texto (Título / Artista reais de ID3/Vorbis)
+            (async () => {
+                let cached = await getCachedMetadata(trk.path);
+                if (cached && (cached.title || cached.artist)) {
+                    if (cached.title) el.title.textContent = el.fsTitle.textContent = cached.title;
+                    if (cached.artist) el.artist.textContent = el.fsArtist.textContent = cached.artist;
+                    updateMediaSession(cached.title || title, cached.artist || artist, coverUrl);
+                } else {
+                    try {
+                        let t = await extractMetadata(url);
+                        if (t.title) el.title.textContent = el.fsTitle.textContent = t.title;
+                        if (t.artist) el.artist.textContent = el.fsArtist.textContent = t.artist;
+                        if (t.title || t.artist) {
+                            setCachedMetadata(trk.path, { title: t.title || title, artist: t.artist || artist });
+                        }
+                        updateMediaSession(t.title || title, t.artist || artist, coverUrl);
+                    } catch(e) {}
+                }
+            })();
+        }function togglePlay() {
             if (isUploading) {
                 alert('Upload em andamento! Aguarde o envio terminar.');
                 return;
@@ -1035,14 +1436,28 @@
         };
 
         
-        // --- Navegação e Seleção de Pastas para Mover Arquivos ---
+        // --- Navegação e Seleção de Pastas para Mover/Copiar Arquivos (Individual ou em Lote) ---
         let moveTargetItem = null;
+        let moveBatchItems = [];
+        let moveMode = 'move'; // 'move' ou 'copy'
         let moveCurrentDir = '/';
 
-        async function openMoveModal(item) {
+        async function openMoveModal(item, mode = 'move', batch = []) {
+            moveMode = mode;
+            moveBatchItems = batch || [];
             moveTargetItem = item;
             moveCurrentDir = curDir || '/';
-            document.getElementById('moveItemName').textContent = item.name;
+
+            const nameEl = document.getElementById('moveItemName');
+            const confirmBtn = document.getElementById('btnConfirmMove');
+
+            if (moveBatchItems.length > 0) {
+                nameEl.textContent = `${moveBatchItems.length} itens selecionados`;
+                confirmBtn.textContent = mode === 'move' ? `✓ Mover ${moveBatchItems.length} itens para cá` : `✓ Copiar ${moveBatchItems.length} itens para cá`;
+            } else if (item) {
+                nameEl.textContent = item.name;
+                confirmBtn.textContent = mode === 'move' ? '✓ Mover para esta pasta' : '✓ Copiar para esta pasta';
+            }
             document.getElementById('moveModal').style.display = 'flex';
             await renderMoveFolderList();
         }
@@ -1050,6 +1465,7 @@
         function closeMoveModal() {
             document.getElementById('moveModal').style.display = 'none';
             moveTargetItem = null;
+            moveBatchItems = [];
         }
 
         async function renderMoveFolderList() {
@@ -1078,8 +1494,12 @@
                     list.appendChild(upDiv);
                 }
 
-                // Apenas pastas (exclui a própria pasta selecionada caso seja uma pasta)
-                const dirs = (data.entries || []).filter(f => f.dir && (!moveTargetItem || !moveTargetItem.isDir || f.name !== moveTargetItem.name));
+                // Apenas pastas (exclui a própria pasta selecionada caso seja uma pasta individual)
+                const dirs = (data.entries || []).filter(f => {
+                    if (!f.dir) return false;
+                    if (moveTargetItem && moveTargetItem.isDir && f.name === moveTargetItem.name) return false;
+                    return true;
+                });
                 
                 if (dirs.length === 0) {
                     const emptyDiv = document.createElement('div');
@@ -1128,22 +1548,63 @@
         };
 
         document.getElementById('btnConfirmMove').onclick = async () => {
-            if (!moveTargetItem) return;
-            if (moveTargetItem.isDir &&
-                (moveCurrentDir === moveTargetItem.path || moveCurrentDir.startsWith(moveTargetItem.path + '/'))) {
-                alert('Não é possível mover uma pasta para dentro dela mesma.');
-                return;
-            }
-            let newPath = joinPath(moveCurrentDir, moveTargetItem.name);
-            if (newPath === moveTargetItem.path) {
-                alert('O item já está nesta pasta.');
-                return;
-            }
+            const confirmBtn = document.getElementById('btnConfirmMove');
+            confirmBtn.disabled = true;
+
             try {
-                let res = await fetch('/api/move', {
+                // Modo Operação em Lote
+                if (moveBatchItems && moveBatchItems.length > 0) {
+                    let total = moveBatchItems.length;
+                    for (let i = 0; i < total; i++) {
+                        let item = moveBatchItems[i];
+                        confirmBtn.textContent = `Processando (${i + 1}/${total})...`;
+
+                        if (item.isDir && (moveCurrentDir === item.path || moveCurrentDir.startsWith(item.path + '/'))) {
+                            continue; // Não mover pasta para dentro dela mesma
+                        }
+                        let newPath = joinPath(moveCurrentDir, item.name);
+                        if (newPath === item.path) continue;
+
+                        try {
+                            let url = moveMode === 'move' ? '/api/move' : '/api/copy';
+                            let body = moveMode === 'move' 
+                                ? JSON.stringify({ old_path: item.path, new_path: newPath })
+                                : JSON.stringify({ src_path: item.path, dest_path: newPath });
+                            await fetch(url, {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: body
+                            });
+                        } catch(e) {}
+                    }
+                    selectedItems.clear();
+                    dirCache = {};
+                    closeMoveModal();
+                    updateBatchBar();
+                    load();
+                    return;
+                }
+
+                // Modo Item Único
+                if (!moveTargetItem) return;
+                if (moveTargetItem.isDir &&
+                    (moveCurrentDir === moveTargetItem.path || moveCurrentDir.startsWith(moveTargetItem.path + '/'))) {
+                    alert('Não é possível mover uma pasta para dentro dela mesma.');
+                    return;
+                }
+                let newPath = joinPath(moveCurrentDir, moveTargetItem.name);
+                if (newPath === moveTargetItem.path) {
+                    alert('O item já está nesta pasta.');
+                    return;
+                }
+                let url = moveMode === 'move' ? '/api/move' : '/api/copy';
+                let body = moveMode === 'move' 
+                    ? JSON.stringify({ old_path: moveTargetItem.path, new_path: newPath })
+                    : JSON.stringify({ src_path: moveTargetItem.path, dest_path: newPath });
+                let res = await fetch(url, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ old_path: moveTargetItem.path, new_path: newPath })
+                    body: body
                 });
                 if (res.ok) {
                     dirCache = {};
@@ -1152,17 +1613,88 @@
                 } else {
                     let errData = {};
                     try { errData = await res.json(); } catch(e) {}
-                    alert(errData.error || 'Erro ao mover');
+                    alert(errData.error || `Erro ao ${moveMode === 'move' ? 'mover' : 'copiar'}`);
                 }
             } catch(e) {
-                alert('Falha na requisição ao mover');
+                alert('Falha na requisição');
+            } finally {
+                confirmBtn.disabled = false;
             }
         };
 
         document.getElementById('ctxMove').onclick = () => {
             if(!currentCtxItem) return;
             document.getElementById('ctxMenu').classList.remove('active');
-            openMoveModal(currentCtxItem);
+            openMoveModal(currentCtxItem, 'move');
+        };
+
+        // --- HANDLERS DA BARRA DE AÇÕES EM LOTE ---
+        document.getElementById('chkSelectAll').onchange = (ev) => {
+            let filter = el.filter.value.toLowerCase().trim();
+            let filtered = (currentEntries || []).filter(e => e.name.toLowerCase().includes(filter));
+            if (ev.target.checked) {
+                filtered.forEach(e => {
+                    let itemPath = joinPath(curDir, e.name);
+                    selectedItems.set(itemPath, { path: itemPath, name: e.name, isDir: e.dir });
+                });
+            } else {
+                filtered.forEach(e => {
+                    let itemPath = joinPath(curDir, e.name);
+                    selectedItems.delete(itemPath);
+                });
+            }
+            renderTable(currentEntries);
+        };
+
+        document.getElementById('btnBatchClear').onclick = () => {
+            selectedItems.clear();
+            renderTable(currentEntries);
+        };
+
+        document.getElementById('btnBatchDelete').onclick = async () => {
+            if (selectedItems.size === 0) return;
+            const sz = selectedItems.size;
+            if (!confirm(`Deseja realmente excluir permanentemente os ${sz} itens selecionados?`)) return;
+
+            const items = Array.from(selectedItems.values());
+            for (let item of items) {
+                try {
+                    await fetch('/api/delete?path=' + encodeURIComponent(item.path), { method: 'DELETE' });
+                } catch(e) {}
+            }
+            selectedItems.clear();
+            dirCache = {};
+            updateBatchBar();
+            load();
+        };
+
+        document.getElementById('btnBatchDownload').onclick = async () => {
+            const files = Array.from(selectedItems.values()).filter(x => !x.isDir);
+            if (!files.length) {
+                alert('Nenhum arquivo para download selecionado (pastas não podem ser baixadas diretamente).');
+                return;
+            }
+            for (let i = 0; i < files.length; i++) {
+                const a = document.createElement('a');
+                a.href = '/api/download?path=' + encodeURIComponent(files[i].path);
+                a.download = files[i].name;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                if (i < files.length - 1) {
+                    await new Promise(r => setTimeout(r, 400));
+                }
+            }
+        };
+
+        document.getElementById('btnBatchMove').onclick = () => {
+            if (selectedItems.size === 0) return;
+            openMoveModal(null, 'move', Array.from(selectedItems.values()));
+        };
+
+        document.getElementById('btnBatchCopy').onclick = () => {
+            if (selectedItems.size === 0) return;
+            openMoveModal(null, 'copy', Array.from(selectedItems.values()));
         };
 
         document.getElementById('ctxDel').onclick = async ()=>{
@@ -1176,17 +1708,60 @@
             }
         };
 
-        document.getElementById('mkdirBtn').onclick = async ()=>{
-            let name = prompt('Nome da nova pasta:');
-            if(name && name.trim()) {
-                name = name.trim();
-                let path = joinPath(curDir, name);
+        function openMkdirModal() {
+            document.getElementById('mkdirCurrentPathLabel').textContent = curDir;
+            const inp = document.getElementById('mkdirInputName');
+            inp.value = '';
+            document.getElementById('mkdirModal').style.display = 'flex';
+            setTimeout(() => inp.focus(), 50);
+        }
+
+        function closeMkdirModal() {
+            document.getElementById('mkdirModal').style.display = 'none';
+        }
+
+        document.getElementById('mkdirBtn').onclick = () => openMkdirModal();
+
+        document.getElementById('btnConfirmMkdir').onclick = async () => {
+            const inp = document.getElementById('mkdirInputName');
+            let name = inp.value.trim();
+            if (!name) {
+                alert('Digite um nome para a pasta.');
+                inp.focus();
+                return;
+            }
+            if (/[\/\\:*?"<>|]/.test(name)) {
+                alert('Nome de pasta contém caracteres inválidos.');
+                return;
+            }
+            let path = joinPath(curDir, name);
+            try {
                 let res = await fetch('/api/mkdir', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ path: path })
                 });
-                if(res.ok) { dirCache = {}; load(); } else { alert('Erro ao criar pasta'); }
+                if (res.ok) {
+                    closeMkdirModal();
+                    dirCache = {};
+                    load();
+                } else {
+                    let errData = {};
+                    try { errData = await res.json(); } catch(e) {}
+                    alert(errData.error || 'Erro ao criar pasta');
+                }
+            } catch(e) {
+                alert('Falha na requisição ao criar pasta');
+            }
+        };
+
+        // Permite pressionar ENTER no campo do modal de nova pasta
+        document.getElementById('mkdirInputName').onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                document.getElementById('btnConfirmMkdir').click();
+            } else if (e.key === 'Escape') {
+                closeMkdirModal();
             }
         };
 
@@ -1238,22 +1813,19 @@
                     '&idx=' + idx + '&count=' + count + '&batchTotal=' + batchTotal;
                 xhr.open('PUT', url, true);
                 xhr.timeout = 300000;
-                let t0 = performance.now(), lastProgress = t0, lastBytes = 0;
+                let t0 = performance.now();
+                let lastCalcTime = t0;
+                let lastCalcBytes = 0;
+                let smoothKbps = 0;
+                let lastUiUpdate = 0;
 
                 xhr.upload.onprogress = (ev) => {
                     if (!ev.lengthComputable) return;
                     const now = performance.now();
                     const pct = Math.round(ev.loaded * 100 / ev.total);
-                    const deltaTime = (now - lastProgress) / 1000;
-                    const deltaBytes = ev.loaded - lastBytes;
-                    const kbps = deltaTime > 0.05 ? (deltaBytes / 1024) / deltaTime : 0;
-                    lastBytes = ev.loaded; lastProgress = now;
 
                     el.upFileBar.style.width = pct + '%';
                     el.upFilePct.textContent = pct + '%';
-                    const etaSec = kbps > 0.05 ? ((ev.total - ev.loaded) / 1024) / kbps : -1;
-                    el.upSpeed.textContent = kbps >= 1024 ? (kbps / 1024).toFixed(1) + ' MB/s' : Math.round(kbps) + ' KB/s';
-                    el.upEta.textContent = etaSec >= 0 ? fmtEta(etaSec) : '';
 
                     if (count > 1) {
                         const overallDone = window.__batchDoneBefore + ev.loaded;
@@ -1261,6 +1833,31 @@
                         el.upOverallBar.style.width = opct + '%';
                         el.upOverallPct.textContent = opct + '%';
                         el.upOverallLabel.textContent = 'Geral (' + idx + '/' + count + ')';
+                    }
+
+                    const dt = (now - lastCalcTime) / 1000;
+                    if (dt >= 0.12) {
+                        const dBytes = ev.loaded - lastCalcBytes;
+                        const instKbps = dBytes > 0 ? (dBytes / 1024) / dt : smoothKbps;
+                        if (smoothKbps <= 0) {
+                            smoothKbps = instKbps;
+                        } else {
+                            // Filtro EMA (75% historico + 25% instantaneo) para eliminar efeito serrote e pausas bruscas
+                            smoothKbps = (smoothKbps * 0.75) + (instKbps * 0.25);
+                        }
+                        lastCalcTime = now;
+                        lastCalcBytes = ev.loaded;
+
+                        // Atualiza as legendas de velocidade e tempo a cada 200ms para manter a leitura limpa e estavel
+                        if (now - lastUiUpdate >= 200 || pct >= 100) {
+                            lastUiUpdate = now;
+                            el.upSpeed.textContent = smoothKbps >= 1024 
+                                ? (smoothKbps / 1024).toFixed(2) + ' MB/s' 
+                                : Math.round(smoothKbps) + ' KB/s';
+                            const remKb = (ev.total - ev.loaded) / 1024;
+                            const etaSec = smoothKbps > 5 ? remKb / smoothKbps : -1;
+                            el.upEta.textContent = etaSec >= 0 ? fmtEta(etaSec) : '--';
+                        }
                     }
                 };
 
@@ -1325,6 +1922,7 @@
                     break;
                 }
                 window.__batchDoneBefore += f.size;
+                await new Promise(r => setTimeout(r, 100)); // Breve pausa cooperativa para fechar o socket TCP anterior
             }
 
             isUploading = false;
@@ -1364,10 +1962,13 @@
         el.inpFiles.onchange = (e) => { if (e.target.files.length) uploadBatch(e.target.files); e.target.value = ''; };
         el.inpFolder.onchange = (e) => { if (e.target.files.length) uploadBatch(e.target.files); e.target.value = ''; };
 
-        // --- METADATA EXTRACTION (SAFE NON-BLOCKING) ---
+        // --- METADATA EXTRACTION (SAFE NON-BLOCKING & LEAN 128KB) ---
         async function extractMetadata(url) {
             try {
-                let res = await fetch(url, { headers: { 'Range': 'bytes=0-2097151' } });
+                let ctrl = new AbortController();
+                let tid = setTimeout(() => ctrl.abort(), 5000);
+                let res = await fetch(url, { headers: { 'Range': 'bytes=0-131071' }, signal: ctrl.signal });
+                clearTimeout(tid);
                 if (!res.ok && res.status !== 206) return {};
                 let buf = await res.arrayBuffer();
                 let u8 = new Uint8Array(buf);

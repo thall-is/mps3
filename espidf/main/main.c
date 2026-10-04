@@ -38,6 +38,7 @@
 #include "menu.h"
 #include "podcast_sync.h"
 #include "pwr_governor.h"
+#include "debug_nav.h"
 
 static const char *TAG = "main";
 static bool s_sd_ok = false;
@@ -372,7 +373,7 @@ static void display_task(void *arg)
         // e touch_task (Core 0, prioridade 5).
         uint32_t frame_elapsed_ms = (uint32_t)(esp_timer_get_time() / 1000ULL) - frame_start_ms;
         bool is_transferring = (wifi_transfer_is_active() && wifi_transfer_is_transferring()) || podcast_sync_is_busy();
-        const uint32_t target_frame_ms = is_transferring ? 250 : 40; // 4 FPS durante transferencias (libera 95% do barramento I2C e Core 0) / 25 FPS normal
+        const uint32_t target_frame_ms = is_transferring ? 100 : 40; // 10 FPS durante transferencias (suave e fluido, 34ms I2C + 66ms folga) / 25 FPS normal
         if (frame_elapsed_ms < target_frame_ms) {
             uint32_t sleep_ms = target_frame_ms - frame_elapsed_ms;
             vTaskDelay(pdMS_TO_TICKS(sleep_ms < 2 ? 2 : sleep_ms));
@@ -475,6 +476,11 @@ static void uart_cmd_task(void *arg)
                     } else if (strcmp(line_buf, "play") == 0 || strcmp(line_buf, "p") == 0) {
                         ESP_LOGI("UART_CMD", "Comando recebido: toggle play/pause");
                         audio_player_toggle_play_pause();
+                    } else if (strncmp(line_buf, "sd-freq ", 8) == 0) {
+                        uint32_t f = (uint32_t)strtoul(line_buf + 8, NULL, 10);
+                        if (f < 1000) f *= 1000;
+                        sd_card_set_frequency(f);
+                        ESP_LOGI("UART_CMD", "SDMMC clock ajustado para %u kHz (%.2f MHz)", (unsigned)f, (double)f / 1000.0);
                     } else if (strcmp(line_buf, "i2c") == 0) {
                         ESP_LOGI("UART_CMD", "Varrendo barramento I2C (SDA=%d, SCL=%d)...", PIN_OLED_SDA, PIN_OLED_SCL);
                         i2c_master_bus_handle_t bus = u8g2_hal_get_bus_handle();
@@ -585,6 +591,36 @@ static void uart_cmd_task(void *arg)
                     } else if (strcmp(line_buf, "deepsleep") == 0) {
                         ESP_LOGI("UART_CMD", "[PWR] Entrando em Deep Sleep (<100 uA)... Pressione JOY_UP ou conecte carregador para acordar.");
                         pwr_governor_enter_deep_sleep();
+                    } else if (strcmp(line_buf, "dbg on") == 0) {
+                        debug_nav_set_enabled(true);
+                    } else if (strcmp(line_buf, "dbg off") == 0) {
+                        debug_nav_set_enabled(false);
+                    } else if (strncmp(line_buf, "btn ", 4) == 0) {
+                        const char *p = line_buf + 4;
+                        while (*p == ' ') p++;
+                        char b = *p++;
+                        uint32_t ms = 80;
+                        if (*p != '\0') {
+                            while (*p == ' ' || *p == ':') p++;
+                            if (*p != '\0') ms = (uint32_t)strtoul(p, NULL, 10);
+                        }
+                        char sbuf[32];
+                        snprintf(sbuf, sizeof(sbuf), "%c:%u", b, (unsigned)ms);
+                        esp_err_t err = debug_nav_enqueue_seq(sbuf);
+                        if (err == ESP_OK) printf("@OK btn %s\n", sbuf);
+                        else printf("@ERR btn invalid\n");
+                    } else if (strncmp(line_buf, "seq ", 4) == 0) {
+                        const char *p = line_buf + 4;
+                        while (*p == ' ') p++;
+                        esp_err_t err = debug_nav_enqueue_seq(p);
+                        if (err == ESP_OK) printf("@OK seq\n");
+                        else printf("@ERR seq invalid\n");
+                    } else if (strcmp(line_buf, "ui") == 0) {
+                        debug_nav_dump_state();
+                    } else if (strcmp(line_buf, "screen") == 0) {
+                        debug_nav_request_screenshot();
+                    } else if (strcmp(line_buf, "nav reset") == 0) {
+                        debug_nav_reset_home();
                     }
                     line_len = 0;
                 }
@@ -720,6 +756,7 @@ void app_main(void)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Falha ao iniciar os controles do joystick (codigo %d). Continuando sem controles.", ret);
     }
+    debug_nav_init();
 
     ESP_LOGI(TAG, "Iniciando usb_manager...");
     ret = usb_manager_init();
@@ -752,7 +789,7 @@ void app_main(void)
     touch_input_set_display_task_handle(display_handle);
 
     ESP_LOGI(TAG, "Criando uart_cmd_task no Core 0...");
-    xTaskCreatePinnedToCore(uart_cmd_task, "uart_cmd", 8192, NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(uart_cmd_task, "uart_cmd", 4096, NULL, 1, NULL, 0);
 
     // --- Autovalidacao de firmware e cancelamento de rollback OTA ---
     const esp_partition_t *running_part = esp_ota_get_running_partition();

@@ -607,6 +607,19 @@ static void url_decode(char *dst, const char *src, size_t dst_len)
         }
     }
     dst[di] = '\0';
+
+    // Higienizacao de caracteres especiais para FATFS:
+    // O caractere Unicode '？' (Fullwidth Question Mark, U+FF1F) em UTF-8 eh: 0xEF 0xBC 0x9F.
+    // O FAT32 nao aceita '?' e a codepage 850 nao suporta U+FF1F. Substituimos por '-'
+    for (size_t i = 0; dst[i] != '\0'; i++) {
+        if ((unsigned char)dst[i] == 0xEF && (unsigned char)dst[i+1] == 0xBC && (unsigned char)dst[i+2] == 0x9F) {
+            dst[i] = '-';
+            // Desloca os proximos bytes para eliminar os 2 bytes extras do caractere UTF-8 multibyte
+            memmove(&dst[i+1], &dst[i+3], strlen(&dst[i+3]) + 1);
+        } else if (dst[i] == '?' || dst[i] == '*' || dst[i] == ':' || dst[i] == '<' || dst[i] == '>' || dst[i] == '|' || dst[i] == '"') {
+            dst[i] = '-';
+        }
+    }
 }
 
 static bool build_abs_path(const char *rel, char *out, size_t out_len)
@@ -657,14 +670,19 @@ static esp_err_t recursive_delete(const char *abs_path)
     DIR *d = opendir(abs_path);
     if (!d) return ESP_FAIL;
     struct dirent *entry;
-    char child[700];
+    char *child = malloc(512);
+    if (!child) {
+        closedir(d);
+        return ESP_ERR_NO_MEM;
+    }
     esp_err_t err = ESP_OK;
     while ((entry = readdir(d)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
-        snprintf(child, sizeof(child), "%s/%s", abs_path, entry->d_name);
+        snprintf(child, 512, "%s/%s", abs_path, entry->d_name);
         err = recursive_delete(child);
         if (err != ESP_OK) break;
     }
+    free(child);
     closedir(d);
     if (err != ESP_OK) return err;
     return rmdir(abs_path) == 0 ? ESP_OK : ESP_FAIL;
@@ -689,15 +707,15 @@ static void json_escape(const char *in, char *out, size_t out_len)
 
 static esp_err_t api_list_get_handler(httpd_req_t *req)
 {
-    char query[256] = {0};
-    char path_enc[192] = {0};
-    char rel_path[192] = {0};
+    char query[512] = {0};
+    char path_enc[400] = {0};
+    char rel_path[400] = {0};
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
         httpd_query_key_value(query, "path", path_enc, sizeof(path_enc));
         url_decode(rel_path, path_enc, sizeof(rel_path));
     }
 
-    char abs_path[400];
+    char abs_path[600];
     if (!build_abs_path(rel_path, abs_path, sizeof(abs_path))) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "caminho invalido");
         return ESP_FAIL;
@@ -756,6 +774,87 @@ static esp_err_t api_list_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// --- Pipeline de upload: httpd (recepcao TCP) -> RingBuffer PSRAM -> task escritora (SD) ---
+#define UPLOAD_RINGBUF_SIZE          (3 * 1024 * 1024)  // "pulmao" elastico em PSRAM (sweet spot medido)
+#define UPLOAD_RINGBUF_MIN           (64 * 1024)
+#define UPLOAD_RECV_BUF_SIZE         (16 * 1024)        // metade da janela TCP do lwIP (32 KB)
+#define UPLOAD_BOUNCE_SIZE           (16 * 1024)        // 32 setores: excelente throughput DMA sem esgotar SRAM interna
+#define UPLOAD_LOCK_TIMEOUT_MS       5000
+#define UPLOAD_RING_SEND_TIMEOUT_MS  30000
+
+static SemaphoreHandle_t s_upload_lock = NULL;
+static uint8_t *s_upload_dma_bounce = NULL;
+static size_t   s_upload_dma_bounce_size = 0;
+
+#define UPLOAD_WRITER_STACK_WORDS    2048 // 2048 * sizeof(StackType_t) = 8192 bytes
+static StaticTask_t s_writer_task_tcb;
+static StackType_t *s_writer_stack = NULL;
+
+typedef struct {
+    FILE *fp;
+    RingbufHandle_t rb;
+    SemaphoreHandle_t done_sem;
+    volatile bool producer_done;  // httpd ja empurrou todos os bytes (ou desistiu)
+    volatile bool abort;          // descartar o restante sem gravar
+    volatile bool failed;         // erro de escrita no SD
+    volatile size_t written;      // bytes realmente gravados no SD
+} upload_ctx_t;
+
+static void upload_writer_task(void *arg)
+{
+    upload_ctx_t *ctx = (upload_ctx_t *)arg;
+
+    // Utiliza buffer DMA pre-alocado no inicio do modo Wi-Fi (evita concorrencia de heap durante transferencias)
+    uint8_t *bounce = s_upload_dma_bounce;
+    size_t chunk_sz = s_upload_dma_bounce_size;
+    bool dyn_alloc = false;
+
+    if (!bounce || chunk_sz < 512) {
+        size_t max_block = heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        chunk_sz = (max_block > 8192) ? 4096 : 2048;
+        bounce = (uint8_t *)heap_caps_malloc(chunk_sz, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (bounce) dyn_alloc = true;
+    }
+
+    if (!bounce) {
+        ESP_LOGE(TAG, "[WRITER] Falha fatal: nenhum buffer DMA disponivel em SRAM!");
+        ctx->failed = true;
+        chunk_sz = 0;
+    } else {
+        ESP_LOGI(TAG, "[WRITER] Bounce buffer DMA escritor ativo: %zu bytes (em SRAM DMA)", chunk_sz);
+    }
+
+    while (true) {
+        // Le o flag ANTES de receber: se done ja estava setado e o ring veio vazio, nao ha mais nada.
+        bool was_done = ctx->producer_done;
+
+        size_t got = 0;
+        void *item = xRingbufferReceiveUpTo(ctx->rb, &got, pdMS_TO_TICKS(100), chunk_sz ? chunk_sz : 2048);
+        if (item) {
+            if (!ctx->abort && !ctx->failed && bounce) {
+                memcpy(bounce, item, got);   // got <= chunk_sz
+                vRingbufferReturnItem(ctx->rb, item);
+                size_t w = fwrite(bounce, 1, got, ctx->fp);
+                if (w != got) {
+                    ESP_LOGE(TAG, "[WRITER] fwrite falhou: tentou %zu bytes, escreveu %zu (errno=%d: %s)",
+                             got, w, errno, strerror(errno));
+                    ctx->failed = true;
+                } else {
+                    ctx->written += got;
+                }
+            } else {
+                vRingbufferReturnItem(ctx->rb, item); // descarta (abortado/erro) para destravar o produtor
+            }
+            continue;
+        }
+        if (was_done) break;
+    }
+
+    if (dyn_alloc && bounce) heap_caps_free(bounce);
+    xSemaphoreGive(ctx->done_sem);  // ultima coisa tocando ctx
+    vTaskDelete(NULL);
+}
+
 static esp_err_t api_upload_put_handler(httpd_req_t *req)
 {
     if (s_ota_in_progress) {
@@ -803,11 +902,21 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     const char *slash = strrchr(rel_path, '/');
     if (slash) display_name = slash + 1;
 
+    // O httpd e' single-thread, mas o lock protege contra reentrada (ex: OTA/bench) e
+    // da' tempo ao upload anterior de terminar o fechamento antes de rejeitar o proximo.
+    if (!s_upload_lock) s_upload_lock = xSemaphoreCreateMutex();
+    if (!s_upload_lock || xSemaphoreTake(s_upload_lock, pdMS_TO_TICKS(UPLOAD_LOCK_TIMEOUT_MS)) != pdTRUE) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_send(req, "Outro upload em andamento", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
     FILE *fp = fopen(abs_path, "wb");
     if (!fp) {
         ESP_LOGE(TAG, "Nao foi possivel criar %s (errno=%d: %s)", abs_path, errno, strerror(errno));
         char err_msg[128];
         snprintf(err_msg, sizeof(err_msg), "nao foi possivel criar o arquivo no cartao (%s)", strerror(errno));
+        xSemaphoreGive(s_upload_lock);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, err_msg);
         return ESP_FAIL;
     }
@@ -815,20 +924,56 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     size_t content_len = req->content_len;
     progress_begin(display_name, content_len, idx, count, batch_total > 0 ? batch_total : (long long)content_len);
 
-    size_t buf_size = 32768;
-    char *buf = (char *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    // RingBuffer na PSRAM: nao desperdica SRAM interna (reservada ao DMA do SDMMC).
+    // Limitado ao tamanho do arquivo para nao alocar 3 MB a toa em arquivos pequenos.
+    size_t rb_size = UPLOAD_RINGBUF_SIZE;
+    if (content_len + 4096 < rb_size) rb_size = content_len + 4096;
+    if (rb_size < UPLOAD_RINGBUF_MIN) rb_size = UPLOAD_RINGBUF_MIN;
+
+    upload_ctx_t ctx = {0};
+    ctx.fp = fp;
+    while (!ctx.rb && rb_size >= UPLOAD_RINGBUF_MIN) {
+        ctx.rb = xRingbufferCreateWithCaps(rb_size, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!ctx.rb) rb_size /= 2;
+    }
+    ctx.done_sem = xSemaphoreCreateBinary();
+
+    size_t recv_sz = UPLOAD_RECV_BUF_SIZE;
+    char *buf = (char *)heap_caps_malloc(recv_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) {
-        buf_size = 16384;
-        buf = (char *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        buf = (char *)malloc(recv_sz);
     }
     if (!buf) {
-        buf_size = 8192;
-        buf = (char *)malloc(buf_size);
+        recv_sz = 4096;
+        buf = (char *)malloc(recv_sz);
     }
-    if (!buf) {
+
+    bool writer_started = false;
+    if (ctx.rb && ctx.done_sem && buf) {
+        if (s_writer_stack) {
+            TaskHandle_t th = xTaskCreateStaticPinnedToCore(
+                upload_writer_task,
+                "up_wr",
+                UPLOAD_WRITER_STACK_WORDS,
+                &ctx,
+                5,
+                s_writer_stack,
+                &s_writer_task_tcb,
+                0 // Core 0 dedicado ao SDMMC
+            );
+            writer_started = (th != NULL);
+        } else {
+            writer_started = (xTaskCreatePinnedToCore(upload_writer_task, "up_wr", 4096, &ctx, 5, NULL, 0) == pdPASS);
+        }
+    }
+    if (!writer_started) {
+        if (ctx.rb) vRingbufferDeleteWithCaps(ctx.rb);
+        if (ctx.done_sem) vSemaphoreDelete(ctx.done_sem);
+        free(buf);
         fclose(fp);
         remove(abs_path);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sem memoria para o buffer de upload");
+        xSemaphoreGive(s_upload_lock);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sem memoria para o pipeline de upload");
         progress_end();
         return ESP_FAIL;
     }
@@ -838,14 +983,21 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     int consecutive_timeouts = 0;
     const int max_consecutive_timeouts = 100;
     uint32_t last_prog_update_ms = 0;
-    size_t buf_fill = 0;
     char fail_detail[128] = "conexao interrompida durante o envio";
 
+    // Produtor: so' le do socket e empurra para o RingBuffer. Nenhum ESP_LOG aqui dentro
+    // (milhares de linhas na UART derrubavam o upload por timeout).
     while (remaining > 0) {
-        int to_read = (int)(buf_size - buf_fill);
+        if (ctx.failed) {
+            snprintf(fail_detail, sizeof(fail_detail), "fwrite SD erro (cartao cheio ou falha de escrita)");
+            ok = false;
+            break;
+        }
+
+        int to_read = (int)recv_sz;
         if (to_read > (int)remaining) to_read = (int)remaining;
 
-        int received = httpd_req_recv(req, buf + buf_fill, to_read);
+        int received = httpd_req_recv(req, buf, to_read);
         if (received == HTTPD_SOCK_ERR_TIMEOUT) {
             if (++consecutive_timeouts > max_consecutive_timeouts) {
                 ESP_LOGE(TAG, "Upload de %s abortado: timeout demais seguidos", display_name);
@@ -863,32 +1015,39 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
             break;
         }
 
-        buf_fill += (size_t)received;
+        // Bloqueia se o ring estiver cheio (contrapressao natural: a janela TCP fecha).
+        if (xRingbufferSend(ctx.rb, buf, (size_t)received, pdMS_TO_TICKS(UPLOAD_RING_SEND_TIMEOUT_MS)) != pdTRUE) {
+            ESP_LOGE(TAG, "RingBuffer travou (SD nao drena)");
+            snprintf(fail_detail, sizeof(fail_detail), "SD nao esta drenando o buffer de upload");
+            ok = false;
+            break;
+        }
         remaining -= (size_t)received;
 
-        // Grava em blocos alinhados de 32 KB para velocidade maxima no SDMMC
-        if (buf_fill >= buf_size || remaining == 0) {
-            size_t written = fwrite(buf, 1, buf_fill, fp);
-            if (written != buf_fill) {
-                ESP_LOGE(TAG, "fwrite no SD falhou: esperado=%d, gravado=%d (errno=%d: %s)",
-                         (int)buf_fill, (int)written, errno, strerror(errno));
-                snprintf(fail_detail, sizeof(fail_detail), "fwrite SD erro: esperado=%d ret=%d (errno=%d: %s)",
-                         (int)buf_fill, (int)written, errno, strerror(errno));
-                ok = false;
-                break;
-            }
-            buf_fill = 0;
-        }
-
-        // Throttle progress_update: atualiza a cada 150ms para eliminar disputa de mutex
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
-        if (now_ms - last_prog_update_ms >= 150 || remaining == 0) {
+        if (now_ms - last_prog_update_ms >= 150) {
             last_prog_update_ms = now_ms;
-            progress_update(content_len - remaining);
+            progress_update(ctx.written);
         }
     }
+
+    // Sinaliza fim ao escritor e espera ele terminar de gravar tudo (ou descartar, se abortado).
+    if (!ok) ctx.abort = true;
+    ctx.producer_done = true;
+    xSemaphoreTake(ctx.done_sem, portMAX_DELAY);
+    if (ctx.failed) {
+        if (ok) snprintf(fail_detail, sizeof(fail_detail), "fwrite SD erro (cartao cheio ou falha de escrita)");
+        ok = false;
+    }
+
+    // Dá tempo para a Idle Task do Core 0 limpar os recursos da tarefa finalizada
+    vTaskDelay(pdMS_TO_TICKS(15));
+
+    vRingbufferDeleteWithCaps(ctx.rb);
+    vSemaphoreDelete(ctx.done_sem);
     free(buf);
     fclose(fp);
+    xSemaphoreGive(s_upload_lock);
 
     if (!ok) {
         remove(abs_path);
@@ -910,9 +1069,9 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
 
 static esp_err_t api_download_get_handler(httpd_req_t *req)
 {
-    char query[256] = {0};
-    char path_enc[192] = {0};
-    char rel_path[192] = {0};
+    char query[512] = {0};
+    char path_enc[400] = {0};
+    char rel_path[400] = {0};
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
         httpd_query_key_value(query, "path", path_enc, sizeof(path_enc)) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "faltou o parametro 'path'");
@@ -920,7 +1079,7 @@ static esp_err_t api_download_get_handler(httpd_req_t *req)
     }
     url_decode(rel_path, path_enc, sizeof(rel_path));
 
-    char abs_path[400];
+    char abs_path[600];
     if (!build_abs_path(rel_path, abs_path, sizeof(abs_path)) || rel_path[0] == '\0') {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "caminho invalido");
         return ESP_FAIL;
@@ -932,9 +1091,15 @@ static esp_err_t api_download_get_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    struct stat st;
+    if (stat(abs_path, &st) != 0 || S_ISDIR(st.st_mode)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Arquivo nao encontrado ou e diretorio");
+        return ESP_FAIL;
+    }
+
     FILE *fp = fopen(abs_path, "rb");
     if (!fp) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Arquivo nao encontrado");
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Falha ao abrir arquivo");
         return ESP_FAIL;
     }
 
@@ -1028,9 +1193,9 @@ static esp_err_t api_download_get_handler(httpd_req_t *req)
 
 static esp_err_t api_delete_handler(httpd_req_t *req)
 {
-    char query[256] = {0};
-    char path_enc[192] = {0};
-    char rel_path[192] = {0};
+    char query[512] = {0};
+    char path_enc[400] = {0};
+    char rel_path[400] = {0};
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
         httpd_query_key_value(query, "path", path_enc, sizeof(path_enc)) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "faltou o parametro 'path'");
@@ -1038,7 +1203,7 @@ static esp_err_t api_delete_handler(httpd_req_t *req)
     }
     url_decode(rel_path, path_enc, sizeof(rel_path));
 
-    char abs_path[400];
+    char abs_path[600];
     if (!build_abs_path(rel_path, abs_path, sizeof(abs_path)) || rel_path[0] == '\0') {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "caminho invalido");
         return ESP_FAIL;
@@ -1510,16 +1675,16 @@ static esp_err_t api_eq_post_handler(httpd_req_t *req) {
 }
 
 static esp_err_t api_rename_post_handler(httpd_req_t *req) {
-    char buf[512];
+    char buf[1024];
     int ret = httpd_req_recv(req, buf, req->content_len < sizeof(buf) - 1 ? req->content_len : sizeof(buf) - 1);
     if (ret <= 0) return ESP_FAIL;
     buf[ret] = '\0';
     
-    char old_path[128] = {0}, new_path[128] = {0};
+    char old_path[400] = {0}, new_path[400] = {0};
     get_json_string(buf, "old_path", old_path, sizeof(old_path));
     get_json_string(buf, "new_path", new_path, sizeof(new_path));
     
-    char old_abs[300], new_abs[300];
+    char old_abs[600], new_abs[600];
     if (!build_abs_path(old_path, old_abs, sizeof(old_abs)) ||
         !build_abs_path(new_path, new_abs, sizeof(new_abs))) {
         httpd_resp_set_status(req, "400 Bad Request");
@@ -1552,16 +1717,16 @@ static esp_err_t api_move_post_handler(httpd_req_t *req) {
 }
 
 static esp_err_t api_copy_post_handler(httpd_req_t *req) {
-    char buf[512];
+    char buf[1024];
     int ret = httpd_req_recv(req, buf, req->content_len < sizeof(buf) - 1 ? req->content_len : sizeof(buf) - 1);
     if (ret <= 0) return ESP_FAIL;
     buf[ret] = '\0';
     
-    char src_path[128] = {0}, dest_path[128] = {0};
+    char src_path[400] = {0}, dest_path[400] = {0};
     get_json_string(buf, "src_path", src_path, sizeof(src_path));
     get_json_string(buf, "dest_path", dest_path, sizeof(dest_path));
     
-    char src_abs[300], dest_abs[300];
+    char src_abs[600], dest_abs[600];
     if (!build_abs_path(src_path, src_abs, sizeof(src_abs)) ||
         !build_abs_path(dest_path, dest_abs, sizeof(dest_abs))) {
         httpd_resp_set_status(req, "400 Bad Request");
@@ -1607,12 +1772,12 @@ static esp_err_t api_copy_post_handler(httpd_req_t *req) {
 }
 
 static esp_err_t api_mkdir_post_handler(httpd_req_t *req) {
-    char buf[256];
+    char buf[1024];
     int ret = httpd_req_recv(req, buf, req->content_len < sizeof(buf) - 1 ? req->content_len : sizeof(buf) - 1);
     if (ret <= 0) return ESP_FAIL;
     buf[ret] = '\0';
     
-    char dir_path[128] = {0};
+    char dir_path[400] = {0};
     get_json_string(buf, "path", dir_path, sizeof(dir_path));
     if (dir_path[0] == '\0') {
         httpd_resp_set_status(req, "400 Bad Request");
@@ -1620,14 +1785,14 @@ static esp_err_t api_mkdir_post_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
     
-    char abs_path[300];
+    char abs_path[600];
     if (!build_abs_path(dir_path, abs_path, sizeof(abs_path))) {
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_send(req, "{\"error\":\"caminho invalido\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
 
-    char abs_file[320];
+    char abs_file[620];
     snprintf(abs_file, sizeof(abs_file), "%s/", abs_path);
     mkdir_p_for_file(abs_file);
 
@@ -2049,28 +2214,40 @@ static esp_err_t api_podcasts_local_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t http_socket_open_cb(httpd_handle_t hd, int sockfd)
+{
+    int enable_nodelay = 1;
+    setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (char *)&enable_nodelay, sizeof(enable_nodelay));
+
+    struct timeval tv;
+    tv.tv_sec = 30;
+    tv.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(tv));
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (char *)&tv, sizeof(tv));
+
+    return ESP_OK;
+}
+
 static esp_err_t start_httpd(void)
 {
     if (s_httpd) return ESP_OK;
 
-    static uint16_t s_ctrl_port = 32768;
-
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.stack_size = 6144;
-    config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT; // Stack na DRAM interna (essencial para que chamadas flash/OTA nao crashem com cache desativado)
-    config.core_id = 1; // Roda no Core 1 com 240 MHz livres enquanto o player esta pausado!
-    config.ctrl_port = s_ctrl_port++;
-    if (s_ctrl_port > 32800) s_ctrl_port = 32768;
+    config.stack_size = 8192;
+    config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT; // Stack na DRAM interna
+    config.core_id = 1; // Roda no Core 1 com 240 MHz livres
+    config.ctrl_port = 32768;
     config.max_uri_handlers = 32;
     config.max_open_sockets = 7;
     config.backlog_conn = 5;
     config.lru_purge_enable = true;
     config.keep_alive_enable = true;
-    config.keep_alive_idle = 5;
+    config.keep_alive_idle = 10;
     config.keep_alive_interval = 5;
-    config.keep_alive_count = 3;
-    config.send_wait_timeout = 15;
-    config.recv_wait_timeout = 15;
+    config.keep_alive_count = 5;
+    config.send_wait_timeout = 30;
+    config.recv_wait_timeout = 30;
+    config.open_fn = http_socket_open_cb;
 
     ESP_LOGI(TAG, "Iniciando servidor HTTP (modo=%s, ip=%s, ctrl_port=%d)...",
              s_mode == WIFI_TRANSFER_MODE_STA ? "STA" : "AP", s_status, config.ctrl_port);
@@ -2226,7 +2403,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         if (event_id == WIFI_EVENT_STA_START) {
             esp_wifi_connect();
         } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
-            if (s_active && (s_mode == WIFI_TRANSFER_MODE_STA || s_mode == WIFI_TRANSFER_MODE_APSTA) && !s_got_ip) {
+            s_got_ip = false;
+            if (s_active && (s_mode == WIFI_TRANSFER_MODE_STA || s_mode == WIFI_TRANSFER_MODE_APSTA)) {
                 if (s_sta_retry < WIFI_STA_MAX_RETRY) {
                     s_sta_retry++;
                     esp_wifi_connect();
@@ -2234,6 +2412,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
                     // Essa rede esgotou as tentativas - passa pra' proxima
                     // rede conhecida antes de desistir e cair pro hotspot.
                     s_candidate_idx++;
+                    s_sta_retry = 0;
                     apply_sta_candidate();
                 } else {
                     s_sta_failed = true;
@@ -2254,6 +2433,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         ip_event_got_ip_t *evt = (ip_event_got_ip_t *)event_data;
         snprintf(s_status, sizeof(s_status), IPSTR, IP2STR(&evt->ip_info.ip));
         s_got_ip = true;
+        s_sta_retry = 0;
+        s_sta_failed = false;
 
         ESP_LOGI(TAG, "===> CONECTADO NA REDE WIFI LOCAL! <===");
         ESP_LOGI(TAG, "IP STA obtido: %s | Hotspot AP: 192.168.4.1", s_status);
@@ -2329,6 +2510,33 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
     }
 
     audio_player_release_sd_for_usb();
+
+    // Pre-aloca buffer DMA em SRAM para transferencias antes da inicializacao do stack Wi-Fi
+    if (!s_upload_dma_bounce) {
+        s_upload_dma_bounce_size = 16 * 1024;
+        s_upload_dma_bounce = (uint8_t *)heap_caps_malloc(s_upload_dma_bounce_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (!s_upload_dma_bounce) {
+            s_upload_dma_bounce_size = 8 * 1024;
+            s_upload_dma_bounce = (uint8_t *)heap_caps_malloc(s_upload_dma_bounce_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        }
+        if (!s_upload_dma_bounce) {
+            s_upload_dma_bounce_size = 4 * 1024;
+            s_upload_dma_bounce = (uint8_t *)heap_caps_malloc(s_upload_dma_bounce_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        }
+        if (s_upload_dma_bounce) {
+            ESP_LOGI(TAG, "Buffer DMA dedicado de upload pre-alocado: %zu bytes", s_upload_dma_bounce_size);
+        }
+    }
+
+    // Pre-aloca stack do escritor em PSRAM
+    if (!s_writer_stack) {
+        s_writer_stack = (StackType_t *)heap_caps_malloc(UPLOAD_WRITER_STACK_WORDS * sizeof(StackType_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_writer_stack) {
+            ESP_LOGI(TAG, "Stack de upload pre-alocada em PSRAM (%u bytes)", (unsigned)(UPLOAD_WRITER_STACK_WORDS * sizeof(StackType_t)));
+        } else {
+            ESP_LOGE(TAG, "Falha ao alocar stack de upload em PSRAM!");
+        }
+    }
 
     esp_err_t err = ensure_stack_ready();
     if (err != ESP_OK) {
@@ -2526,6 +2734,17 @@ bool wifi_transfer_poll(void)
         s_status[0] = '\0';
         progress_end();
 
+        if (s_upload_dma_bounce) {
+            heap_caps_free(s_upload_dma_bounce);
+            s_upload_dma_bounce = NULL;
+            s_upload_dma_bounce_size = 0;
+        }
+
+        if (s_writer_stack) {
+            heap_caps_free(s_writer_stack);
+            s_writer_stack = NULL;
+        }
+
         // Remontagem robusta do cartao SD (reinicializa o host SDMMC e remonta o FatFS do zero)
         ESP_LOGI(TAG, "Remontando cartao SD apos encerramento do WiFi...");
         sd_card_deinit();
@@ -2622,7 +2841,9 @@ static void wifi_menu_draw_status(void)
 
     switch (s_ui_state) {
         case WIFI_UI_IDLE:
-            if (s_mode == WIFI_TRANSFER_MODE_AP || s_mode == WIFI_TRANSFER_MODE_APSTA) {
+            if (s_mode == WIFI_TRANSFER_MODE_APSTA && s_got_ip) {
+                oled_display_show_wifi_connected(ip, "mps3.local", rssi, 0);
+            } else if (s_mode == WIFI_TRANSFER_MODE_AP || s_mode == WIFI_TRANSFER_MODE_APSTA) {
                 oled_display_show_wifi_qr(CONFIG_WIFI_AP_SSID, CONFIG_WIFI_AP_PASSWORD, "AP MPS3", 1, 1);
             } else {
                 oled_display_show_wifi_idle(ip, "mps3.local", dns_active, rssi);

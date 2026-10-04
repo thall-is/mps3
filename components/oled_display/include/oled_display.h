@@ -362,6 +362,14 @@ void oled_display_show_wifi_qr(const char *ssid, const char *pass,
  */
 void oled_display_show_clock(const rtc_clock_info_t *info);
 
+/**
+ * @brief Copia o buffer de vídeo atual do OLED (1024 bytes) para a memória informada.
+ *
+ * @param[out] dest_buf Ponteiro para buffer de pelo menos 1024 bytes.
+ * @return esp_err_t ESP_OK em caso de sucesso.
+ */
+esp_err_t oled_display_capture_buffer(uint8_t *dest_buf);
+
 #ifdef __cplusplus
 }
 #endif

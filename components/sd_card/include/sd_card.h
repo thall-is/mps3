@@ -42,6 +42,18 @@ void sd_card_deinit(void);
  * @return Ponteiro para `sdmmc_card_t` contendo velocidade, capacidade e setor do cartão.
  */
 sdmmc_card_t *sd_card_get_handle(void);
+/**
+ * @brief Altera a frequência do clock do barramento SDMMC em tempo de execução.
+ *
+ * @param freq_khz Frequência desejada em kHz (ex: 20000 para 20 MHz, 40000 para 40 MHz).
+ * @return esp_err_t ESP_OK em caso de sucesso.
+ */
+esp_err_t sd_card_set_frequency(uint32_t freq_khz);
+
+/**
+ * @brief Retorna a frequência atual de operação do barramento SDMMC em kHz.
+ */
+uint32_t sd_card_get_frequency(void);
 
 #ifdef __cplusplus
 }

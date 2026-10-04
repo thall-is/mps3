@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "touch_input.c"
+        "debug_nav.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
@@ -14,4 +15,5 @@ idf_component_register(
         nvs_flash
         podcast_sync
         wifi_transfer
+        mbedtls
 )

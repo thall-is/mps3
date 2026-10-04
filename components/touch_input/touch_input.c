@@ -1287,11 +1287,15 @@ esp_err_t touch_input_start(void)
     s_in_player_browser = (s_mode == UI_MODE_PLAYING); // se já está tocando, considera que veio do Player
     s_last_activity_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
-    BaseType_t ok = xTaskCreatePinnedToCore(touch_task, "touch_task", 12288, NULL, 5, NULL, 0);
+    BaseType_t ok = xTaskCreatePinnedToCore(touch_task, "touch_task", 8192, NULL, 5, NULL, 0);
     return ok == pdPASS ? ESP_OK : ESP_FAIL;
 }
 
 void touch_input_set_usb_prompt(void) {
+    if (wifi_transfer_is_active()) {
+        ESP_LOGI(TAG, "Cabo USB detectado mas WiFi esta ativo - ignorando prompt USB para nao interromper transferencia");
+        return;
+    }
     if (s_mode != UI_MODE_USB_PROMPT && s_mode != UI_MODE_USB_DAC && s_mode != UI_MODE_USB_MSC) {
         s_mode = UI_MODE_USB_PROMPT;
         s_list_cursor = 0; // default pra pendrive

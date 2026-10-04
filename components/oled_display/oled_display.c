@@ -1280,55 +1280,39 @@ void oled_display_show_wifi_idle(const char *ip, const char *mdns_host, bool dns
 {
     if (!s_ready) return;
 
+    if (ip && ip[0] && strcmp(ip, "0.0.0.0") != 0) {
+        oled_display_show_wifi_connected(ip, mdns_host, rssi, 0);
+        return;
+    }
+
     u8g2_ClearBuffer(&s_u8g2);
     u8g2_SetDrawColor(&s_u8g2, 1);
     u8g2_SetBitmapMode(&s_u8g2, 1);
     u8g2_SetFontMode(&s_u8g2, 1);
 
-    // AnimaÃ§Ã£o attention_cloud (posiÃ§Ã£o: (32,3))
-    u8g2_DrawXBMP(&s_u8g2, 32, 3, 64, 64,
-                  wifi_attention_cloud_frames[s_wifi_attention_frame]);
-
-    // mDNS (canto superior direito) â€“ mockup: (68,9)
-    u8g2_SetFont(&s_u8g2, u8g2_font_profont10_tr);
-    u8g2_DrawStr(&s_u8g2, 68, 9, "//");
-    if (mdns_host) u8g2_DrawStr(&s_u8g2, 76, 9, mdns_host);
-
-    // IP (mockup: (59,64))
-    u8g2_DrawStr(&s_u8g2, 59, 64, ip ? ip : "0.0.0.0");
-
-    // DNS local (mockup: (0,64))
-    if (dns_active) {
-        u8g2_DrawStr(&s_u8g2, 0, 64, "DNS local");
-    }
-
-    // Frame superior esquerdo (mockup: (0,0,65,12))
+    // Frame superior com RSSI e Status
+    u8g2_DrawFrame(&s_u8g2, 0, 0, 128, 12);
     u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
-    u8g2_DrawFrame(&s_u8g2, 0, 0, 65, 12);
     if (rssi != -1) {
-        char db[8];
+        char db[16];
         snprintf(db, sizeof(db), "%d dBm", rssi);
-        u8g2_DrawStr(&s_u8g2, 2, 9, db);
+        u8g2_DrawStr(&s_u8g2, 3, 9, db);
     } else {
-        u8g2_DrawStr(&s_u8g2, 2, 9, "AP");
+        u8g2_DrawStr(&s_u8g2, 3, 9, "WiFi");
     }
+    u8g2_DrawStr(&s_u8g2, 44, 9, "CONECTANDO");
 
-    // Barra de sinal (se RSSI disponÃ­vel)
-    if (rssi != -1) {
-        int pct = 0;
-        if (rssi <= -90) pct = 0;
-        else if (rssi >= -30) pct = 100;
-        else pct = (int)((rssi + 90) * 100 / 60);
-        if (pct > 100) pct = 100;
-        if (pct < 0) pct = 0;
+    // Mensagem de busca centralizada
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    const char *msg = "Buscando rede...";
+    int mw = u8g2_GetStrWidth(&s_u8g2, msg);
+    u8g2_DrawStr(&s_u8g2, (128 - mw) / 2, 33, msg);
 
-        int bar_x = 0, bar_y = 55, bar_w = 50, bar_h = 6;
-        u8g2_DrawFrame(&s_u8g2, bar_x, bar_y, bar_w, bar_h);
-        if (pct > 0) {
-            int fill_w = (bar_w - 2) * pct / 100;
-            u8g2_DrawBox(&s_u8g2, bar_x + 1, bar_y + 1, fill_w, bar_h - 2);
-        }
-    }
+    // Subtexto inferior
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    const char *sub = "Aguardando IP da rede...";
+    int sw = u8g2_GetStrWidth(&s_u8g2, sub);
+    u8g2_DrawStr(&s_u8g2, (128 - sw) / 2, 50, sub);
 
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);
@@ -1343,24 +1327,46 @@ void oled_display_show_wifi_connected(const char *ip, const char *mdns_host, int
     u8g2_SetBitmapMode(&s_u8g2, 1);
     u8g2_SetFontMode(&s_u8g2, 1);
 
-    // AnimaÃ§Ã£o synchronize_cloud (posiÃ§Ã£o: (32,3))
-    u8g2_DrawXBMP(&s_u8g2, 32, 3, 64, 64,
-                  wifi_sync_cloud_frames[s_wifi_sync_frame]);
-
-    // Texto "Conectado" (mockup: (42,63))
-    u8g2_SetFont(&s_u8g2, u8g2_font_profont10_tr);
-    u8g2_DrawStr(&s_u8g2, 42, 63, "Conectado");
-
-    // Frame superior com RSSI (mockup: (53,9) para "-0db")
-    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    // Barra superior: Frame 0..12 com RSSI, Status e Clientes
     u8g2_DrawFrame(&s_u8g2, 0, 0, 128, 12);
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
     if (rssi != -1) {
-        char db[8];
+        char db[16];
         snprintf(db, sizeof(db), "%d dBm", rssi);
-        u8g2_DrawStr(&s_u8g2, 53, 9, db);
+        u8g2_DrawStr(&s_u8g2, 3, 9, db);
     } else {
-        u8g2_DrawStr(&s_u8g2, 53, 9, "-0db");
+        u8g2_DrawStr(&s_u8g2, 3, 9, "WiFi");
     }
+
+    u8g2_DrawStr(&s_u8g2, 44, 9, "CONECTADO");
+
+    if (clients > 0) {
+        char cli_str[16];
+        snprintf(cli_str, sizeof(cli_str), "Cli:%d", clients);
+        int cw = u8g2_GetStrWidth(&s_u8g2, cli_str);
+        u8g2_DrawStr(&s_u8g2, 125 - cw, 9, cli_str);
+    }
+
+    // Caixa central destacada para o IP
+    u8g2_DrawRFrame(&s_u8g2, 2, 15, 124, 19, 3);
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont15_tr);
+    const char *ip_str = (ip && ip[0] && strcmp(ip, "0.0.0.0") != 0) ? ip : "192.168.4.1";
+    int ip_w = u8g2_GetStrWidth(&s_u8g2, ip_str);
+    u8g2_DrawStr(&s_u8g2, (128 - ip_w) / 2, 29, ip_str);
+
+    // Linha inferior: URL mDNS (http://mps3.local)
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    const char *host = (mdns_host && mdns_host[0]) ? mdns_host : "mps3.local";
+    char url_buf[32];
+    snprintf(url_buf, sizeof(url_buf), "http://%s", host);
+    int url_w = u8g2_GetStrWidth(&s_u8g2, url_buf);
+    u8g2_DrawStr(&s_u8g2, (128 - url_w) / 2, 46, url_buf);
+
+    // Instrucao na base da tela
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    const char *hint = "Acesse pelo navegador";
+    int hint_w = u8g2_GetStrWidth(&s_u8g2, hint);
+    u8g2_DrawStr(&s_u8g2, (128 - hint_w) / 2, 59, hint);
 
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);
@@ -2642,10 +2648,10 @@ void oled_display_show_wifi_qr(const char *ssid, const char *pass,
     }
     u8g2_DrawStr(&s_u8g2, 66, 47, disp_pass);
 
-    // Linha 6: Dica de leitura da camera
+    // Linha 6: IP e Host para acesso Web
     u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
-    u8g2_DrawStr(&s_u8g2, 66, 56, "Aponte cam.");
-    u8g2_DrawStr(&s_u8g2, 66, 63, "p/ conectar");
+    u8g2_DrawStr(&s_u8g2, 66, 56, "192.168.4.1");
+    u8g2_DrawStr(&s_u8g2, 66, 63, "mps3.local");
 
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);
@@ -2724,3 +2730,13 @@ void oled_display_show_clock(const rtc_clock_info_t *info)
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);
 }
+
+esp_err_t oled_display_capture_buffer(uint8_t *dest_buf)
+{
+    if (!s_ready || !dest_buf) return ESP_FAIL;
+    uint8_t *ptr = u8g2_GetBufferPtr(&s_u8g2);
+    if (!ptr) return ESP_FAIL;
+    memcpy(dest_buf, ptr, 1024);
+    return ESP_OK;
+}
+
