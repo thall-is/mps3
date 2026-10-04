@@ -36,6 +36,10 @@ __pycache__/
 *.xml
 scratch/
 tools/read_*.py
+tools/patch_*.py
+tools/trace_*.py
+tools/update_*.py
+tools/apply_*.py
 tools/generate_function_docs.py
 
 # IDEs & Editor configs

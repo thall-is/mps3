@@ -1808,8 +1808,9 @@
 
         function uploadOne(relPath, file, idx, count, batchTotal, qid) {
             return new Promise((resolve, reject) => {
+                const cleanRelPath = relPath.replace(/\uFF1F/g, '-').replace(/[?*:|"<>\\]/g, '-');
                 const xhr = new XMLHttpRequest();
-                const url = '/api/upload?path=' + encodeURIComponent(joinPath(curDir, relPath)) +
+                const url = '/api/upload?path=' + encodeURIComponent(joinPath(curDir, cleanRelPath)) +
                     '&idx=' + idx + '&count=' + count + '&batchTotal=' + batchTotal;
                 xhr.open('PUT', url, true);
                 xhr.timeout = 300000;
@@ -1914,15 +1915,30 @@
                 renderQueue();
                 el.upFileName.textContent = relPath;
 
-                try {
-                    await uploadOne(relPath, f, i + 1, count, batchTotal, q.id);
-                } catch (e) {
+                let uploaded = false;
+                let lastErr = null;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        if (attempt > 1) {
+                            el.upFileName.textContent = `[Tentativa ${attempt}/3] ${relPath}`;
+                            await new Promise(r => setTimeout(r, 800));
+                        }
+                        await uploadOne(relPath, f, i + 1, count, batchTotal, q.id);
+                        uploaded = true;
+                        break;
+                    } catch (e) {
+                        lastErr = e;
+                        console.warn(`Tentativa ${attempt} falhou para ${relPath}:`, e);
+                    }
+                }
+
+                if (!uploaded) {
                     errored = true;
-                    alert('Falha ao enviar ' + relPath + ': ' + e.message);
+                    alert('Falha ao enviar ' + relPath + ': ' + (lastErr ? lastErr.message : 'Erro de conexao'));
                     break;
                 }
                 window.__batchDoneBefore += f.size;
-                await new Promise(r => setTimeout(r, 100)); // Breve pausa cooperativa para fechar o socket TCP anterior
+                await new Promise(r => setTimeout(r, 400)); // Pausa cooperativa para reciclagem limpa do socket TCP
             }
 
             isUploading = false;

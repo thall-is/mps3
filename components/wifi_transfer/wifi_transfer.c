@@ -2219,6 +2219,9 @@ static esp_err_t http_socket_open_cb(httpd_handle_t hd, int sockfd)
     int enable_nodelay = 1;
     setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (char *)&enable_nodelay, sizeof(enable_nodelay));
 
+    struct linger sl = { .l_onoff = 1, .l_linger = 0 };
+    setsockopt(sockfd, SOL_SOCKET, SO_LINGER, (char *)&sl, sizeof(sl));
+
     struct timeval tv;
     tv.tv_sec = 30;
     tv.tv_usec = 0;
