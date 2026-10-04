@@ -786,7 +786,7 @@ static SemaphoreHandle_t s_upload_lock = NULL;
 static uint8_t *s_upload_dma_bounce = NULL;
 static size_t   s_upload_dma_bounce_size = 0;
 
-#define UPLOAD_WRITER_STACK_WORDS    1024 // 1024 * sizeof(StackType_t) = 4096 bytes em SRAM interna (.bss)
+#define UPLOAD_WRITER_STACK_WORDS    2048 // 2048 * sizeof(StackType_t) = 8192 bytes em SRAM interna (.bss)
 static StaticTask_t s_writer_task_tcb;
 static StackType_t  s_writer_stack[UPLOAD_WRITER_STACK_WORDS];
 
@@ -1037,7 +1037,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     }
 
     // Dá tempo para a Idle Task do Core 0 limpar os recursos da tarefa finalizada
-    vTaskDelay(pdMS_TO_TICKS(15));
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     vRingbufferDeleteWithCaps(ctx.rb);
     vSemaphoreDelete(ctx.done_sem);
