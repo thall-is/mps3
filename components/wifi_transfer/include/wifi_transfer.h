@@ -123,6 +123,7 @@ int wifi_transfer_get_known_count(void);
  * @return true se os dados foram recuperados com sucesso.
  */
 bool wifi_transfer_get_known_network(int idx, char *out_ssid, size_t ssid_len, char *out_pass, size_t pass_len);
+void wifi_transfer_save_network(const char *ssid, const char *pass);
 
 /**
  * @brief Preenche uma string formatada com o status atual do Wi-Fi para exibição no display OLED.

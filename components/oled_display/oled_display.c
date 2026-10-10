@@ -2018,14 +2018,14 @@ void oled_display_set_power_save(bool enable) {
     }
 }
 
-void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx) {
+void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx, int fallback_idx) {
     if (!s_ready) return;
     u8g2_ClearBuffer(&s_u8g2);
-    u8g2_SetFont(&s_u8g2, u8g2_font_profont12_tr);
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont11_tr);
 
     // Title
-    u8g2_DrawStr(&s_u8g2, 40, 10, "TELA");
-    u8g2_DrawLine(&s_u8g2, 0, 13, 127, 13);
+    u8g2_DrawStr(&s_u8g2, 42, 9, "TELA");
+    u8g2_DrawLine(&s_u8g2, 0, 11, 127, 11);
 
     // Calculate pct
     static const uint8_t BRIGHTNESS_CURVE[] = {1, 3, 7, 15, 30, 50, 80, 120, 180, 255};
@@ -2037,25 +2037,32 @@ void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx) {
         }
     }
 
-    // Row 0: Brightness
+    // Row 0: Brightness (Y: 13..28)
     char buf[32];
     snprintf(buf, sizeof(buf), "Brilho: %d%%", pct);
-    u8g2_DrawStr(&s_u8g2, 5, 30, buf);
-    int fill_w = (pct * 60) / 100;
-    u8g2_DrawFrame(&s_u8g2, 60, 22, 62, 9);
-    if (fill_w > 0) u8g2_DrawBox(&s_u8g2, 61, 23, fill_w, 7);
-    
-    if (cursor == 0) u8g2_DrawFrame(&s_u8g2, 2, 19, 123, 15);
+    u8g2_DrawStr(&s_u8g2, 5, 24, buf);
+    int fill_w = (pct * 48) / 100;
+    u8g2_DrawFrame(&s_u8g2, 74, 16, 50, 9);
+    if (fill_w > 0) u8g2_DrawBox(&s_u8g2, 75, 17, fill_w, 7);
+    if (cursor == 0) u8g2_DrawFrame(&s_u8g2, 2, 13, 123, 15);
 
-    // Row 1: Timeout
+    // Row 1: Timeout de Tela (Y: 30..45)
     const char* timeouts[] = {"Nunca", "15s", "30s", "1 min", "2 min", "5 min"};
     int t_idx = timeout_idx;
     if (t_idx < 0) t_idx = 0;
     if (t_idx >= 6) t_idx = 5;
     snprintf(buf, sizeof(buf), "Auto-off: %s", timeouts[t_idx]);
-    u8g2_DrawStr(&s_u8g2, 5, 50, buf);
-    
-    if (cursor == 1) u8g2_DrawFrame(&s_u8g2, 2, 39, 123, 15);
+    u8g2_DrawStr(&s_u8g2, 5, 41, buf);
+    if (cursor == 1) u8g2_DrawFrame(&s_u8g2, 2, 30, 123, 15);
+
+    // Row 2: Retorno para Reprodução (Y: 47..62)
+    const char* fallbacks[] = {"Desativado", "5s", "10s", "15s", "30s", "1 min"};
+    int fb_idx = fallback_idx;
+    if (fb_idx < 0) fb_idx = 0;
+    if (fb_idx >= 6) fb_idx = 5;
+    snprintf(buf, sizeof(buf), "Retorno: %s", fallbacks[fb_idx]);
+    u8g2_DrawStr(&s_u8g2, 5, 58, buf);
+    if (cursor == 2) u8g2_DrawFrame(&s_u8g2, 2, 47, 123, 15);
 
     apply_brightness_if_needed();
     u8g2_SendBuffer(&s_u8g2);

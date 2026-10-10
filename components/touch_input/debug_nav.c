@@ -285,6 +285,7 @@ void debug_nav_reset_home(void)
         menu_request_exit_active();
     }
     touch_input_cancel_usb();
+    touch_input_reset_to_main_menu();
     printf("@OK reset home\n");
     debug_nav_dump_state();
 }

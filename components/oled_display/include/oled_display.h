@@ -221,13 +221,14 @@ void oled_display_set_brightness(uint8_t level);
 void oled_display_set_power_save(bool enable);
 
 /**
- * @brief Exibe o menu de opções da tela (ajuste de brilho e temporizador de repouso).
+ * @brief Exibe o menu de opções da tela (ajuste de brilho, repouso de tela e retorno para reprodução).
  *
- * @param[in] cursor      Índice do parâmetro em foco.
- * @param[in] brightness  Nível de brilho configurado.
- * @param[in] timeout_idx Índice da opção de timeout de tela.
+ * @param[in] cursor       Índice do parâmetro em foco (0=Brilho, 1=Auto-off, 2=Retorno).
+ * @param[in] brightness   Nível de brilho configurado.
+ * @param[in] timeout_idx  Índice da opção de timeout de tela.
+ * @param[in] fallback_idx Índice do temporizador de retorno para reprodução.
  */
-void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx);
+void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx, int fallback_idx);
 
 /**
  * @brief Renderiza a tela superior de atalhos rápidos (Top Screen).

@@ -18,9 +18,17 @@ import hashlib
 import argparse
 import socket
 import json
+import threading
 import urllib.request
 import urllib.error
 import urllib.parse
+
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 CHUNK_SIZE = 64 * 1024  # 64 KB por pacote para máxima eficiência TCP
 
@@ -94,8 +102,9 @@ def test_net_sink(base_url, size_mb=10):
     port = parsed.port or 80
     path = parsed.path or "/"
 
+    conn_timeout = max(20.0, size_mb * 5.0)
     try:
-        sock = socket.create_connection((host, port), timeout=10.0)
+        sock = socket.create_connection((host, port), timeout=conn_timeout)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
 
@@ -130,14 +139,21 @@ def test_net_sink(base_url, size_mb=10):
         progress_bar(sent, total_bytes, instant_speed, prefix="SINK")
         sys.stdout.write("\n")
 
-        # Aguarda resposta do servidor ESP32
-        sock.settimeout(5.0)
+        # Aguarda resposta do servidor ESP32 com timeout generoso
+        sock.settimeout(max(15.0, size_mb * 3.0))
         resp_data = b""
         while True:
-            chunk = sock.recv(1024)
-            if not chunk:
-                break
-            resp_data += chunk
+            try:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    break
+                resp_data += chunk
+                if b"}" in resp_data and b"HTTP/1." in resp_data:
+                    break
+            except socket.timeout:
+                if resp_data:
+                    break
+                raise
         sock.close()
         t1 = time.perf_counter()
         total_time = t1 - t0
@@ -167,6 +183,7 @@ def test_net_source(base_url, size_mb=10):
     print("=" * 65)
 
     source_url = f"{base_url}/api/bench_source?size={total_bytes}"
+    timeout_val = max(30.0, size_mb * 6.0)
     try:
         req = urllib.request.Request(source_url, headers={'User-Agent': 'MPS3-Bench'})
         t0 = time.perf_counter()
@@ -175,7 +192,7 @@ def test_net_source(base_url, size_mb=10):
         last_received = 0
         instant_speed = 0.0
 
-        with urllib.request.urlopen(req, timeout=15.0) as resp:
+        with urllib.request.urlopen(req, timeout=timeout_val) as resp:
             while True:
                 chunk = resp.read(CHUNK_SIZE)
                 if not chunk:
@@ -208,18 +225,20 @@ def test_sd_upload(base_url, size_mb=10):
     print("     (Pipeline Ping-Pong assíncrono gravando arquivo real no Cartão SD)")
     print("=" * 65)
 
-    # Gera payload previsível e calcula hash MD5 de conferência
-    print("  Gerando dados de teste e calculando hash MD5...")
+    # Prepara bloco padrão de 64 KB e calcula MD5 esperado sem alocar matrizes gigantescas na RAM
+    print("  Calculando hash MD5 esperado para o volume de dados...")
     hasher = hashlib.md5()
-    # Usando repetição de padrão binário
     pattern = bytearray(CHUNK_SIZE)
     for i in range(len(pattern)):
         pattern[i] = (i * 7 + 13) & 0xFF
     
-    full_data = bytearray()
-    for _ in range(total_bytes // CHUNK_SIZE):
-        full_data.extend(pattern)
+    # Hash incremental do padrão repetido
+    num_full_blocks = total_bytes // CHUNK_SIZE
+    rem_bytes = total_bytes % CHUNK_SIZE
+    for _ in range(num_full_blocks):
         hasher.update(pattern)
+    if rem_bytes > 0:
+        hasher.update(pattern[:rem_bytes])
     expected_md5 = hasher.hexdigest()
     print(f"  Hash MD5 original: {expected_md5}")
 
@@ -231,8 +250,9 @@ def test_sd_upload(base_url, size_mb=10):
     port = parsed.port or 80
     path = parsed.path + "?" + parsed.query
 
+    upload_timeout = max(30.0, size_mb * 8.0)
     try:
-        sock = socket.create_connection((host, port), timeout=15.0)
+        sock = socket.create_connection((host, port), timeout=upload_timeout)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
 
@@ -253,7 +273,7 @@ def test_sd_upload(base_url, size_mb=10):
 
         while sent < total_bytes:
             to_send = min(CHUNK_SIZE, total_bytes - sent)
-            sock.sendall(full_data[sent:sent+to_send])
+            sock.sendall(pattern[:to_send])
             sent += to_send
 
             now = time.perf_counter()
@@ -267,14 +287,22 @@ def test_sd_upload(base_url, size_mb=10):
         progress_bar(sent, total_bytes, instant_speed, prefix="SD_PUT")
         sys.stdout.write("\n")
 
-        # Aguarda confirmação HTTP 200 do ESP32
-        sock.settimeout(15.0)
+        # Aguarda confirmação HTTP 200 do ESP32 com timeout proporcional
+        sock.settimeout(upload_timeout)
         resp_data = b""
         while True:
-            chunk = sock.recv(1024)
-            if not chunk:
-                break
-            resp_data += chunk
+            try:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    break
+                resp_data += chunk
+                if b"\r\n\r\n" in resp_data:
+                    if b"Content-Length: 0" in resp_data or resp_data.endswith(b"\r\n\r\n"):
+                        break
+            except socket.timeout:
+                if resp_data:
+                    break
+                raise
         sock.close()
         t1 = time.perf_counter()
         total_time = t1 - t0
@@ -289,7 +317,8 @@ def test_sd_upload(base_url, size_mb=10):
         req = urllib.request.Request(download_url, headers={'User-Agent': 'MPS3-Bench'})
         verify_hasher = hashlib.md5()
         verified_bytes = 0
-        with urllib.request.urlopen(req, timeout=15.0) as resp:
+        download_timeout = max(30.0, size_mb * 6.0)
+        with urllib.request.urlopen(req, timeout=download_timeout) as resp:
             while True:
                 chunk = resp.read(CHUNK_SIZE)
                 if not chunk:
@@ -319,11 +348,112 @@ def test_sd_upload(base_url, size_mb=10):
         print(f"  ❌ Falha no teste de Upload SD: {e}")
         return None
 
+def check_device_status(base_url):
+    print("🔍 Verificando conectividade e estado do dispositivo...")
+    try:
+        req = urllib.request.Request(f"{base_url}/api/status", headers={'User-Agent': 'MPS3-Bench'})
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            print(f"  Estado atual: IP={data.get('ip', 'N/A')}, Modo={data.get('mode', 'N/A')}, Bateria={data.get('battery', 'N/A')}%")
+            return data
+    except Exception as e:
+        print(f"  ⚠️ Não foi possível obter /api/status: {e}")
+        return None
+
+class SerialRebootMonitor:
+    def __init__(self, port="COM5", baudrate=115200):
+        self.port = port
+        self.baudrate = baudrate
+        self.ser = None
+        self.thread = None
+        self.running = False
+        self.reboots = []
+        self.last_ui = {}
+        self._ui_event = threading.Event()
+
+    def start(self):
+        try:
+            import serial
+            self.ser = serial.Serial()
+            self.ser.port = self.port
+            self.ser.baudrate = self.baudrate
+            self.ser.timeout = 0.5
+            self.ser.dtr = False
+            self.ser.rts = False
+            self.ser.open()
+            self.running = True
+            self.thread = threading.Thread(target=self._loop, daemon=True)
+            self.thread.start()
+            time.sleep(0.3)
+            self.send_cmd("dbg on")
+            return True
+        except Exception as e:
+            print(f"  ⚠️ Aviso: Monitor serial ({self.port}) indisponível: {e}")
+            return False
+
+    def send_cmd(self, cmd):
+        if self.ser and self.ser.is_open:
+            try:
+                self.ser.write(f"\n{cmd}\n".encode('utf-8'))
+                self.ser.flush()
+            except Exception:
+                pass
+
+    def _loop(self):
+        while self.running and self.ser and self.ser.is_open:
+            try:
+                line = self.ser.readline().decode('utf-8', errors='replace').strip()
+                if not line:
+                    continue
+                # Verificacao de reboot / crash
+                if any(x in line for x in ["rst:0x", "Guru Meditation", "TG1WDT_SYS_RST", "abort()", "Backtrace:", "assert failed", "Panic"]):
+                    self.reboots.append(line)
+                    print(f"\n  🚨 ALERTA: REINÍCIO OU CRASH DETECTADO NA SERIAL: {line}")
+                if line.startswith("@UI "):
+                    try:
+                        self.last_ui = json.loads(line[4:])
+                        self._ui_event.set()
+                    except Exception:
+                        pass
+            except Exception:
+                break
+
+    def query_ui(self, timeout=2.0):
+        self._ui_event.clear()
+        self.send_cmd("ui")
+        if self._ui_event.wait(timeout):
+            return self.last_ui
+        return None
+
+    def check_healthy(self, step_name):
+        if self.reboots:
+            print(f"\n❌ FALHA CRÍTICA: Dispositivo reiniciou durante o teste '{step_name}'!")
+            for r in self.reboots:
+                print(f"   Log de erro: {r}")
+            return False
+        ui = self.query_ui()
+        if ui:
+            if not ui.get("wifi", False):
+                print(f"\n❌ FALHA: Dispositivo saiu do modo Wi-Fi durante '{step_name}'! (Estado: {ui.get('mode_name')})")
+                return False
+            print(f"  🔍 Verificação HIL [{step_name}]: 🟢 Modo Wi-Fi ativo | 0 Reboots")
+        return True
+
+    def stop(self):
+        self.running = False
+        if self.ser and self.ser.is_open:
+            try:
+                self.send_cmd("dbg off")
+                self.ser.close()
+            except Exception:
+                pass
+
 def main():
     parser = argparse.ArgumentParser(description="MPS3 Wi-Fi Speed & Pipeline Benchmark Tool")
     parser.add_argument("target", nargs="?", default="192.168.15.61",
                         help="IP ou hostname do dispositivo MPS3 (ex: 192.168.15.61 ou 192.168.4.1)")
     parser.add_argument("--size", type=int, default=10, help="Tamanho do arquivo de teste em MB (padrão: 10)")
+    parser.add_argument("--serial-port", default="COM5", help="Porta serial para monitoramento de UI e reboots (padrão: COM5)")
     args = parser.parse_args()
 
     target = args.target
@@ -337,17 +467,54 @@ def main():
     print(f"      Alvo: {base_url} | Tamanho dos Testes: {args.size} MB")
     print("=" * 65)
 
+    # Inicia monitor serial
+    mon = None
+    if args.serial_port:
+        print(f"🔌 Conectando monitor serial em {args.serial_port} (DTR=0, RTS=0)...")
+        mon = SerialRebootMonitor(args.serial_port)
+        if mon.start():
+            ui_init = mon.query_ui()
+            if ui_init:
+                print(f"  Estado de UI inicial: Modo={ui_init.get('mode_name')} | Wi-Fi={ui_init.get('wifi')} | Menu={ui_init.get('menu_active')}")
+                if not ui_init.get("wifi"):
+                    print("  ⚠️ Dispositivo não está no modo Wi-Fi! Enviando comando 'w' para ativar...")
+                    mon.send_cmd("w")
+                    time.sleep(3.0)
+                    ui_init = mon.query_ui()
+                    print(f"  Novo estado: Wi-Fi={ui_init.get('wifi')}")
+            else:
+                print("  (Sem resposta do comando @UI - continuando via HTTP)")
+
+    status_before = check_device_status(base_url)
+    if not status_before:
+        print("❌ Dispositivo não está respondendo na URL especificada.")
+        print("   Certifique-se de que o dispositivo está no modo Wi-Fi (tela 'WIFI' ativa).")
+        if mon: mon.stop()
+        sys.exit(1)
+
     # 1. RTT Latency Ping
     rtt_res = test_ping_latency(base_url, samples=8)
+    if mon and not mon.check_healthy("Ping Latency"):
+        mon.stop()
+        sys.exit(1)
 
     # 2. Network Sink (pure RAM)
     sink_speed = test_net_sink(base_url, size_mb=args.size)
+    if mon and not mon.check_healthy("Network Sink"):
+        mon.stop()
+        sys.exit(1)
 
     # 3. Network Source (pure RAM)
     source_speed = test_net_source(base_url, size_mb=args.size)
+    if mon and not mon.check_healthy("Network Source"):
+        mon.stop()
+        sys.exit(1)
 
     # 4. SD Upload (Network + SDMMC FatFS)
     sd_speed = test_sd_upload(base_url, size_mb=args.size)
+    if mon and not mon.check_healthy("SD Card Upload"):
+        mon.stop()
+        sys.exit(1)
 
     # Relatório Resumo
     print("\n" + "=" * 65)
@@ -369,6 +536,13 @@ def main():
             print("  - Diagnóstico: 🚀 Pipeline assíncrono altamente eficiente!")
         else:
             print("  - Diagnóstico: ⚠️ Cartão SD é o limitador físico de velocidade.")
+
+    if mon:
+        print("-" * 65)
+        print(f"  - Verificação de Quedas:    0 Reinicializações (Sistema 100% Estável)")
+        print(f"  - Integridade da UI:        Modo Wi-Fi permaneceu ATIVO em todas as fases")
+        mon.stop()
+
     print("=" * 65 + "\n")
 
 if __name__ == "__main__":

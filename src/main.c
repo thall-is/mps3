@@ -274,7 +274,7 @@ static void display_task(void *arg)
         } else if (touch_input_get_mode() == UI_MODE_BALANCE) {
             oled_display_show_balance(audio_player_get_balance());
         } else if (touch_input_get_mode() == UI_MODE_TELA) {
-            oled_display_show_tela(touch_input_get_tela_cursor(), touch_input_get_oled_brightness(), touch_input_get_timeout_idx());
+            oled_display_show_tela(touch_input_get_tela_cursor(), touch_input_get_oled_brightness(), touch_input_get_timeout_idx(), touch_input_get_fallback_idx());
         } else if (touch_input_get_mode() == UI_MODE_VOLUME) {
             oled_display_show_volume(audio_player_get_volume());
         } else if (touch_input_get_mode() == UI_MODE_EQ_PRESETS) {
@@ -434,9 +434,7 @@ static void uart_cmd_task(void *arg)
                     line_buf[line_len] = '\0';
                     if (strcmp(line_buf, "wifi") == 0 || strcmp(line_buf, "w") == 0) {
                         ESP_LOGI("UART_CMD", "Comando recebido: entrar no modo WiFi Auto (APSTA)");
-                        if (!wifi_transfer_is_active()) {
-                            wifi_transfer_enter_auto();
-                        }
+                        menu_select(1);
                     } else if (strcmp(line_buf, "ls") == 0) {
                         ESP_LOGI("UART_CMD", "Varrendo arquivos no SD card...");
                         scan_and_print_sd("/sdcard");
@@ -462,7 +460,9 @@ static void uart_cmd_task(void *arg)
                         }
                     } else if (strcmp(line_buf, "exit") == 0 || strcmp(line_buf, "x") == 0) {
                         ESP_LOGI("UART_CMD", "Comando recebido: sair do modo WiFi");
-                        if (wifi_transfer_is_active()) {
+                        if (menu_any_active()) {
+                            menu_request_exit_active();
+                        } else if (wifi_transfer_is_active()) {
                             wifi_transfer_request_exit();
                         }
                     } else if (strcmp(line_buf, "status") == 0 || strcmp(line_buf, "s") == 0) {
@@ -473,6 +473,26 @@ static void uart_cmd_task(void *arg)
                                  wifi_transfer_is_active(), st, files,
                                  (unsigned)esp_get_free_heap_size(),
                                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+                    } else if (strcmp(line_buf, "nets") == 0) {
+                        int cnt = wifi_transfer_get_known_count();
+                        ESP_LOGI("UART_CMD", "Redes conhecidas cadastradas (%d):", cnt);
+                        for (int i = 0; i < cnt; i++) {
+                            char s_name[33] = {0}, s_pw[65] = {0};
+                            wifi_transfer_get_known_network(i, s_name, sizeof(s_name), s_pw, sizeof(s_pw));
+                            ESP_LOGI("UART_CMD", "  [%d] SSID='%s' Senha='%s'", i, s_name, s_pw);
+                        }
+                    } else if (strncmp(line_buf, "net-set ", 8) == 0) {
+                        char *p = line_buf + 8;
+                        char *space = strchr(p, ' ');
+                        if (space) {
+                            *space = '\0';
+                            const char *s_ssid = p;
+                            const char *s_pass = space + 1;
+                            wifi_transfer_save_network(s_ssid, s_pass);
+                            ESP_LOGI("UART_CMD", "Rede salva: SSID='%s' Senha='%s'", s_ssid, s_pass);
+                        } else {
+                            ESP_LOGW("UART_CMD", "Uso: net-set <SSID> <SENHA>");
+                        }
                     } else if (strcmp(line_buf, "play") == 0 || strcmp(line_buf, "p") == 0) {
                         ESP_LOGI("UART_CMD", "Comando recebido: toggle play/pause");
                         audio_player_toggle_play_pause();
@@ -789,7 +809,7 @@ void app_main(void)
     touch_input_set_display_task_handle(display_handle);
 
     ESP_LOGI(TAG, "Criando uart_cmd_task no Core 0...");
-    xTaskCreatePinnedToCore(uart_cmd_task, "uart_cmd", 4096, NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(uart_cmd_task, "uart_cmd", 8192, NULL, 1, NULL, 0);
 
     // --- Autovalidacao de firmware e cancelamento de rollback OTA ---
     const esp_partition_t *running_part = esp_ota_get_running_partition();

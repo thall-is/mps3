@@ -9,6 +9,7 @@
 #include "podcast_sync.h"
 #include "wifi_transfer.h"
 #include "pwr_governor.h"
+#include "debug_nav.h"
 
 #include <stdbool.h>
 #include <string.h>
@@ -32,6 +33,9 @@ static int s_top_cursor = 0;
 static int s_top_eq_focus = 0;
 static int s_tela_cursor = 0;
 static int s_timeout_idx = 0;
+#define FALLBACK_OPTIONS_COUNT 6
+static const int FALLBACK_SECS[FALLBACK_OPTIONS_COUNT] = {0, 5, 10, 15, 30, 60};
+static int s_fallback_idx = 1; // Padrao: 5 segundos (0 = desativado)
 static bool s_is_sleeping = false;
 static int s_led_channel = 0;
 static uint8_t s_oled_brightness = 255;
@@ -459,9 +463,12 @@ static void touch_task(void *arg)
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
         if (last_interaction_ms == 0) last_interaction_ms = now;
 
+        uint8_t vmask = debug_nav_get_vmask(now);
         bool joy_cur[NUM_JOY_BTNS];
         for (int i = 0; i < NUM_JOY_BTNS; i++) {
-            joy_cur[i] = gpio_get_level(s_joy_pins[i]) == 0; // ativo em nivel baixo
+            bool phys = (gpio_get_level(s_joy_pins[i]) == 0); // ativo em nivel baixo
+            bool virt = (vmask & (1u << i)) != 0;
+            joy_cur[i] = phys || virt;
         }
 
         bool any_joy = false;
@@ -504,6 +511,7 @@ static void touch_task(void *arg)
                 if (nvs_open("mps3_settings", NVS_READWRITE, &h) == ESP_OK) {
                     nvs_set_u8(h, "brightness", s_oled_brightness);
                     nvs_set_u8(h, "timeout", s_timeout_idx);
+                    nvs_set_u8(h, "fallback", (uint8_t)s_fallback_idx);
                     nvs_commit(h);
                     nvs_close(h);
                 }
@@ -604,6 +612,7 @@ static void touch_task(void *arg)
                     if (nvs_open("mps3_settings", NVS_READWRITE, &h) == ESP_OK) {
                         nvs_set_u8(h, "brightness", s_oled_brightness);
                         nvs_set_u8(h, "timeout", s_timeout_idx);
+                        nvs_set_u8(h, "fallback", (uint8_t)s_fallback_idx);
                         nvs_commit(h);
                         nvs_close(h);
                     }
@@ -806,13 +815,14 @@ static void touch_task(void *arg)
         }
 
         
-        // Auto-idle to PLAYING
-        if (s_mode == UI_MODE_LIST && !menu_any_active() && (now - s_last_activity_ms > 5000)) {
+        // Auto-idle to PLAYING configurável (0 = desativado)
+        uint32_t fallback_sec = (s_fallback_idx >= 0 && s_fallback_idx < FALLBACK_OPTIONS_COUNT) ? (uint32_t)FALLBACK_SECS[s_fallback_idx] : 0;
+        if (fallback_sec > 0 && s_mode == UI_MODE_LIST && !menu_any_active() && (now - s_last_activity_ms > (fallback_sec * 1000UL))) {
             playback_state_t st;
             audio_player_get_state(&st);
             if (st.playing || st.track_loaded) {
                 s_mode = UI_MODE_PLAYING;
-                ESP_LOGI(TAG, "Inatividade: entrando na tela de reproducao");
+                ESP_LOGI(TAG, "Inatividade (%u s): retornando a tela de reproducao", (unsigned)fallback_sec);
             }
         }
         
@@ -885,7 +895,7 @@ static void touch_task(void *arg)
                             if (s_top_cursor == 0) s_top_cursor = 1;      // Volume -> EQ
                             else if (s_top_cursor == 1) s_top_cursor = 2; // EQ -> Bateria
                         } else if (s_mode == UI_MODE_TELA && pressed_edge) {
-                            s_tela_cursor = (s_tela_cursor == 0) ? 1 : 0;
+                            s_tela_cursor = (s_tela_cursor == 0) ? 2 : (s_tela_cursor - 1);
                         } else if (s_mode == UI_MODE_VOLUME) {
                             audio_player_adjust_volume(VOLUME_STEP_PERCENT);
                         } else if (s_mode == UI_MODE_EQ_PRESETS) {
@@ -946,7 +956,7 @@ static void touch_task(void *arg)
                                 ESP_LOGI(TAG, "Saindo da Top Screen -> Reproducao");
                             }
                         } else if (s_mode == UI_MODE_TELA && pressed_edge) {
-                            s_tela_cursor = (s_tela_cursor == 0) ? 1 : 0;
+                            s_tela_cursor = (s_tela_cursor + 1) % 3;
                         } else if (s_mode == UI_MODE_VOLUME) {
                             audio_player_adjust_volume(-VOLUME_STEP_PERCENT);
                         } else if (s_mode == UI_MODE_EQ_PRESETS) {
@@ -1016,8 +1026,10 @@ static void touch_task(void *arg)
                                 }
                                 s_oled_brightness = BRIGHTNESS_CURVE[next_idx];
                                 oled_display_set_brightness(s_oled_brightness);
-                            } else {
+                            } else if (s_tela_cursor == 1) {
                                 if (s_timeout_idx > 0) s_timeout_idx--;
+                            } else if (s_tela_cursor == 2) {
+                                if (s_fallback_idx > 0) s_fallback_idx--;
                             }
                         } else if (s_mode == UI_MODE_LED) {
                             rgb_led_config_t cfg;
@@ -1118,8 +1130,10 @@ static void touch_task(void *arg)
                                 }
                                 s_oled_brightness = BRIGHTNESS_CURVE[next_idx];
                                 oled_display_set_brightness(s_oled_brightness);
-                            } else {
+                            } else if (s_tela_cursor == 1) {
                                 if (s_timeout_idx < 5) s_timeout_idx++;
+                            } else if (s_tela_cursor == 2) {
+                                if (s_fallback_idx < (FALLBACK_OPTIONS_COUNT - 1)) s_fallback_idx++;
                             }
                         } else if (s_mode == UI_MODE_LED) {
                             rgb_led_config_t cfg;
@@ -1269,6 +1283,9 @@ esp_err_t touch_input_start(void)
         if (nvs_get_u8(h, "timeout", &val) == ESP_OK) {
             s_timeout_idx = val;
         }
+        if (nvs_get_u8(h, "fallback", &val) == ESP_OK) {
+            if (val < FALLBACK_OPTIONS_COUNT) s_fallback_idx = val;
+        }
         if (nvs_get_u8(h, "deepsleep", &val) == ESP_OK) {
             if (val < DEEPSLEEP_OPTIONS_COUNT) s_deepsleep_idx = val;
         }
@@ -1311,11 +1328,23 @@ void touch_input_cancel_usb(void) {
     }
 }
 
+void touch_input_reset_to_main_menu(void) {
+    while (!audio_player_browse_is_root()) {
+        audio_player_select_entry(0);
+    }
+    s_mode = UI_MODE_LIST;
+    s_in_player_browser = false;
+    s_list_cursor = 0;
+    s_is_sleeping = false;
+    touch_input_wake_display();
+}
+
 int touch_input_get_top_cursor(void) { return s_top_cursor; }
 int touch_input_get_top_eq_focus(void) { return s_top_eq_focus; }
 
 int touch_input_get_tela_cursor(void) { return s_tela_cursor; }
 int touch_input_get_timeout_idx(void) { return s_timeout_idx; }
+int touch_input_get_fallback_idx(void) { return s_fallback_idx; }
 bool touch_input_is_sleeping(void) { return s_is_sleeping; }
 
 int touch_input_get_deepsleep_idx(void)

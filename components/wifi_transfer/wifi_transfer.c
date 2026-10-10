@@ -22,6 +22,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"
+#include "esp_heap_caps.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -38,6 +40,7 @@
 #include <lwip/tcp.h>
 #include <lwip/tcpip.h>
 #include <lwip/priv/tcp_priv.h>
+#include <lwip/udp.h>
 
 static const char *TAG = "wifi_transfer";
 
@@ -775,84 +778,93 @@ static esp_err_t api_list_get_handler(httpd_req_t *req)
 }
 
 // --- Pipeline de upload: httpd (recepcao TCP) -> RingBuffer PSRAM -> task escritora (SD) ---
-#define UPLOAD_RINGBUF_SIZE          (3 * 1024 * 1024)  // "pulmao" elastico em PSRAM (sweet spot medido)
+#define UPLOAD_RINGBUF_SIZE          (4 * 1024 * 1024)  // "pulmao" elastico de 4 MB em PSRAM
 #define UPLOAD_RINGBUF_MIN           (64 * 1024)
-#define UPLOAD_RECV_BUF_SIZE         (16 * 1024)        // metade da janela TCP do lwIP (32 KB)
-#define UPLOAD_BOUNCE_SIZE           (16 * 1024)        // 32 setores: excelente throughput DMA sem esgotar SRAM interna
+#define UPLOAD_RECV_BUF_SIZE         (32 * 1024)        // 32 KB (alinhado a janela TCP do lwIP)
+#define UPLOAD_BOUNCE_SIZE           (64 * 1024)        // 128 setores = 1 cluster completo FatFS (64 KB)
 #define UPLOAD_LOCK_TIMEOUT_MS       5000
-#define UPLOAD_RING_SEND_TIMEOUT_MS  30000
+#define UPLOAD_RING_SEND_TIMEOUT_MS  60000
 
 static SemaphoreHandle_t s_upload_lock = NULL;
-static uint8_t *s_upload_dma_bounce = NULL;
-static size_t   s_upload_dma_bounce_size = 0;
+static uint8_t *s_bounce_persist = NULL;   // bounce DMA reservado antes do esp_wifi_init
+static size_t s_bounce_persist_sz = 0;
 
-#define UPLOAD_WRITER_STACK_WORDS    2048 // 2048 * sizeof(StackType_t) = 8192 bytes em SRAM interna (.bss)
-static StaticTask_t s_writer_task_tcb;
-static StackType_t  s_writer_stack[UPLOAD_WRITER_STACK_WORDS];
+#define UPLOAD_WRITER_STACK_SIZE     8192 // 8 KB de pilha em PSRAM (suficiente para VFS e FatFS, 0 bytes de DRAM interna)
 
 typedef struct {
     FILE *fp;
     RingbufHandle_t rb;
     SemaphoreHandle_t done_sem;
+    uint8_t *bounce;
+    size_t bounce_size;
     volatile bool producer_done;  // httpd ja empurrou todos os bytes (ou desistiu)
     volatile bool abort;          // descartar o restante sem gravar
     volatile bool failed;         // erro de escrita no SD
     volatile size_t written;      // bytes realmente gravados no SD
 } upload_ctx_t;
 
+static upload_ctx_t s_upload_ctx;
+
 static void upload_writer_task(void *arg)
 {
     upload_ctx_t *ctx = (upload_ctx_t *)arg;
+    uint8_t *bounce = ctx->bounce;
+    size_t chunk_sz = ctx->bounce_size;
+    size_t bounce_filled = 0;
+    int64_t wr_total_us = 0, wr_max_us = 0;
+    uint32_t wr_count = 0, wr_slow = 0;
 
-    // Utiliza buffer DMA pre-alocado no inicio do modo Wi-Fi (evita concorrencia de heap durante transferencias)
-    uint8_t *bounce = s_upload_dma_bounce;
-    size_t chunk_sz = s_upload_dma_bounce_size;
-    bool dyn_alloc = false;
-
-    if (!bounce || chunk_sz < 512) {
-        size_t max_block = heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        chunk_sz = (max_block > 8192) ? 4096 : 2048;
-        bounce = (uint8_t *)heap_caps_malloc(chunk_sz, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        if (bounce) dyn_alloc = true;
-    }
-
-    if (!bounce) {
-        ESP_LOGE(TAG, "[WRITER] Falha fatal: nenhum buffer DMA disponivel em SRAM!");
-        ctx->failed = true;
-        chunk_sz = 0;
-    } else {
-        ESP_LOGI(TAG, "[WRITER] Bounce buffer DMA escritor ativo: %zu bytes (em SRAM DMA)", chunk_sz);
-    }
+    ESP_LOGI(TAG, "[WRITER] Pipeline SDMMC DMA ativo: blocos alinhados de %zu bytes (DMA SRAM)", chunk_sz);
 
     while (true) {
-        // Le o flag ANTES de receber: se done ja estava setado e o ring veio vazio, nao ha mais nada.
         bool was_done = ctx->producer_done;
-
+        size_t needed = chunk_sz - bounce_filled;
         size_t got = 0;
-        void *item = xRingbufferReceiveUpTo(ctx->rb, &got, pdMS_TO_TICKS(100), chunk_sz ? chunk_sz : 2048);
-        if (item) {
-            if (!ctx->abort && !ctx->failed && bounce) {
-                memcpy(bounce, item, got);   // got <= chunk_sz
+        void *item = NULL;
+
+        if (needed > 0) {
+            item = xRingbufferReceiveUpTo(ctx->rb, &got, pdMS_TO_TICKS(20), needed);
+            if (item) {
+                if (!ctx->abort && !ctx->failed) {
+                    memcpy(bounce + bounce_filled, item, got);
+                    bounce_filled += got;
+                }
                 vRingbufferReturnItem(ctx->rb, item);
-                size_t w = fwrite(bounce, 1, got, ctx->fp);
-                if (w != got) {
+            }
+        }
+
+        // Escreve quando o buffer estiver cheio (64 KB multi-bloco DMA) OU quando a transmissao terminou
+        if (bounce_filled == chunk_sz || (bounce_filled > 0 && was_done)) {
+            if (!ctx->abort && !ctx->failed) {
+                int64_t tw0 = esp_timer_get_time();
+                size_t w = fwrite(bounce, 1, bounce_filled, ctx->fp);
+                int64_t twd = esp_timer_get_time() - tw0;
+                wr_total_us += twd;
+                wr_count++;
+                if (twd > wr_max_us) wr_max_us = twd;
+                if (twd > 200000) wr_slow++;
+                if (w != bounce_filled) {
                     ESP_LOGE(TAG, "[WRITER] fwrite falhou: tentou %zu bytes, escreveu %zu (errno=%d: %s)",
-                             got, w, errno, strerror(errno));
+                             bounce_filled, w, errno, strerror(errno));
                     ctx->failed = true;
                 } else {
-                    ctx->written += got;
+                    ctx->written += bounce_filled;
                 }
-            } else {
-                vRingbufferReturnItem(ctx->rb, item); // descarta (abortado/erro) para destravar o produtor
             }
-            continue;
+            bounce_filled = 0;
+            taskYIELD(); // Cede CPU para o produtor httpd ler os proximos pacotes TCP imediatamente
         }
-        if (was_done) break;
+
+        if (was_done && bounce_filled == 0 && !item) {
+            break;
+        }
     }
 
-    if (dyn_alloc && bounce) heap_caps_free(bounce);
+    ESP_LOGW(TAG, "[WRITER] %u escritas, media %lld ms, max %lld ms, %u lentas(>200ms), total %lld ms",
+             (unsigned)wr_count, wr_count ? (long long)(wr_total_us / wr_count / 1000) : 0LL,
+             (long long)(wr_max_us / 1000), (unsigned)wr_slow, (long long)(wr_total_us / 1000));
     xSemaphoreGive(ctx->done_sem);  // ultima coisa tocando ctx
-    vTaskDelete(NULL);
+    vTaskDelay(portMAX_DELAY);      // aguarda delecao externa pela task criadora
 }
 
 static esp_err_t api_upload_put_handler(httpd_req_t *req)
@@ -862,17 +874,11 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    // Parar qualquer reproducao local para liberar o SD e evitar concorrencia
-    playback_state_t st;
-    audio_player_get_state(&st);
-    if (st.playing && !st.paused) {
-        audio_player_toggle_play_pause();
-    }
     audio_player_stop_url();
 
-    char query[512];
-    char path_enc[400] = {0};
-    char rel_path[400] = {0};
+    char query[256];
+    char path_enc[256] = {0};
+    char rel_path[256] = {0};
     int idx = 1, count = 1;
     long long batch_total = 0;
 
@@ -890,7 +896,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     if (idx < 1) idx = 1;
     if (count < 1) count = 1;
 
-    char abs_path[600];
+    char abs_path[320];
     if (!build_abs_path(rel_path, abs_path, sizeof(abs_path)) || rel_path[0] == '\0') {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "caminho invalido");
         return ESP_FAIL;
@@ -911,6 +917,9 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    size_t content_len = req->content_len;
+    progress_begin(display_name, content_len, idx, count, batch_total > 0 ? batch_total : (long long)content_len);
+
     FILE *fp = fopen(abs_path, "wb");
     if (!fp) {
         ESP_LOGE(TAG, "Nao foi possivel criar %s (errno=%d: %s)", abs_path, errno, strerror(errno));
@@ -920,23 +929,42 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, err_msg);
         return ESP_FAIL;
     }
-
-    size_t content_len = req->content_len;
-    progress_begin(display_name, content_len, idx, count, batch_total > 0 ? batch_total : (long long)content_len);
+    setvbuf(fp, NULL, _IONBF, 0); // Desativa bufferizacao interna do picolibc para gravacao direta em disco
 
     // RingBuffer na PSRAM: nao desperdica SRAM interna (reservada ao DMA do SDMMC).
-    // Limitado ao tamanho do arquivo para nao alocar 3 MB a toa em arquivos pequenos.
+    // Limitado ao tamanho do arquivo para nao alocar memoria a toa em arquivos pequenos.
     size_t rb_size = UPLOAD_RINGBUF_SIZE;
     if (content_len + 4096 < rb_size) rb_size = content_len + 4096;
     if (rb_size < UPLOAD_RINGBUF_MIN) rb_size = UPLOAD_RINGBUF_MIN;
 
-    upload_ctx_t ctx = {0};
-    ctx.fp = fp;
-    while (!ctx.rb && rb_size >= UPLOAD_RINGBUF_MIN) {
-        ctx.rb = xRingbufferCreateWithCaps(rb_size, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!ctx.rb) rb_size /= 2;
+    // Bounce DMA: usa o buffer persistente reservado antes do Wi-Fi; senao tenta alocar dinamicamente.
+    size_t bounce_sz = s_bounce_persist_sz;
+    uint8_t *bounce = s_bounce_persist;
+    bool bounce_dynamic = false;
+    if (!bounce) {
+        bounce_dynamic = true;
+        bounce_sz = UPLOAD_BOUNCE_SIZE;
+        bounce = (uint8_t *)heap_caps_aligned_alloc(16, bounce_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (!bounce) {
+            bounce_sz = 16 * 1024;
+            bounce = (uint8_t *)heap_caps_aligned_alloc(16, bounce_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        }
+        if (!bounce) {
+            ESP_LOGE(TAG, "[MEM] sem bounce DMA: internal free=%u, largest DMA=%u",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+        }
     }
-    ctx.done_sem = xSemaphoreCreateBinary();
+
+    memset(&s_upload_ctx, 0, sizeof(s_upload_ctx));
+    s_upload_ctx.fp = fp;
+    s_upload_ctx.bounce = bounce;
+    s_upload_ctx.bounce_size = bounce_sz;
+    while (!s_upload_ctx.rb && rb_size >= UPLOAD_RINGBUF_MIN) {
+        s_upload_ctx.rb = xRingbufferCreateWithCaps(rb_size, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_upload_ctx.rb) rb_size /= 2;
+    }
+    s_upload_ctx.done_sem = xSemaphoreCreateBinary();
 
     size_t recv_sz = UPLOAD_RECV_BUF_SIZE;
     char *buf = (char *)heap_caps_malloc(recv_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -948,24 +976,34 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         buf = (char *)malloc(recv_sz);
     }
 
+    // Pilha do escritor em PSRAM e TCB em DRAM interna (0 bytes de DRAM interna para stack)
+    StaticTask_t *writer_tcb = (StaticTask_t *)heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    StackType_t *writer_stack = (StackType_t *)heap_caps_aligned_alloc(16, UPLOAD_WRITER_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    TaskHandle_t th = NULL;
     bool writer_started = false;
-    if (ctx.rb && ctx.done_sem && buf) {
-        TaskHandle_t th = xTaskCreateStaticPinnedToCore(
+    if (s_upload_ctx.rb && s_upload_ctx.done_sem && buf && bounce && writer_tcb && writer_stack) {
+        th = xTaskCreateStaticPinnedToCore(
             upload_writer_task,
             "up_wr",
-            UPLOAD_WRITER_STACK_WORDS,
-            &ctx,
-            5,
-            s_writer_stack,
-            &s_writer_task_tcb,
-            0 // Core 0 dedicado ao SDMMC
+            UPLOAD_WRITER_STACK_SIZE,
+            &s_upload_ctx,
+            5, // Mesma prioridade do httpd (5) com cooperacao via taskYIELD()
+            writer_stack,
+            writer_tcb,
+            1  // Core 1 (livre de interrupcoes do driver Wi-Fi do Core 0)
         );
         writer_started = (th != NULL);
     }
+    ESP_LOGW(TAG, "[UPLOAD] Pipeline init: rb=%p, sem=%p, buf=%p, bounce=%p (%zu B), tcb=%p, stack=%p -> writer=%d",
+             s_upload_ctx.rb, s_upload_ctx.done_sem, buf, bounce, bounce_sz, writer_tcb, writer_stack, writer_started);
     if (!writer_started) {
-        if (ctx.rb) vRingbufferDeleteWithCaps(ctx.rb);
-        if (ctx.done_sem) vSemaphoreDelete(ctx.done_sem);
-        free(buf);
+        if (s_upload_ctx.rb) vRingbufferDeleteWithCaps(s_upload_ctx.rb);
+        if (s_upload_ctx.done_sem) vSemaphoreDelete(s_upload_ctx.done_sem);
+        if (bounce && bounce_dynamic) heap_caps_free(bounce);
+        if (buf) free(buf);
+        if (writer_stack) heap_caps_free(writer_stack);
+        if (writer_tcb) heap_caps_free(writer_tcb);
         fclose(fp);
         remove(abs_path);
         xSemaphoreGive(s_upload_lock);
@@ -984,7 +1022,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     // Produtor: so' le do socket e empurra para o RingBuffer. Nenhum ESP_LOG aqui dentro
     // (milhares de linhas na UART derrubavam o upload por timeout).
     while (remaining > 0) {
-        if (ctx.failed) {
+        if (s_upload_ctx.failed) {
             snprintf(fail_detail, sizeof(fail_detail), "fwrite SD erro (cartao cheio ou falha de escrita)");
             ok = false;
             break;
@@ -1012,7 +1050,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         }
 
         // Bloqueia se o ring estiver cheio (contrapressao natural: a janela TCP fecha).
-        if (xRingbufferSend(ctx.rb, buf, (size_t)received, pdMS_TO_TICKS(UPLOAD_RING_SEND_TIMEOUT_MS)) != pdTRUE) {
+        if (xRingbufferSend(s_upload_ctx.rb, buf, (size_t)received, pdMS_TO_TICKS(UPLOAD_RING_SEND_TIMEOUT_MS)) != pdTRUE) {
             ESP_LOGE(TAG, "RingBuffer travou (SD nao drena)");
             snprintf(fail_detail, sizeof(fail_detail), "SD nao esta drenando o buffer de upload");
             ok = false;
@@ -1023,24 +1061,38 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
         if (now_ms - last_prog_update_ms >= 150) {
             last_prog_update_ms = now_ms;
-            progress_update(ctx.written);
+            progress_update(s_upload_ctx.written);
         }
     }
 
     // Sinaliza fim ao escritor e espera ele terminar de gravar tudo (ou descartar, se abortado).
-    if (!ok) ctx.abort = true;
-    ctx.producer_done = true;
-    xSemaphoreTake(ctx.done_sem, portMAX_DELAY);
-    if (ctx.failed) {
+    if (!ok) s_upload_ctx.abort = true;
+    s_upload_ctx.producer_done = true;
+    xSemaphoreTake(s_upload_ctx.done_sem, portMAX_DELAY);
+    if (s_upload_ctx.failed) {
         if (ok) snprintf(fail_detail, sizeof(fail_detail), "fwrite SD erro (cartao cheio ou falha de escrita)");
         ok = false;
     }
 
-    // Dá tempo para a Idle Task do Core 0 limpar os recursos da tarefa finalizada
-    vTaskDelay(pdMS_TO_TICKS(50));
+    if (th) {
+        vTaskDelete(th);
+        th = NULL;
+    }
+    if (writer_stack) {
+        heap_caps_free(writer_stack);
+        writer_stack = NULL;
+    }
+    if (writer_tcb) {
+        heap_caps_free(writer_tcb);
+        writer_tcb = NULL;
+    }
 
-    vRingbufferDeleteWithCaps(ctx.rb);
-    vSemaphoreDelete(ctx.done_sem);
+    if (s_upload_ctx.bounce) {
+        if (bounce_dynamic) heap_caps_free(s_upload_ctx.bounce);
+        s_upload_ctx.bounce = NULL;
+    }
+    vRingbufferDeleteWithCaps(s_upload_ctx.rb);
+    vSemaphoreDelete(s_upload_ctx.done_sem);
     free(buf);
     fclose(fp);
     xSemaphoreGive(s_upload_lock);
@@ -1048,6 +1100,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     if (!ok) {
         remove(abs_path);
         ESP_LOGE(TAG, "Envio de %s interrompido: %s", display_name, fail_detail);
+        httpd_resp_set_hdr(req, "Connection", "close");
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, fail_detail);
         progress_end();
         return ESP_FAIL;
@@ -1403,6 +1456,11 @@ static void known_networks_put_front(const char *ssid, const char *pass)
     s_known[0] = entry;
 
     known_networks_save();
+}
+
+void wifi_transfer_save_network(const char *ssid, const char *pass)
+{
+    known_networks_put_front(ssid, pass);
 }
 
 static bool known_networks_remove(const char *ssid)
@@ -2215,15 +2273,89 @@ static esp_err_t http_socket_open_cb(httpd_handle_t hd, int sockfd)
     int enable_nodelay = 1;
     setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (char *)&enable_nodelay, sizeof(enable_nodelay));
 
-    struct linger sl = { .l_onoff = 1, .l_linger = 0 };
-    setsockopt(sockfd, SOL_SOCKET, SO_LINGER, (char *)&sl, sizeof(sl));
-
     struct timeval tv;
-    tv.tv_sec = 30;
+    tv.tv_sec = 60;
     tv.tv_usec = 0;
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(tv));
     setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (char *)&tv, sizeof(tv));
+    return ESP_OK;
+}
 
+static esp_err_t api_bench_sink_handler(httpd_req_t *req)
+{
+    size_t total_len = req->content_len;
+    size_t received_total = 0;
+    char *rx_buf = malloc(4096);
+    if (!rx_buf) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    int64_t t0 = esp_timer_get_time();
+    int timeout_count = 0;
+
+    while (received_total < total_len) {
+        int to_read = (int)(total_len - received_total);
+        if (to_read > 4096) to_read = 4096;
+        int ret = httpd_req_recv(req, rx_buf, to_read);
+        if (ret <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+                if (++timeout_count > 50) break;
+                continue;
+            }
+            break;
+        }
+        timeout_count = 0;
+        received_total += ret;
+    }
+    int64_t t1 = esp_timer_get_time();
+    free(rx_buf);
+    int64_t elapsed_us = t1 - t0;
+    float elapsed_s = (elapsed_us > 0) ? ((float)elapsed_us / 1000000.0f) : 0.001f;
+    float mbs = ((float)received_total / (1024.0f * 1024.0f)) / elapsed_s;
+
+    char resp[128];
+    snprintf(resp, sizeof(resp), "{\"bytes\":%u,\"time_ms\":%u,\"speed_mbs\":%.2f}",
+             (unsigned)received_total, (unsigned)(elapsed_us / 1000), mbs);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
+static esp_err_t api_bench_source_handler(httpd_req_t *req)
+{
+    char query[64] = {0};
+    char size_str[32] = {0};
+    size_t total_send = 10 * 1024 * 1024; // 10 MB padrao
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        if (httpd_query_key_value(query, "size", size_str, sizeof(size_str)) == ESP_OK) {
+            size_t val = (size_t)atol(size_str);
+            if (val >= 1024 && val <= 50 * 1024 * 1024) total_send = val;
+        }
+    }
+
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    char *chunk = malloc(4096);
+    if (!chunk) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    memset(chunk, 0xA5, 4096);
+
+    size_t sent = 0;
+    while (sent < total_send) {
+        size_t to_send = total_send - sent;
+        if (to_send > 4096) to_send = 4096;
+        if (httpd_resp_send_chunk(req, chunk, to_send) != ESP_OK) {
+            free(chunk);
+            httpd_resp_sendstr_chunk(req, NULL);
+            return ESP_FAIL;
+        }
+        sent += to_send;
+    }
+    free(chunk);
+    httpd_resp_sendstr_chunk(req, NULL);
     return ESP_OK;
 }
 
@@ -2232,11 +2364,11 @@ static esp_err_t start_httpd(void)
     if (s_httpd) return ESP_OK;
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.stack_size = 8192;
-    config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT; // Stack na DRAM interna
+    config.stack_size = 8192; // 8 KB na DRAM interna (api_upload usa apenas ~1 KB de stack agora)
+    config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     config.core_id = 1; // Roda no Core 1 com 240 MHz livres
     config.ctrl_port = 32768;
-    config.max_uri_handlers = 32;
+    config.max_uri_handlers = 36;
     config.max_open_sockets = 7;
     config.backlog_conn = 5;
     config.lru_purge_enable = true;
@@ -2244,12 +2376,9 @@ static esp_err_t start_httpd(void)
     config.keep_alive_idle = 10;
     config.keep_alive_interval = 5;
     config.keep_alive_count = 5;
-    config.send_wait_timeout = 30;
-    config.recv_wait_timeout = 30;
+    config.send_wait_timeout = 60;
+    config.recv_wait_timeout = 60;
     config.open_fn = http_socket_open_cb;
-
-    ESP_LOGI(TAG, "Iniciando servidor HTTP (modo=%s, ip=%s, ctrl_port=%d)...",
-             s_mode == WIFI_TRANSFER_MODE_STA ? "STA" : "AP", s_status, config.ctrl_port);
 
     // Limpa qualquer PCB orfao deixado em LISTEN na porta 80 por sessoes anteriores
     LOCK_TCPIP_CORE();
@@ -2263,9 +2392,11 @@ static esp_err_t start_httpd(void)
     }
     UNLOCK_TCPIP_CORE();
 
+    ESP_LOGI(TAG, "Iniciando servidor HTTP (modo=%s, ip=%s, ctrl_port=%d)...",
+             s_mode == WIFI_TRANSFER_MODE_STA ? "STA" : "AP", s_status, config.ctrl_port);
     esp_err_t err = httpd_start(&s_httpd, &config);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao subir o servidor HTTP: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Falha ao subir o servidor HTTP: %s (codigo %d)", esp_err_to_name(err), (int)err);
         s_httpd = NULL;
         return err;
     }
@@ -2329,6 +2460,11 @@ static esp_err_t start_httpd(void)
     httpd_uri_t podcasts_local_get_uri = { .uri = "/api/podcasts_local", .method = HTTP_GET, .handler = api_podcasts_local_get_handler };
     httpd_register_uri_handler(s_httpd, &podcasts_local_get_uri);
 
+    httpd_uri_t bench_sink_uri = { .uri = "/api/bench_sink", .method = HTTP_POST, .handler = api_bench_sink_handler };
+    httpd_uri_t bench_source_uri = { .uri = "/api/bench_source", .method = HTTP_GET, .handler = api_bench_source_handler };
+    httpd_register_uri_handler(s_httpd, &bench_sink_uri);
+    httpd_register_uri_handler(s_httpd, &bench_source_uri);
+
     httpd_register_err_handler(s_httpd, HTTPD_404_NOT_FOUND, http_404_error_handler);
 
     return ESP_OK;
@@ -2336,6 +2472,8 @@ static esp_err_t start_httpd(void)
 
 
 // --- WiFi ------------------------------------------------------------------
+
+static bool s_bw_is_ht40 = false;
 
 // Sequencia de candidatos tentados no modo STA nesta sessao: a lista de
 // redes conhecidas (da mais recente pra' mais antiga), seguida do SSID
@@ -2402,7 +2540,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         if (event_id == WIFI_EVENT_STA_START) {
             esp_wifi_connect();
         } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+            wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
+            uint8_t reason = disc ? disc->reason : 0;
             s_got_ip = false;
+            s_bw_is_ht40 = false;
+            ESP_LOGW(TAG, "STA desconectou (reason=%u). Tentativa %d/%d (Candidato %d/%d: SSID=%s)",
+                     reason, s_sta_retry + 1, WIFI_STA_MAX_RETRY,
+                     s_candidate_idx + 1, s_candidate_count,
+                     (s_candidate_idx < s_candidate_count) ? s_candidates[s_candidate_idx].ssid : "N/A");
             if (s_active && (s_mode == WIFI_TRANSFER_MODE_STA || s_mode == WIFI_TRANSFER_MODE_APSTA)) {
                 if (s_sta_retry < WIFI_STA_MAX_RETRY) {
                     s_sta_retry++;
@@ -2435,6 +2580,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         s_sta_retry = 0;
         s_sta_failed = false;
 
+        // Com o link STA associado e estavel, eleva a banda para HT40 (40 MHz) para ate 150 Mbps PHY
+        if (esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW40) == ESP_OK) {
+            s_bw_is_ht40 = true;
+            ESP_LOGI(TAG, "Wi-Fi STA elevado para HT40 (40 MHz, PHY rate ate 150 Mbps)!");
+        } else {
+            s_bw_is_ht40 = false;
+        }
+
         ESP_LOGI(TAG, "===> CONECTADO NA REDE WIFI LOCAL! <===");
         ESP_LOGI(TAG, "IP STA obtido: %s | Hotspot AP: 192.168.4.1", s_status);
         ESP_LOGI(TAG, "Acesse pelo navegador: http://%s ou http://192.168.4.1 ou http://mps3.local", s_status);
@@ -2461,13 +2614,39 @@ static esp_err_t ensure_stack_ready(void)
     if (!s_netif_sta) s_netif_sta = esp_netif_create_default_wifi_sta();
     if (!s_netif_ap)  s_netif_ap  = esp_netif_create_default_wifi_ap();
 
+    // Reserva o bounce DMA do upload ANTES do esp_wifi_init: depois que o Wi-Fi sobe, a SRAM
+    // interna DMA-capable fica fragmentada e a alocacao dinamica por upload falha.
+    ESP_LOGW(TAG, "[MEM] pre-init: internal free=%u, largest DMA block=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+    if (!s_bounce_persist) {
+        s_bounce_persist_sz = UPLOAD_BOUNCE_SIZE;
+        s_bounce_persist = (uint8_t *)heap_caps_aligned_alloc(16, s_bounce_persist_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (!s_bounce_persist) {
+            s_bounce_persist_sz = 16 * 1024;
+            s_bounce_persist = (uint8_t *)heap_caps_aligned_alloc(16, s_bounce_persist_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        }
+    }
+
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     cfg.static_rx_buf_num = 4;
     cfg.dynamic_rx_buf_num = 16;
     cfg.dynamic_tx_buf_num = 16;
     cfg.mgmt_sbuf_num = 16;
     err = esp_wifi_init(&cfg);
+    if (err != ESP_OK && s_bounce_persist) {
+        // Sem memoria para o Wi-Fi com o bounce reservado: devolve e tenta de novo.
+        ESP_LOGE(TAG, "[MEM] esp_wifi_init falhou com bounce reservado (%s); liberando e repetindo", esp_err_to_name(err));
+        heap_caps_free(s_bounce_persist);
+        s_bounce_persist = NULL;
+        s_bounce_persist_sz = 0;
+        err = esp_wifi_init(&cfg);
+    }
     if (err != ESP_OK) return err;
+    ESP_LOGW(TAG, "[MEM] pos-init: internal free=%u, largest DMA block=%u, bounce reservado=%u B",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+             (unsigned)s_bounce_persist_sz);
 
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL);
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL);
@@ -2510,23 +2689,6 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
 
     audio_player_release_sd_for_usb();
 
-    // Pre-aloca buffer DMA em SRAM para transferencias antes da inicializacao do stack Wi-Fi
-    if (!s_upload_dma_bounce) {
-        s_upload_dma_bounce_size = 16 * 1024;
-        s_upload_dma_bounce = (uint8_t *)heap_caps_malloc(s_upload_dma_bounce_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        if (!s_upload_dma_bounce) {
-            s_upload_dma_bounce_size = 8 * 1024;
-            s_upload_dma_bounce = (uint8_t *)heap_caps_malloc(s_upload_dma_bounce_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        }
-        if (!s_upload_dma_bounce) {
-            s_upload_dma_bounce_size = 4 * 1024;
-            s_upload_dma_bounce = (uint8_t *)heap_caps_malloc(s_upload_dma_bounce_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        }
-        if (s_upload_dma_bounce) {
-            ESP_LOGI(TAG, "Buffer DMA dedicado de upload pre-alocado: %zu bytes", s_upload_dma_bounce_size);
-        }
-    }
-
     esp_err_t err = ensure_stack_ready();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Falha ao inicializar o WiFi: %s", esp_err_to_name(err));
@@ -2541,6 +2703,7 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
     s_ap_ready = false;
     s_sta_failed = false;
     s_sta_retry = 0;
+    s_auto_fallback = (mode == WIFI_TRANSFER_MODE_STA);
     if (mode == WIFI_TRANSFER_MODE_AP || mode == WIFI_TRANSFER_MODE_APSTA) {
         strncpy(s_status, "192.168.4.1", sizeof(s_status) - 1);
     } else {
@@ -2600,16 +2763,11 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
     s_active = true;
     // No modo de transferencia WiFi, desativa o modem sleep para resposta TCP instantanea:
     esp_wifi_set_ps(WIFI_PS_NONE);
-    // Potencia calibrada em ~18 dBm (72) para conexao estavel e forte com o roteador:
-    esp_wifi_set_max_tx_power(72);
+    // Potencia no maximo absoluto do hardware ESP32-S3 (78 = 19.5-20.0 dBm) para ganho maximo de antena:
+    esp_wifi_set_max_tx_power(78);
 
-    if (mode == WIFI_TRANSFER_MODE_APSTA) {
-        esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW20);
-        esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW20);
-    } else {
-        wifi_interface_t ifx = (mode == WIFI_TRANSFER_MODE_STA) ? WIFI_IF_STA : WIFI_IF_AP;
-        esp_wifi_set_bandwidth(ifx, WIFI_BW20);
-    }
+    wifi_interface_t ifx = (mode == WIFI_TRANSFER_MODE_STA) ? WIFI_IF_STA : WIFI_IF_AP;
+    esp_wifi_set_bandwidth(ifx, WIFI_BW20);
 
     ESP_LOGI(TAG, "Modo WiFi (%s) iniciado",
              mode == WIFI_TRANSFER_MODE_APSTA ? "AP+STA simultaneo" :
@@ -2619,14 +2777,16 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
 
 esp_err_t wifi_transfer_enter_auto(void)
 {
-    // O modo automatico inicia em APSTA para garantir que o Hotspot "mps3-player"
-    // (192.168.4.1) fique SEMPRE disponivel imediatamente para conexao direta do PC/celular,
-    // e simultaneamente tenta conectar a rede Wi-Fi local cadastrada se houver.
     int candidates = build_sta_candidates();
     if (candidates > 0) {
-        return wifi_transfer_enter(WIFI_TRANSFER_MODE_APSTA);
+        esp_err_t err = wifi_transfer_enter(WIFI_TRANSFER_MODE_STA);
+        if (err == ESP_OK) {
+            s_auto_fallback = true;
+            return ESP_OK;
+        }
     }
-    ESP_LOGI(TAG, "Nenhuma rede STA disponivel, iniciando em modo AP...");
+    ESP_LOGI(TAG, "Nenhuma rede STA disponivel, iniciando direto em modo AP...");
+    s_auto_fallback = false;
     return wifi_transfer_enter(WIFI_TRANSFER_MODE_AP);
 }
 
@@ -2637,7 +2797,17 @@ bool wifi_transfer_poll(void)
     update_ui_state();
 
     static uint32_t s_last_httpd_attempt_ms = 0;
+    static uint32_t s_last_probe_ms = 0;
     uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+
+    // Sonda periodica de banda: se recuou para HT20, tenta voltar para HT40 quando ocioso
+    if (s_got_ip && !s_bw_is_ht40 && !s_progress_active && (now_ms - s_last_probe_ms > 30000)) {
+        s_last_probe_ms = now_ms;
+        ESP_LOGI(TAG, "Sonda de banda: testando retorno para HT40 (40 MHz)...");
+        if (esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW40) == ESP_OK) {
+            s_bw_is_ht40 = true;
+        }
+    }
 
     if (!s_httpd) {
         bool can_start = false;
@@ -2723,11 +2893,6 @@ bool wifi_transfer_poll(void)
         s_status[0] = '\0';
         progress_end();
 
-        if (s_upload_dma_bounce) {
-            heap_caps_free(s_upload_dma_bounce);
-            s_upload_dma_bounce = NULL;
-            s_upload_dma_bounce_size = 0;
-        }
 
         // Remontagem robusta do cartao SD (reinicializa o host SDMMC e remonta o FatFS do zero)
         ESP_LOGI(TAG, "Remontando cartao SD apos encerramento do WiFi...");

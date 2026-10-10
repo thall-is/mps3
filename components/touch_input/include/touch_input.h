@@ -86,6 +86,11 @@ void touch_input_set_usb_prompt(void);
 void touch_input_cancel_usb(void);
 
 /**
+ * @brief Reseta o estado da UI diretamente para o carrossel do menu principal na raiz.
+ */
+void touch_input_reset_to_main_menu(void);
+
+/**
  * @brief Retorna o timestamp em milissegundos da última ação detectada no joystick.
  *
  * Utilizado pelos algoritmos de inatividade para temporização de suspensão da tela.
@@ -199,6 +204,13 @@ int touch_input_get_tela_cursor(void);
  * @return Índice de timeout (0=Nunca, 1=15s, 2=30s, 3=1m, 4=2m).
  */
 int touch_input_get_timeout_idx(void);
+
+/**
+ * @brief Retorna o índice do temporizador de retorno para a tela de reprodução.
+ *
+ * @return Índice de fallback (0=Desativado, 1=5s, 2=10s, 3=15s, 4=30s, 5=1 min).
+ */
+int touch_input_get_fallback_idx(void);
 
 /**
  * @brief Informa se o sistema encontra-se em modo de suspensão de tela (Display Sleep).

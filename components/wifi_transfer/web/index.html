@@ -1342,6 +1342,12 @@
         el.audio.onplay = ()=>updatePlayBtn(true);
         el.audio.onpause = ()=>updatePlayBtn(false);
         el.audio.onended = ()=>nextTrack();
+        el.audio.onerror = ()=>{
+            if (isUploading) {
+                alert('Upload em andamento na velocidade maxima. SD temporariamente reservado.');
+            }
+            updatePlayBtn(false);
+        };
         
         el.audio.ontimeupdate = ()=>{
             el.cur.textContent = el.fsCur.textContent = fmtTime(el.audio.currentTime);
@@ -1813,7 +1819,8 @@
                 const url = '/api/upload?path=' + encodeURIComponent(joinPath(curDir, cleanRelPath)) +
                     '&idx=' + idx + '&count=' + count + '&batchTotal=' + batchTotal;
                 xhr.open('PUT', url, true);
-                xhr.timeout = 300000;
+                // Timeout dinamico proporcional ao tamanho do arquivo (garante tempo suficiente mesmo para 100MB+ e 500MB+)
+                xhr.timeout = Math.max(300000, Math.ceil(file.size / 150000) * 1000);
                 let t0 = performance.now();
                 let lastCalcTime = t0;
                 let lastCalcBytes = 0;
