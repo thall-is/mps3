@@ -167,7 +167,10 @@ def test_net_sink(base_url, size_mb=10):
             json_part = resp_data[resp_data.find(b"{"):resp_data.rfind(b"}")+1].decode('utf-8', errors='ignore')
             try:
                 esp_info = json.loads(json_part)
-                print(f"  Telemetria interna do ESP32: {esp_info.get('speed_mbs', 0)} MB/s ({esp_info.get('duration_ms', 0)} ms)")
+                t_ms = esp_info.get('time_ms', esp_info.get('duration_ms', 0))
+                rc = esp_info.get('recv_calls', 0)
+                rmax = esp_info.get('recv_max_ms', 0)
+                print(f"  Telemetria interna do ESP32: {esp_info.get('speed_mbs', 0)} MB/s ({t_ms} ms | recv_calls={rc}, max={rmax} ms)")
             except Exception:
                 pass
         return speed_mbs
@@ -222,7 +225,7 @@ def test_sd_upload(base_url, size_mb=10):
     total_bytes = size_mb * 1024 * 1024
     print("\n" + "=" * 65)
     print(f"💾 4. TESTE DE UPLOAD PONTA A PONTA (REDE + SDMMC FATFS) ({size_mb} MB)")
-    print("     (Pipeline Ping-Pong assíncrono gravando arquivo real no Cartão SD)")
+    print("     (Pipeline Dual-Core: Core 1 TCP->PSRAM 3MB | Core 0 Bounce DMA->SDMMC)")
     print("=" * 65)
 
     # Prepara bloco padrão de 64 KB e calcula MD5 esperado sem alocar matrizes gigantescas na RAM
@@ -310,6 +313,27 @@ def test_sd_upload(base_url, size_mb=10):
 
         print(f"  Concluído em: {total_time:.2f} s")
         print(f"  Taxa Efetiva de Escrita Ponta a Ponta: {format_speed(total_bytes, total_time)}")
+
+        # Extrai telemetria detalhada por etapa do header X-Upload-Stats
+        resp_text = resp_data.decode('utf-8', errors='ignore')
+        for line in resp_text.splitlines():
+            if line.lower().startswith("x-upload-stats:"):
+                raw_json = line.split(":", 1)[1].strip()
+                try:
+                    st = json.loads(raw_json)
+                    fw_ms = max(1, st.get('fwrite_ms', 1))
+                    raw_sd_mbs = (total_bytes / (1024.0 * 1024.0)) / (fw_ms / 1000.0)
+                    print("\n  ⏱️ TELEMETRIA DE LATÊNCIA POR ETAPA (INTERNA DO ESP32-S3):")
+                    print(f"     • Buffers Ativos:     RingBuffer PSRAM = {st.get('rb_kb', 0)} KB | Bounce DMA = {st.get('bounce_kb', 0)} KB | Recv Buf = {st.get('recv_kb', 0)} KB")
+                    print(f"     • Setup Pipeline:     alloc = {st.get('alloc_ms', 0)} ms | mkdir+fopen (Core 0 paralelo) = {st.get('open_ms', 0)} ms")
+                    print(f"     • Produtor (Core 1):  httpd_req_recv = {st.get('recv_ms', 0)} ms ({st.get('recv_calls', 0)} calls, max={st.get('recv_max_ms', 0)} ms, >50ms={st.get('recv_slow', 0)})")
+                    print(f"     • RingBuffer Push:    xRingbufferSend = {st.get('ring_ms', 0)} ms ({st.get('ring_calls', 0)} calls, contrapressão >5ms: {st.get('ring_full', 0)}x)")
+                    print(f"     • Consumidor (Core0): wait_rb = {st.get('wr_wait_ms', 0)} ms | memcpy PSRAM->DMA = {st.get('memcpy_ms', 0)} ms")
+                    print(f"     • Gravação SDMMC:     fwrite = {st.get('fwrite_ms', 0)} ms ({st.get('wr_calls', 0)} blocos, média={st.get('wr_avg_ms', 0)} ms, máx={st.get('wr_max_ms', 0)} ms, >200ms={st.get('wr_slow', 0)})")
+                    print(f"     • Fechamento FATFS:   drain_wait = {st.get('drain_ms', 0)} ms | fclose = {st.get('fclose_ms', 0)} ms")
+                    print(f"     • Vazão Pura SDMMC:   {raw_sd_mbs:.2f} MB/s (durante fwrite) | Total Handler: {st.get('total_ms', 0)} ms ({st.get('speed_mbs', 0):.2f} MB/s)")
+                except Exception as ex:
+                    print(f"  (Erro ao parsear X-Upload-Stats: {ex})")
 
         # Validação de integridade baixando o arquivo gravado e conferindo MD5
         print("\n  Verificando integridade no cartão SD...")
