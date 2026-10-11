@@ -479,7 +479,7 @@ static void uart_cmd_task(void *arg)
                         for (int i = 0; i < cnt; i++) {
                             char s_name[33] = {0}, s_pw[65] = {0};
                             wifi_transfer_get_known_network(i, s_name, sizeof(s_name), s_pw, sizeof(s_pw));
-                            ESP_LOGI("UART_CMD", "  [%d] SSID='%s' Senha='%s'", i, s_name, s_pw);
+                            ESP_LOGI("UART_CMD", "  [%d] SSID='%s' Senha='%s'", i, s_name, s_pw[0] ? "********" : "(aberta)");
                         }
                     } else if (strncmp(line_buf, "net-set ", 8) == 0) {
                         char *p = line_buf + 8;
@@ -489,7 +489,7 @@ static void uart_cmd_task(void *arg)
                             const char *s_ssid = p;
                             const char *s_pass = space + 1;
                             wifi_transfer_save_network(s_ssid, s_pass);
-                            ESP_LOGI("UART_CMD", "Rede salva: SSID='%s' Senha='%s'", s_ssid, s_pass);
+                            ESP_LOGI("UART_CMD", "Rede salva: SSID='%s' (senha de %u chars)", s_ssid, (unsigned)strlen(s_pass));
                         } else {
                             ESP_LOGW("UART_CMD", "Uso: net-set <SSID> <SENHA>");
                         }

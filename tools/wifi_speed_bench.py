@@ -19,6 +19,8 @@ import argparse
 import socket
 import json
 import threading
+import gzip
+import concurrent.futures
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -472,6 +474,215 @@ class SerialRebootMonitor:
             except Exception:
                 pass
 
+def test_browser_workflow(base_url, size_mb=10):
+    print(f"\n🌐 [5/5] SIMULAÇÃO REAL DE USUÁRIO HUMANO NO NAVEGADOR WEB")
+    print("  Testando fluxo completo pelo site gerado: Abrir página -> APIs iniciais ->")
+    print("  Criar pasta -> Subir lote de músicas -> Listar álbum -> Ouvir/Seek no Player Web")
+
+    parsed = urllib.parse.urlparse(base_url)
+    host = parsed.hostname
+    port = parsed.port or 80
+
+    try:
+        # 5.1 Carregar a página principal GET / (GZIP)
+        t0 = time.perf_counter()
+        req_root = urllib.request.Request(
+            f"{base_url}/",
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0.0.0',
+                'Accept-Encoding': 'gzip, deflate'
+            }
+        )
+        with urllib.request.urlopen(req_root, timeout=10.0) as resp:
+            raw_html = resp.read()
+            encoding = resp.headers.get('Content-Encoding', '')
+        t_root_ms = (time.perf_counter() - t0) * 1000.0
+        if encoding == 'gzip':
+            html_text = gzip.decompress(raw_html).decode('utf-8', errors='replace')
+        else:
+            html_text = raw_html.decode('utf-8', errors='replace')
+
+        if "MPS3" not in html_text or len(html_text) < 50000:
+            print(f"  ❌ Falha ao validar HTML da página inicial ({len(html_text)} B)")
+            return None
+        print(f"  ✅ [Passo 1] Página Web carregada: {len(raw_html)/1024:.1f} KB gzip -> {len(html_text)/1024:.1f} KB HTML em {t_root_ms:.1f} ms")
+
+        # 5.2 Rajada de chamadas simultâneas de abertura do navegador (DOMContentLoaded)
+        init_endpoints = [
+            "/api/status",
+            "/api/list?path=%2F",
+            "/api/now_playing",
+            "/api/wifi/networks",
+            "/api/eq",
+            "/api/ota",
+            "/api/podcasts_local"
+        ]
+        def fetch_ep(ep):
+            ep_t0 = time.perf_counter()
+            req = urllib.request.Request(f"{base_url}{ep}", headers={'User-Agent': 'Mozilla/5.0 Chrome/130.0'})
+            with urllib.request.urlopen(req, timeout=15.0) as r:
+                body = r.read()
+                code = r.getcode()
+            return ep, code, len(body), (time.perf_counter() - ep_t0) * 1000.0
+
+        t_burst0 = time.perf_counter()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            futures = [ex.submit(fetch_ep, ep) for ep in init_endpoints]
+            burst_results = [f.result() for f in futures]
+        t_burst_ms = (time.perf_counter() - t_burst0) * 1000.0
+
+        for ep, code, blen, dt_ms in burst_results:
+            print(f"     • GET {ep:<22} -> HTTP {code} ({blen:5d} B) em {dt_ms:6.1f} ms")
+        print(f"  ✅ [Passo 2] Rajada inicial do navegador ({len(init_endpoints)} APIs concorrentes) concluída em {t_burst_ms:.1f} ms sem reboot!")
+
+        # 5.3 Criar pasta de álbum via POST /api/mkdir
+        album_dir = "/_Album_Teste_Web"
+        mkdir_body = json.dumps({"path": album_dir}).encode('utf-8')
+        req_mkdir = urllib.request.Request(
+            f"{base_url}/api/mkdir",
+            data=mkdir_body,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        with urllib.request.urlopen(req_mkdir, timeout=10.0) as resp:
+            _ = resp.read()
+        print(f"  ✅ [Passo 3] Pasta de álbum criada via Web API: {album_dir}")
+
+        # 5.4 Upload de lote (batch) de músicas exatamente como o uploadBatch() do index.html
+        track1_size = 512 * 1024  # 512 KB (faixa curta com acentos e espaços)
+        track2_size = size_mb * 1024 * 1024  # Faixa principal Hi-Res (ex: 10 MB)
+        batch_total = track1_size + track2_size
+
+        tracks = [
+            (f"{album_dir}/01 - Canção de Abertura (Ao Vivo).mp3", track1_size),
+            (f"{album_dir}/02 - Sinfonia Hi-Res Master.flac", track2_size),
+        ]
+
+        pattern = bytearray(CHUNK_SIZE)
+        for i in range(len(pattern)):
+            pattern[i] = (i * 11 + 29) & 0xFF
+
+        total_batch_sent = 0
+        t_batch_start = time.perf_counter()
+        last_prog_t = t_batch_start
+        last_stats_hdr = ""
+
+        for idx, (t_path, t_bytes) in enumerate(tracks, start=1):
+            encoded_q = (
+                f"path={urllib.parse.quote(t_path)}"
+                f"&idx={idx}&count={len(tracks)}&batchTotal={batch_total}"
+            )
+            sock = socket.create_connection((host, port), timeout=30.0)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+
+            req_hdr = (
+                f"PUT /api/upload?{encoded_q} HTTP/1.1\r\n"
+                f"Host: {host}:{port}\r\n"
+                f"User-Agent: Mozilla/5.0 Chrome/130.0\r\n"
+                f"Content-Type: application/octet-stream\r\n"
+                f"Content-Length: {t_bytes}\r\n"
+                f"Connection: close\r\n\r\n"
+            ).encode('utf-8')
+            sock.sendall(req_hdr)
+
+            sent_file = 0
+            while sent_file < t_bytes:
+                to_send = min(CHUNK_SIZE, t_bytes - sent_file)
+                sock.sendall(pattern[:to_send])
+                sent_file += to_send
+                total_batch_sent += to_send
+                now_t = time.perf_counter()
+                if now_t - last_prog_t >= 0.2 or sent_file == t_bytes:
+                    last_prog_t = now_t
+                    el = now_t - t_batch_start
+                    cur_mbs = (total_batch_sent / (1024.0 * 1024.0)) / el if el > 0 else 0
+                    progress_bar(total_batch_sent, batch_total, cur_mbs, prefix=f"WebUpload ({idx}/{len(tracks)})")
+
+            resp_data = b""
+            while True:
+                try:
+                    d = sock.recv(4096)
+                    if not d:
+                        break
+                    resp_data += d
+                    if b"\r\n\r\n" in resp_data:
+                        if b"Content-Length: 0" in resp_data or resp_data.endswith(b"\r\n\r\n"):
+                            break
+                except socket.timeout:
+                    if resp_data:
+                        break
+                    raise
+            sock.close()
+
+            resp_str = resp_data.decode('utf-8', errors='replace')
+            if "200 OK" not in resp_str:
+                print(f"\n  ❌ Erro HTTP no upload da faixa {idx}: {resp_str.splitlines()[0] if resp_str else 'Sem resposta'}")
+                return None
+            for line in resp_str.splitlines():
+                if line.lower().startswith("x-upload-stats:"):
+                    last_stats_hdr = line.split(":", 1)[1].strip()
+
+            # Pausa de 25ms idêntica ao index.html entre arquivos do lote
+            if idx < len(tracks):
+                time.sleep(0.025)
+
+        t_batch_dur = time.perf_counter() - t_batch_start
+        web_upload_mbs = (batch_total / (1024.0 * 1024.0)) / t_batch_dur
+        print(f"\n  ✅ [Passo 4] Lote de músicas enviado via Web UI: {format_speed(batch_total, t_batch_dur)} em {t_batch_dur:.2f} s")
+        if last_stats_hdr:
+            print(f"     📊 Telemetria X-Upload-Stats (faixa principal): {last_stats_hdr}")
+
+        # 5.5 Listar a pasta do álbum (como o navegador faz após o uploadBatch)
+        list_url = f"{base_url}/api/list?path={urllib.parse.quote(album_dir)}"
+        with urllib.request.urlopen(list_url, timeout=10.0) as resp:
+            album_data = json.loads(resp.read().decode('utf-8', errors='replace'))
+        album_items = album_data.get('entries', []) if isinstance(album_data, dict) else album_data
+        listed_names = [it.get('name') for it in album_items]
+        print(f"  ✅ [Passo 5] Listagem do álbum no navegador: {len(listed_names)} faixas encontradas {listed_names}")
+
+        # 5.6 Ouvir a música no navegador:
+        #   a) Leitura de tags ID3/FLAC (Range: bytes=0-131071)
+        #   b) Streaming de reprodução + Seek no meio da música (Range: bytes=524288-1048575)
+        main_track_path = tracks[1][0]
+        dl_url = f"{base_url}/api/download?path={urllib.parse.quote(main_track_path)}"
+
+        t_play0 = time.perf_counter()
+        req_meta = urllib.request.Request(dl_url, headers={'Range': 'bytes=0-131071'})
+        with urllib.request.urlopen(req_meta, timeout=10.0) as resp:
+            meta_bytes = resp.read()
+            meta_code = resp.getcode()
+        t_meta_ms = (time.perf_counter() - t_play0) * 1000.0
+
+        t_seek0 = time.perf_counter()
+        req_seek = urllib.request.Request(dl_url, headers={'Range': 'bytes=524288-1048575'})
+        with urllib.request.urlopen(req_seek, timeout=10.0) as resp:
+            seek_bytes = resp.read()
+            seek_code = resp.getcode()
+            content_range = resp.headers.get('Content-Range', '')
+        t_seek_dt = time.perf_counter() - t_seek0
+        seek_mbs = (len(seek_bytes) / (1024.0 * 1024.0)) / t_seek_dt if t_seek_dt > 0 else 0
+
+        # Verificar integridade dos bytes lidos no seek (512 KB de offset 512 KB..1 MB)
+        expected_slice = (pattern * ((1048576 // CHUNK_SIZE) + 1))[524288:1048576]
+        slice_ok = (seek_bytes == expected_slice)
+
+        print(f"  ✅ [Passo 6] Player Web (<audio> Streaming & Seek):")
+        print(f"     • Extração de Metadados (Range 0-128KB): HTTP {meta_code} ({len(meta_bytes)} B) em {t_meta_ms:.1f} ms")
+        print(f"     • Seek de Áudio ({content_range}): HTTP {seek_code} ({len(seek_bytes)//1024} KB) a {seek_mbs:.2f} MB/s | Dados íntegros: {'SIM' if slice_ok else 'NÃO'}")
+
+        # 5.7 Limpeza da pasta de álbum de teste
+        del_url = f"{base_url}/api/delete?path={urllib.parse.quote(album_dir)}"
+        req_del = urllib.request.Request(del_url, method='DELETE')
+        with urllib.request.urlopen(req_del, timeout=10.0) as resp:
+            _ = resp.read()
+        print(f"  ✅ [Passo 7] Limpeza concluída ({album_dir} removido).")
+
+        return web_upload_mbs
+    except Exception as e:
+        print(f"\n  ❌ Falha no fluxo de navegador Web: {e}")
+        return None
+
 def main():
     parser = argparse.ArgumentParser(description="MPS3 Wi-Fi Speed & Pipeline Benchmark Tool")
     parser.add_argument("target", nargs="?", default="192.168.15.61",
@@ -503,13 +714,18 @@ def main():
                 if not ui_init.get("wifi"):
                     print("  ⚠️ Dispositivo não está no modo Wi-Fi! Enviando comando 'w' para ativar...")
                     mon.send_cmd("w")
-                    time.sleep(3.0)
+                    time.sleep(5.0)
                     ui_init = mon.query_ui()
-                    print(f"  Novo estado: Wi-Fi={ui_init.get('wifi')}")
+                    print(f"  Novo estado: Wi-Fi={ui_init.get('wifi') if ui_init else 'aguardando STA...'}")
             else:
                 print("  (Sem resposta do comando @UI - continuando via HTTP)")
 
-    status_before = check_device_status(base_url)
+    status_before = None
+    for attempt in range(5):
+        status_before = check_device_status(base_url)
+        if status_before:
+            break
+        time.sleep(2.0)
     if not status_before:
         print("❌ Dispositivo não está respondendo na URL especificada.")
         print("   Certifique-se de que o dispositivo está no modo Wi-Fi (tela 'WIFI' ativa).")
@@ -540,6 +756,12 @@ def main():
         mon.stop()
         sys.exit(1)
 
+    # 5. Fluxo Real de Navegador Web (Human Workflow)
+    web_speed = test_browser_workflow(base_url, size_mb=args.size)
+    if mon and not mon.check_healthy("Browser Web Workflow"):
+        mon.stop()
+        sys.exit(1)
+
     # Relatório Resumo
     print("\n" + "=" * 65)
     print("📊 RESUMO DO DESEMPENHO E DIAGNÓSTICO DE GARGALOS")
@@ -551,13 +773,15 @@ def main():
     if source_speed:
         print(f"  - Teto do Rádio (Wi-Fi TX): {source_speed:6.2f} MB/s ({source_speed * 8:6.2f} Mbps)")
     if sd_speed:
-        print(f"  - Upload Efetivo para SD:   {sd_speed:6.2f} MB/s ({sd_speed * 8:6.2f} Mbps)")
+        print(f"  - Upload Sintético SD:      {sd_speed:6.2f} MB/s ({sd_speed * 8:6.2f} Mbps)")
+    if web_speed:
+        print(f"  - Upload Real via Site Web: {web_speed:6.2f} MB/s ({web_speed * 8:6.2f} Mbps)")
 
-    if sink_speed and sd_speed:
-        efficiency = (sd_speed / sink_speed) * 100.0
-        print(f"  - Eficiência do Pipeline:   {efficiency:5.1f}% do teto da rede aproveitado")
+    if sink_speed and web_speed:
+        efficiency = (web_speed / sink_speed) * 100.0
+        print(f"  - Eficiência do Site Web:   {efficiency:5.1f}% do teto da rede aproveitado")
         if efficiency > 75.0:
-            print("  - Diagnóstico: 🚀 Pipeline assíncrono altamente eficiente!")
+            print("  - Diagnóstico: 🚀 Site Web operando na velocidade máxima do hardware!")
         else:
             print("  - Diagnóstico: ⚠️ Cartão SD é o limitador físico de velocidade.")
 

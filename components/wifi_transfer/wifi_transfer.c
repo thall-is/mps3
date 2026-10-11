@@ -176,18 +176,38 @@ static wifi_transfer_mode_t s_mode;
 #include "battery.h"
 
 
+static inline void *http_scratch_alloc(size_t sz)
+{
+    void *p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!p) p = malloc(sz);
+    if (p) memset(p, 0, sz);
+    return p;
+}
+
+static bool s_progress_active = false;
+static uint32_t s_status_last_calc_ms = 0;
+
 static esp_err_t api_now_playing_get_handler(httpd_req_t *req)
 {
-    playback_state_t st;
-    audio_player_get_state(&st);
-    
-    char json[512];
-    snprintf(json, sizeof(json), "{\"state\":\"%s\", \"title\":\"%s\", \"artist\":\"%s\"}", 
-        st.playing ? "playing" : "stopped",
-        st.title,
-        st.artist);
+    typedef struct {
+        playback_state_t st;
+        char json[512];
+    } np_scratch_t;
+
+    np_scratch_t *sc = (np_scratch_t *)http_scratch_alloc(sizeof(np_scratch_t));
+    if (!sc) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    audio_player_get_state(&sc->st);
+
+    snprintf(sc->json, sizeof(sc->json), "{\"state\":\"%s\", \"title\":\"%s\", \"artist\":\"%s\"}",
+        sc->st.playing ? "playing" : "stopped",
+        sc->st.title,
+        sc->st.artist);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, -1);
+    httpd_resp_send(req, sc->json, -1);
+    free(sc);
     return ESP_OK;
 }
 
@@ -238,15 +258,13 @@ static esp_err_t root_get_handler(httpd_req_t *req)
 static esp_err_t api_status_get_handler(httpd_req_t *req)
 {
     static uint64_t cached_total = 0, cached_free = 0;
-    static uint32_t last_calc_ms = 0;
     uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
     
-    // esp_vfs_fat_info é pesadíssimo, ele pode ler milhares de setores do FAT 
-    // dependendo da placa. Fazer isso a cada 8s por causa do web page polling
-    // trava o SD card inteiro! Só recalcula 1x por minuto ou no boot.
-    if (cached_total == 0 || (now - last_calc_ms > 60000)) {
+    // esp_vfs_fat_info é pesadíssimo: nunca executa durante upload ativo (s_progress_active)
+    // e só recalcula 1x por minuto ou após conclusão de upload/exclusão (s_status_last_calc_ms == 0).
+    if (!s_progress_active && (cached_total == 0 || s_status_last_calc_ms == 0 || (now - s_status_last_calc_ms > 60000))) {
         esp_vfs_fat_info(SD_MOUNT_POINT, &cached_total, &cached_free);
-        last_calc_ms = now;
+        s_status_last_calc_ms = now ? now : 1;
     }
     uint64_t total_bytes = cached_total;
     uint64_t free_bytes = cached_free;
@@ -254,9 +272,11 @@ static esp_err_t api_status_get_handler(httpd_req_t *req)
     int mv = 0, percent = 0, time_left = -1;
     battery_get_info(&mv, &percent, &time_left);
 
-    char json[150];
-    snprintf(json, sizeof(json), "{\"total\":%llu,\"free\":%llu,\"battery_mv\":%d,\"battery_percent\":%d,\"battery_time_left\":%d}",
-             (unsigned long long)total_bytes, (unsigned long long)free_bytes, mv, percent, time_left);
+    char json[192];
+    snprintf(json, sizeof(json),
+             "{\"total\":%llu,\"free\":%llu,\"battery_mv\":%d,\"battery_percent\":%d,\"battery_time_left\":%d,\"sd_status\":\"%s\"}",
+             (unsigned long long)total_bytes, (unsigned long long)free_bytes, mv, percent, time_left,
+             s_progress_active ? "writing" : "free");
              
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json);
@@ -306,7 +326,6 @@ static TaskHandle_t s_dns_task_handle = NULL;
 
 // --- Progresso -----------------------------------------------------------
 static SemaphoreHandle_t s_progress_mutex = NULL;
-static bool s_progress_active = false;
 static char s_progress_name[64] = "";
 static size_t s_progress_file_done = 0;
 static size_t s_progress_file_total = 0;
@@ -538,6 +557,7 @@ static void progress_end(void)
     if (!s_progress_mutex) return;
     xSemaphoreTake(s_progress_mutex, portMAX_DELAY);
     s_progress_active = false;
+    s_status_last_calc_ms = 0; // invalida cache para que o proximo /api/status mostre o espaco atualizado
     if (s_ui_state == WIFI_UI_TRANSFERRING) {
         s_ui_state = WIFI_UI_DONE;
         s_done_show_until_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS) + 3000;
@@ -624,22 +644,27 @@ static void url_decode(char *dst, const char *src, size_t dst_len)
 
 static bool build_abs_path(const char *rel, char *out, size_t out_len)
 {
-    if (!rel) return false;
+    if (!rel || !out || out_len == 0) return false;
     while (*rel == '/') rel++;
-    if (strstr(rel, "..") != NULL) return false;
-    if (rel[0] == '\0') {
-        snprintf(out, out_len, "%s", SD_MOUNT_POINT);
-    } else {
-        snprintf(out, out_len, "%s/%s", SD_MOUNT_POINT, rel);
+    if (strstr(rel, "..") != NULL || strchr(rel, '\\') != NULL) return false;
+    for (const unsigned char *p = (const unsigned char *)rel; *p != '\0'; p++) {
+        if (*p < 0x20) return false;
     }
-    return true;
+    int n;
+    if (rel[0] == '\0') {
+        n = snprintf(out, out_len, "%s", SD_MOUNT_POINT);
+    } else {
+        n = snprintf(out, out_len, "%s/%s", SD_MOUNT_POINT, rel);
+    }
+    return (n > 0 && (size_t)n < out_len);
 }
 
 static void mkdir_p_for_file(const char *abs_file_path)
 {
-    char tmp[600];
-    strncpy(tmp, abs_file_path, sizeof(tmp) - 1);
-    tmp[sizeof(tmp) - 1] = '\0';
+    char *tmp = (char *)http_scratch_alloc(600);
+    if (!tmp) return;
+    strncpy(tmp, abs_file_path, 599);
+    tmp[599] = '\0';
     size_t root_len = strlen(SD_MOUNT_POINT);
     for (size_t i = root_len + 1; tmp[i] != '\0'; i++) {
         if (tmp[i] == '/') {
@@ -655,6 +680,7 @@ static void mkdir_p_for_file(const char *abs_file_path)
             tmp[i] = '/';
         }
     }
+    free(tmp);
 }
 
 static esp_err_t recursive_delete(const char *abs_path)
@@ -670,7 +696,7 @@ static esp_err_t recursive_delete(const char *abs_path)
     DIR *d = opendir(abs_path);
     if (!d) return ESP_FAIL;
     struct dirent *entry;
-    char *child = malloc(512);
+    char *child = (char *)http_scratch_alloc(512);
     if (!child) {
         closedir(d);
         return ESP_ERR_NO_MEM;
@@ -707,22 +733,36 @@ static void json_escape(const char *in, char *out, size_t out_len)
 
 static esp_err_t api_list_get_handler(httpd_req_t *req)
 {
-    char query[512] = {0};
-    char path_enc[400] = {0};
-    char rel_path[400] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
-        httpd_query_key_value(query, "path", path_enc, sizeof(path_enc));
-        url_decode(rel_path, path_enc, sizeof(rel_path));
+    typedef struct {
+        char query[512];
+        char path_enc[400];
+        char rel_path[400];
+        char abs_path[600];
+        char name_esc[300];
+        char chunk[420];
+        char out_buf[4096];
+    } list_scratch_t;
+
+    list_scratch_t *sc = (list_scratch_t *)http_scratch_alloc(sizeof(list_scratch_t));
+    if (!sc) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
     }
 
-    char abs_path[600];
-    if (!build_abs_path(rel_path, abs_path, sizeof(abs_path))) {
+    if (httpd_req_get_url_query_str(req, sc->query, sizeof(sc->query)) == ESP_OK) {
+        httpd_query_key_value(sc->query, "path", sc->path_enc, sizeof(sc->path_enc));
+        url_decode(sc->rel_path, sc->path_enc, sizeof(sc->rel_path));
+    }
+
+    if (!build_abs_path(sc->rel_path, sc->abs_path, sizeof(sc->abs_path))) {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "caminho invalido");
         return ESP_FAIL;
     }
 
-    DIR *d = opendir(abs_path);
+    DIR *d = opendir(sc->abs_path);
     if (!d) {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "pasta nao encontrada");
         return ESP_FAIL;
     }
@@ -732,43 +772,38 @@ static esp_err_t api_list_get_handler(httpd_req_t *req)
 
     struct dirent *entry;
     bool first = true;
-    char name_esc[300];
-    char chunk[420];
-    char out_buf[2048];
     int out_len = 0;
     int files_yield = 0;
 
     while ((entry = readdir(d)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
         
-        // Em vez de stat(), confiamos no d_type pra saber se eh pasta.
-        // O tamanho fica como 0, pois nao vale a pena parar o cartao SD p/ calcular.
         bool is_dir = (entry->d_type == DT_DIR);
         long size = 0;
         
-        json_escape(entry->d_name, name_esc, sizeof(name_esc));
-        int len = snprintf(chunk, sizeof(chunk), "%s{\"name\":\"%s\",\"dir\":%s,\"size\":%ld}",
-                 first ? "" : ",", name_esc, is_dir ? "true" : "false", size);
+        json_escape(entry->d_name, sc->name_esc, sizeof(sc->name_esc));
+        int len = snprintf(sc->chunk, sizeof(sc->chunk), "%s{\"name\":\"%s\",\"dir\":%s,\"size\":%ld}",
+                 first ? "" : ",", sc->name_esc, is_dir ? "true" : "false", size);
                  
-        if (out_len + len >= sizeof(out_buf) - 1) {
-            httpd_resp_send_chunk(req, out_buf, out_len);
+        if (out_len + len >= (int)sizeof(sc->out_buf) - 1) {
+            httpd_resp_send_chunk(req, sc->out_buf, out_len);
             out_len = 0;
         }
-        memcpy(out_buf + out_len, chunk, len);
+        memcpy(sc->out_buf + out_len, sc->chunk, len);
         out_len += len;
         first = false;
         
-        // Pausa cooperativa pra nao engasgar o audio bloqueando o SD Card
         files_yield++;
-        if (files_yield % 3 == 0) {
+        if (files_yield % 32 == 0) {
             vTaskDelay(pdMS_TO_TICKS(1));
         }
     }
     closedir(d);
     
     if (out_len > 0) {
-        httpd_resp_send_chunk(req, out_buf, out_len);
+        httpd_resp_send_chunk(req, sc->out_buf, out_len);
     }
+    free(sc);
     httpd_resp_sendstr_chunk(req, "]}");
     httpd_resp_sendstr_chunk(req, NULL);
     return ESP_OK;
@@ -793,7 +828,7 @@ static size_t s_recv_buf_persist_sz = 0;
 #define UPLOAD_WRITER_STACK_SIZE     8192 // 8 KB de pilha em PSRAM (suficiente para VFS e FatFS, 0 bytes de DRAM interna)
 
 typedef struct {
-    char abs_path[320];
+    char abs_path[512];
     FILE *fp;
     RingbufHandle_t rb;
     SemaphoreHandle_t done_sem;
@@ -912,38 +947,51 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
 
     audio_player_stop_url();
 
-    char query[256];
-    char path_enc[256] = {0};
-    char rel_path[256] = {0};
+    typedef struct {
+        char query[512];
+        char path_enc[400];
+        char rel_path[400];
+        char abs_path[512];
+        char fail_detail[128];
+    } upload_scratch_t;
+
+    upload_scratch_t *sc = (upload_scratch_t *)http_scratch_alloc(sizeof(upload_scratch_t));
+    if (!sc) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
     int idx = 1, count = 1;
     long long batch_total = 0;
 
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
-        httpd_query_key_value(query, "path", path_enc, sizeof(path_enc)) != ESP_OK) {
+    if (httpd_req_get_url_query_str(req, sc->query, sizeof(sc->query)) != ESP_OK ||
+        httpd_query_key_value(sc->query, "path", sc->path_enc, sizeof(sc->path_enc)) != ESP_OK) {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "faltou o parametro 'path'");
         return ESP_FAIL;
     }
-    url_decode(rel_path, path_enc, sizeof(rel_path));
+    url_decode(sc->rel_path, sc->path_enc, sizeof(sc->rel_path));
 
     char num_buf[20];
-    if (httpd_query_key_value(query, "idx", num_buf, sizeof(num_buf)) == ESP_OK) idx = atoi(num_buf);
-    if (httpd_query_key_value(query, "count", num_buf, sizeof(num_buf)) == ESP_OK) count = atoi(num_buf);
-    if (httpd_query_key_value(query, "batchTotal", num_buf, sizeof(num_buf)) == ESP_OK) batch_total = atoll(num_buf);
+    if (httpd_query_key_value(sc->query, "idx", num_buf, sizeof(num_buf)) == ESP_OK) idx = atoi(num_buf);
+    if (httpd_query_key_value(sc->query, "count", num_buf, sizeof(num_buf)) == ESP_OK) count = atoi(num_buf);
+    if (httpd_query_key_value(sc->query, "batchTotal", num_buf, sizeof(num_buf)) == ESP_OK) batch_total = atoll(num_buf);
     if (idx < 1) idx = 1;
     if (count < 1) count = 1;
 
-    char abs_path[320];
-    if (!build_abs_path(rel_path, abs_path, sizeof(abs_path)) || rel_path[0] == '\0') {
+    if (!build_abs_path(sc->rel_path, sc->abs_path, sizeof(sc->abs_path)) || sc->rel_path[0] == '\0') {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "caminho invalido");
         return ESP_FAIL;
     }
 
-    const char *display_name = rel_path;
-    const char *slash = strrchr(rel_path, '/');
+    const char *display_name = sc->rel_path;
+    const char *slash = strrchr(sc->rel_path, '/');
     if (slash) display_name = slash + 1;
 
     if (!s_upload_lock) s_upload_lock = xSemaphoreCreateMutex();
     if (!s_upload_lock || xSemaphoreTake(s_upload_lock, pdMS_TO_TICKS(UPLOAD_LOCK_TIMEOUT_MS)) != pdTRUE) {
+        free(sc);
         httpd_resp_set_status(req, "503 Service Unavailable");
         httpd_resp_send(req, "Outro upload em andamento", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
@@ -1006,7 +1054,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     }
 
     memset(&s_upload_ctx, 0, sizeof(s_upload_ctx));
-    strncpy(s_upload_ctx.abs_path, abs_path, sizeof(s_upload_ctx.abs_path) - 1);
+    strncpy(s_upload_ctx.abs_path, sc->abs_path, sizeof(s_upload_ctx.abs_path) - 1);
     s_upload_ctx.bounce = bounce;
     s_upload_ctx.bounce_size = bounce_sz;
     s_upload_ctx.rb = s_rb_persist;
@@ -1042,6 +1090,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         if (writer_stack) heap_caps_free(writer_stack);
         if (writer_tcb) heap_caps_free(writer_tcb);
         xSemaphoreGive(s_upload_lock);
+        free(sc);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sem memoria para o pipeline de upload");
         progress_end();
         return ESP_FAIL;
@@ -1054,16 +1103,16 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     uint32_t last_prog_update_ms = 0;
     int64_t t_recv_us = 0, t_recv_max_us = 0, t_ring_us = 0;
     uint32_t n_recv = 0, n_recv_slow = 0, n_ring_calls = 0, n_ring_full = 0;
-    char fail_detail[128] = "conexao interrompida durante o envio";
+    strncpy(sc->fail_detail, "conexao interrompida durante o envio", sizeof(sc->fail_detail) - 1);
 
     // Produtor (Core 1): le para SRAM interna (4-6 KB) e empurra imediatamente para o RingBuffer
     // mantendo a janela ativa 100% quente no Cache L1 de 32 KB da PSRAM para o Core 0!
     while (remaining > 0) {
         if (s_upload_ctx.failed) {
             if (s_upload_ctx.open_errno != 0) {
-                snprintf(fail_detail, sizeof(fail_detail), "nao foi possivel criar o arquivo (%s)", strerror(s_upload_ctx.open_errno));
+                snprintf(sc->fail_detail, sizeof(sc->fail_detail), "nao foi possivel criar o arquivo (%s)", strerror(s_upload_ctx.open_errno));
             } else {
-                snprintf(fail_detail, sizeof(fail_detail), "fwrite SD erro (cartao cheio ou falha de escrita)");
+                snprintf(sc->fail_detail, sizeof(sc->fail_detail), "fwrite SD erro (cartao cheio ou falha de escrita)");
             }
             ok = false;
             break;
@@ -1083,7 +1132,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         if (received == HTTPD_SOCK_ERR_TIMEOUT) {
             if (++consecutive_timeouts > max_consecutive_timeouts) {
                 ESP_LOGE(TAG, "Upload de %s abortado: timeout demais seguidos", display_name);
-                snprintf(fail_detail, sizeof(fail_detail), "timeout no recv (%d timeouts seguidos)", consecutive_timeouts);
+                snprintf(sc->fail_detail, sizeof(sc->fail_detail), "timeout no recv (%d timeouts seguidos)", consecutive_timeouts);
                 ok = false;
                 break;
             }
@@ -1092,7 +1141,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         consecutive_timeouts = 0;
         if (received <= 0) {
             ESP_LOGE(TAG, "httpd_req_recv erro: %d", received);
-            snprintf(fail_detail, sizeof(fail_detail), "httpd_req_recv erro ret=%d", received);
+            snprintf(sc->fail_detail, sizeof(sc->fail_detail), "httpd_req_recv erro ret=%d", received);
             ok = false;
             break;
         }
@@ -1105,7 +1154,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         if (trng > 5000) n_ring_full++;
         if (ring_ok != pdTRUE) {
             ESP_LOGE(TAG, "RingBuffer travou (SD nao drena)");
-            snprintf(fail_detail, sizeof(fail_detail), "SD nao esta drenando o buffer de upload");
+            snprintf(sc->fail_detail, sizeof(sc->fail_detail), "SD nao esta drenando o buffer de upload");
             ok = false;
             break;
         }
@@ -1129,9 +1178,9 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     if (s_upload_ctx.failed) {
         if (ok) {
             if (s_upload_ctx.open_errno != 0) {
-                snprintf(fail_detail, sizeof(fail_detail), "nao foi possivel criar o arquivo (%s)", strerror(s_upload_ctx.open_errno));
+                snprintf(sc->fail_detail, sizeof(sc->fail_detail), "nao foi possivel criar o arquivo (%s)", strerror(s_upload_ctx.open_errno));
             } else {
-                snprintf(fail_detail, sizeof(fail_detail), "fwrite SD erro (cartao cheio ou falha de escrita)");
+                snprintf(sc->fail_detail, sizeof(sc->fail_detail), "fwrite SD erro (cartao cheio ou falha de escrita)");
             }
         }
         ok = false;
@@ -1191,10 +1240,11 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     xSemaphoreGive(s_upload_lock);
 
     if (!ok) {
-        remove(abs_path);
-        ESP_LOGE(TAG, "Envio de %s interrompido: %s", display_name, fail_detail);
+        remove(sc->abs_path);
+        ESP_LOGE(TAG, "Envio de %s interrompido: %s", display_name, sc->fail_detail);
         httpd_resp_set_hdr(req, "Connection", "close");
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, fail_detail);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, sc->fail_detail);
+        free(sc);
         progress_end();
         return ESP_FAIL;
     }
@@ -1203,7 +1253,8 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     if (idx >= count) progress_end();
 
     s_files_received++;
-    ESP_LOGI(TAG, "Recebido: %s (%d/%d) em %u ms (%.2f MB/s)", rel_path, idx, count, (unsigned)total_ms, speed_mbs);
+    ESP_LOGI(TAG, "Recebido: %s (%d/%d) em %u ms (%.2f MB/s)", sc->rel_path, idx, count, (unsigned)total_ms, speed_mbs);
+    free(sc);
     httpd_resp_set_hdr(req, "X-Upload-Stats", s_last_upload_stats_json);
     httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_send(req, NULL, 0);
@@ -1212,36 +1263,52 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
 
 static esp_err_t api_download_get_handler(httpd_req_t *req)
 {
-    char query[512] = {0};
-    char path_enc[400] = {0};
-    char rel_path[400] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
-        httpd_query_key_value(query, "path", path_enc, sizeof(path_enc)) != ESP_OK) {
+    typedef struct {
+        char query[512];
+        char path_enc[400];
+        char rel_path[400];
+        char abs_path[600];
+        char range_hdr[64];
+        char crange_str[128];
+    } dl_scratch_t;
+
+    dl_scratch_t *sc = (dl_scratch_t *)http_scratch_alloc(sizeof(dl_scratch_t));
+    if (!sc) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    if (httpd_req_get_url_query_str(req, sc->query, sizeof(sc->query)) != ESP_OK ||
+        httpd_query_key_value(sc->query, "path", sc->path_enc, sizeof(sc->path_enc)) != ESP_OK) {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "faltou o parametro 'path'");
         return ESP_FAIL;
     }
-    url_decode(rel_path, path_enc, sizeof(rel_path));
+    url_decode(sc->rel_path, sc->path_enc, sizeof(sc->rel_path));
 
-    char abs_path[600];
-    if (!build_abs_path(rel_path, abs_path, sizeof(abs_path)) || rel_path[0] == '\0') {
+    if (!build_abs_path(sc->rel_path, sc->abs_path, sizeof(sc->abs_path)) || sc->rel_path[0] == '\0') {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "caminho invalido");
         return ESP_FAIL;
     }
 
     if (s_progress_active) {
+        free(sc);
         httpd_resp_set_status(req, "503 Service Unavailable");
         httpd_resp_send(req, "Upload em andamento no SD", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
 
     struct stat st;
-    if (stat(abs_path, &st) != 0 || S_ISDIR(st.st_mode)) {
+    if (stat(sc->abs_path, &st) != 0 || S_ISDIR(st.st_mode)) {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Arquivo nao encontrado ou e diretorio");
         return ESP_FAIL;
     }
 
-    FILE *fp = fopen(abs_path, "rb");
+    FILE *fp = fopen(sc->abs_path, "rb");
     if (!fp) {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Falha ao abrir arquivo");
         return ESP_FAIL;
     }
@@ -1250,14 +1317,15 @@ static esp_err_t api_download_get_handler(httpd_req_t *req)
     size_t fsize = ftell(fp);
     fseek(fp, 0, SEEK_SET);
 
-    if (strstr(abs_path, ".flac") || strstr(abs_path, ".FLAC")) httpd_resp_set_type(req, "audio/flac");
-    else if (strstr(abs_path, ".wav") || strstr(abs_path, ".WAV")) httpd_resp_set_type(req, "audio/wav");
-    else if (strstr(abs_path, ".m4a") || strstr(abs_path, ".M4A")) httpd_resp_set_type(req, "audio/mp4");
+    if (strstr(sc->abs_path, ".flac") || strstr(sc->abs_path, ".FLAC")) httpd_resp_set_type(req, "audio/flac");
+    else if (strstr(sc->abs_path, ".wav") || strstr(sc->abs_path, ".WAV")) httpd_resp_set_type(req, "audio/wav");
+    else if (strstr(sc->abs_path, ".m4a") || strstr(sc->abs_path, ".M4A")) httpd_resp_set_type(req, "audio/mp4");
     else httpd_resp_set_type(req, "audio/mpeg");
 
     httpd_resp_set_hdr(req, "Accept-Ranges", "bytes");
 
     if (fsize == 0) {
+        free(sc);
         httpd_resp_send(req, NULL, 0);
         fclose(fp);
         return ESP_OK;
@@ -1267,17 +1335,17 @@ static esp_err_t api_download_get_handler(httpd_req_t *req)
     size_t end = fsize - 1;
     bool is_range = false;
 
-    char range_hdr[64];
-    if (httpd_req_get_hdr_value_str(req, "Range", range_hdr, sizeof(range_hdr)) == ESP_OK) {
-        if (sscanf(range_hdr, "bytes=%zu-%zu", &start, &end) == 2) {
+    if (httpd_req_get_hdr_value_str(req, "Range", sc->range_hdr, sizeof(sc->range_hdr)) == ESP_OK) {
+        if (sscanf(sc->range_hdr, "bytes=%zu-%zu", &start, &end) == 2) {
             is_range = true;
-        } else if (sscanf(range_hdr, "bytes=%zu-", &start) == 1) {
+        } else if (sscanf(sc->range_hdr, "bytes=%zu-", &start) == 1) {
             is_range = true;
             end = fsize - 1;
         }
     }
 
     if (is_range && (start > end || start >= fsize)) {
+        free(sc);
         httpd_resp_set_status(req, "416 Range Not Satisfiable");
         httpd_resp_send(req, "Range invalido", HTTPD_RESP_USE_STRLEN);
         fclose(fp);
@@ -1289,21 +1357,28 @@ static esp_err_t api_download_get_handler(httpd_req_t *req)
 
     if (is_range) {
         httpd_resp_set_status(req, "206 Partial Content");
-        char crange_str[128];
-        snprintf(crange_str, sizeof(crange_str), "bytes %zu-%zu/%zu", start, end, fsize);
-        httpd_resp_set_hdr(req, "Content-Range", crange_str);
+        snprintf(sc->crange_str, sizeof(sc->crange_str), "bytes %zu-%zu/%zu", start, end, fsize);
+        httpd_resp_set_hdr(req, "Content-Range", sc->crange_str);
+    }
+    httpd_resp_set_hdr(req, "Connection", "close");
+
+    // Timeout curto de envio (8s) no socket de download para nunca travar a thread httpd se o navegador pausar a musica
+    int sockfd = httpd_req_to_sockfd(req);
+    if (sockfd >= 0) {
+        struct timeval tv_dl = { .tv_sec = 8, .tv_usec = 0 };
+        setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv_dl, sizeof(tv_dl));
     }
 
     fseek(fp, start, SEEK_SET);
 
-    size_t chunk_sz = s_bounce_persist ? s_bounce_persist_sz : 32768;
-    char *chunk = s_bounce_persist ? (char *)s_bounce_persist : (char *)heap_caps_malloc(chunk_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    bool chunk_dyn = (s_bounce_persist == NULL);
+    size_t chunk_sz = 32768;
+    char *chunk = (char *)heap_caps_malloc(chunk_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!chunk) {
         chunk_sz = 4096;
         chunk = (char *)malloc(chunk_sz);
     }
     if (!chunk) {
+        free(sc);
         fclose(fp);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
         return ESP_FAIL;
@@ -1320,7 +1395,8 @@ static esp_err_t api_download_get_handler(httpd_req_t *req)
         if (read_bytes <= 0) break;
         
         if (httpd_resp_send_chunk(req, chunk, read_bytes) != ESP_OK) {
-            if (chunk_dyn) free(chunk);
+            free(chunk);
+            free(sc);
             fclose(fp);
             return ESP_FAIL;
         }
@@ -1328,41 +1404,56 @@ static esp_err_t api_download_get_handler(httpd_req_t *req)
     }
 
     if (remaining > 0) {
-        if (chunk_dyn) free(chunk);
+        free(chunk);
+        free(sc);
         fclose(fp);
         return ESP_FAIL;
     }
 
-    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_send_chunk(req, NULL, 0); 
-    if (chunk_dyn) free(chunk);
+    free(chunk);
+    free(sc);
     fclose(fp);
     return ESP_OK;
 }
 
 static esp_err_t api_delete_handler(httpd_req_t *req)
 {
-    char query[512] = {0};
-    char path_enc[400] = {0};
-    char rel_path[400] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
-        httpd_query_key_value(query, "path", path_enc, sizeof(path_enc)) != ESP_OK) {
+    typedef struct {
+        char query[512];
+        char path_enc[400];
+        char rel_path[400];
+        char abs_path[600];
+    } del_scratch_t;
+
+    del_scratch_t *sc = (del_scratch_t *)http_scratch_alloc(sizeof(del_scratch_t));
+    if (!sc) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    if (httpd_req_get_url_query_str(req, sc->query, sizeof(sc->query)) != ESP_OK ||
+        httpd_query_key_value(sc->query, "path", sc->path_enc, sizeof(sc->path_enc)) != ESP_OK) {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "faltou o parametro 'path'");
         return ESP_FAIL;
     }
-    url_decode(rel_path, path_enc, sizeof(rel_path));
+    url_decode(sc->rel_path, sc->path_enc, sizeof(sc->rel_path));
 
-    char abs_path[600];
-    if (!build_abs_path(rel_path, abs_path, sizeof(abs_path)) || rel_path[0] == '\0') {
+    if (!build_abs_path(sc->rel_path, sc->abs_path, sizeof(sc->abs_path)) || sc->rel_path[0] == '\0') {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "caminho invalido");
         return ESP_FAIL;
     }
 
-    if (recursive_delete(abs_path) != ESP_OK) {
+    if (recursive_delete(sc->abs_path) != ESP_OK) {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "falha ao apagar");
         return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "Apagado: %s", rel_path);
+    s_status_last_calc_ms = 0;
+    ESP_LOGI(TAG, "Apagado: %s", sc->rel_path);
+    free(sc);
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
@@ -1583,16 +1674,24 @@ static esp_err_t api_wifi_networks_get_handler(httpd_req_t *req)
 {
     known_networks_load();
 
-    char json[64 + WIFI_KNOWN_MAX * (WIFI_SSID_MAX_LEN + 16)];
-    int off = snprintf(json, sizeof(json), "{\"networks\":[");
-    for (int i = 0; i < s_known_count && off < (int)sizeof(json) - 1; i++) {
-        off += snprintf(json + off, sizeof(json) - off, "%s{\"ssid\":\"%s\"}",
-                         i > 0 ? "," : "", s_known[i].ssid);
+    size_t jsz = 64 + WIFI_KNOWN_MAX * (WIFI_SSID_MAX_LEN * 2 + 16);
+    char *json = (char *)http_scratch_alloc(jsz);
+    if (!json) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
     }
-    snprintf(json + off, sizeof(json) - off, "]}");
+    char ssid_esc[WIFI_SSID_MAX_LEN * 2];
+    int off = snprintf(json, jsz, "{\"networks\":[");
+    for (int i = 0; i < s_known_count && off < (int)jsz - 1; i++) {
+        json_escape(s_known[i].ssid, ssid_esc, sizeof(ssid_esc));
+        off += snprintf(json + off, jsz - off, "%s{\"ssid\":\"%s\"}",
+                         i > 0 ? "," : "", ssid_esc);
+    }
+    snprintf(json + off, jsz - off, "]}");
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json);
+    free(json);
     return ESP_OK;
 }
 
@@ -1659,19 +1758,24 @@ static esp_err_t api_wifi_networks_delete_handler(httpd_req_t *req)
 // POST /api/control/play -> {"path":"..."}
 static esp_err_t api_control_play_handler(httpd_req_t *req)
 {
-    char buf[512];
-    int received = httpd_req_recv(req, buf, sizeof(buf) - 1);
-    if (received <= 0) return ESP_FAIL;
-    buf[received] = '\0';
+    typedef struct {
+        char buf[512];
+        char rel_path[256];
+        char abs_path[400];
+    } play_scratch_t;
 
-    char rel_path[256] = {0};
-    json_extract_field(buf, "path", rel_path, sizeof(rel_path));
+    play_scratch_t *sc = (play_scratch_t *)http_scratch_alloc(sizeof(play_scratch_t));
+    if (!sc) return ESP_FAIL;
+
+    int received = httpd_req_recv(req, sc->buf, sizeof(sc->buf) - 1);
+    if (received <= 0) { free(sc); return ESP_FAIL; }
+    sc->buf[received] = '\0';
+
+    json_extract_field(sc->buf, "path", sc->rel_path, sizeof(sc->rel_path));
+    build_abs_path(sc->rel_path, sc->abs_path, sizeof(sc->abs_path));
     
-    char abs_path[400];
-    build_abs_path(rel_path, abs_path, sizeof(abs_path));
-    
-    ESP_LOGI(TAG, "DJ Play: %s", abs_path);
-    // audio_player_play_local_file(abs_path);
+    ESP_LOGI(TAG, "DJ Play: %s", sc->abs_path);
+    free(sc);
     
     httpd_resp_send(req, "{\"status\":\"ok\"}", -1);
     return ESP_OK;
@@ -1679,23 +1783,32 @@ static esp_err_t api_control_play_handler(httpd_req_t *req)
 
 static esp_err_t api_webradio_play_handler(httpd_req_t *req)
 {
-    char buf[512];
-    int received = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    typedef struct {
+        char buf[512];
+        char url[256];
+    } radio_scratch_t;
+
+    radio_scratch_t *sc = (radio_scratch_t *)http_scratch_alloc(sizeof(radio_scratch_t));
+    if (!sc) return ESP_FAIL;
+
+    int received = httpd_req_recv(req, sc->buf, sizeof(sc->buf) - 1);
     if (received <= 0) {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "corpo vazio");
         return ESP_FAIL;
     }
-    buf[received] = '\0';
+    sc->buf[received] = '\0';
 
-    char url[256] = {0};
-    json_extract_field(buf, "url", url, sizeof(url));
-    if (url[0] == '\0') {
+    json_extract_field(sc->buf, "url", sc->url, sizeof(sc->url));
+    if (sc->url[0] == '\0') {
+        free(sc);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "url vazia");
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Web Radio play solicitada: %s", url);
-    audio_player_play_url(url);
+    ESP_LOGI(TAG, "Web Radio play solicitada: %s", sc->url);
+    audio_player_play_url(sc->url);
+    free(sc);
     
     httpd_resp_send(req, "{\"status\":\"ok\"}", -1);
     return ESP_OK;
@@ -1715,25 +1828,32 @@ static esp_err_t api_webradio_stop_handler(httpd_req_t *req)
 static esp_err_t api_eq_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
     
-    player_eq_config_t cfg;
-    audio_player_get_eq_config(&cfg);
+    typedef struct {
+        player_eq_config_t cfg;
+        char buf[4096];
+    } eq_get_scratch_t;
+
+    eq_get_scratch_t *sc = (eq_get_scratch_t *)http_scratch_alloc(sizeof(eq_get_scratch_t));
+    if (!sc) return ESP_FAIL;
+
+    audio_player_get_eq_config(&sc->cfg);
     
-    char *buf = (char*)malloc(4096);
-    if (!buf) return ESP_FAIL;
-    
-    int offset = snprintf(buf, 4096, "{\"enabled\":%s,\"active_preset_idx\":%d,\"presets\":[", cfg.enabled ? "true" : "false", cfg.active_preset_idx);
+    int offset = snprintf(sc->buf, sizeof(sc->buf), "{\"enabled\":%s,\"active_preset_idx\":%d,\"presets\":[",
+                          sc->cfg.enabled ? "true" : "false", sc->cfg.active_preset_idx);
     
     for (int p = 0; p < PLAYER_EQ_MAX_PRESETS; p++) {
-        offset += snprintf(buf + offset, 4096 - offset, "{\"name\":\"%s\",\"overall_gain\":%.1f,\"band_gains\":[", cfg.presets[p].name, cfg.presets[p].overall_gain);
+        offset += snprintf(sc->buf + offset, sizeof(sc->buf) - offset, "{\"name\":\"%s\",\"overall_gain\":%.1f,\"band_gains\":[",
+                           sc->cfg.presets[p].name, sc->cfg.presets[p].overall_gain);
         for (int b = 0; b < PLAYER_EQ_BANDS; b++) {
-            offset += snprintf(buf + offset, 4096 - offset, "%.1f%s", cfg.presets[p].band_gains[b], (b == PLAYER_EQ_BANDS - 1) ? "" : ",");
+            offset += snprintf(sc->buf + offset, sizeof(sc->buf) - offset, "%.1f%s",
+                               sc->cfg.presets[p].band_gains[b], (b == PLAYER_EQ_BANDS - 1) ? "" : ",");
         }
-        offset += snprintf(buf + offset, 4096 - offset, "]}%s", (p == PLAYER_EQ_MAX_PRESETS - 1) ? "" : ",");
+        offset += snprintf(sc->buf + offset, sizeof(sc->buf) - offset, "]}%s", (p == PLAYER_EQ_MAX_PRESETS - 1) ? "" : ",");
     }
-    snprintf(buf + offset, 4096 - offset, "]}");
+    snprintf(sc->buf + offset, sizeof(sc->buf) - offset, "]}");
     
-    httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
-    free(buf);
+    httpd_resp_send(req, sc->buf, HTTPD_RESP_USE_STRLEN);
+    free(sc);
     return ESP_OK;
 }
 
@@ -1757,30 +1877,35 @@ static void get_json_string(const char *json, const char *key, char *out, size_t
 }
 
 static esp_err_t api_eq_post_handler(httpd_req_t *req) {
-    char *buf = (char*)malloc(4096);
-    if(!buf) return ESP_FAIL;
-    int ret = httpd_req_recv(req, buf, req->content_len < 4095 ? req->content_len : 4095);
-    if (ret <= 0) { free(buf); return ESP_FAIL; }
-    buf[ret] = '\0';
+    typedef struct {
+        player_eq_config_t cfg;
+        char buf[4096];
+    } eq_post_scratch_t;
+
+    eq_post_scratch_t *sc = (eq_post_scratch_t *)http_scratch_alloc(sizeof(eq_post_scratch_t));
+    if (!sc) return ESP_FAIL;
+
+    int ret = httpd_req_recv(req, sc->buf, req->content_len < 4095 ? req->content_len : 4095);
+    if (ret <= 0) { free(sc); return ESP_FAIL; }
+    sc->buf[ret] = '\0';
     
-    player_eq_config_t cfg;
-    audio_player_get_eq_config(&cfg);
+    audio_player_get_eq_config(&sc->cfg);
     
-    const char *p = strstr(buf, "\"enabled\"");
+    const char *p = strstr(sc->buf, "\"enabled\"");
     if(p) {
         p += 9;
         while (*p && (*p == ' ' || *p == '\t' || *p == ':')) p++;
-        cfg.enabled = (*p == 't' || *p == 'T' || *p == '1');
+        sc->cfg.enabled = (*p == 't' || *p == 'T' || *p == '1');
     }
     
-    p = strstr(buf, "\"active_preset_idx\"");
+    p = strstr(sc->buf, "\"active_preset_idx\"");
     if(p) {
         p += 19;
         while (*p && (*p == ' ' || *p == '\t' || *p == ':')) p++;
-        cfg.active_preset_idx = atoi(p);
+        sc->cfg.active_preset_idx = atoi(p);
     }
     
-    p = strstr(buf, "\"presets\"");
+    p = strstr(sc->buf, "\"presets\"");
     if(p) {
         for(int i=0; i<10; i++) {
             p = strstr(p, "\"name\"");
@@ -1793,15 +1918,15 @@ static esp_err_t api_eq_post_handler(httpd_req_t *req) {
                 if(end_name) {
                     size_t l = end_name - p;
                     if(l >= 16) l = 15;
-                    strncpy(cfg.presets[i].name, p, l);
-                    cfg.presets[i].name[l] = '\0';
+                    strncpy(sc->cfg.presets[i].name, p, l);
+                    sc->cfg.presets[i].name[l] = '\0';
                 }
             }
             p = strstr(p, "\"overall_gain\"");
             if(p) {
                 p += 14;
                 while (*p && (*p == ' ' || *p == '\t' || *p == ':')) p++;
-                cfg.presets[i].overall_gain = atof(p);
+                sc->cfg.presets[i].overall_gain = atof(p);
             }
             
             p = strstr(p, "\"band_gains\"");
@@ -1812,7 +1937,7 @@ static esp_err_t api_eq_post_handler(httpd_req_t *req) {
                     p++;
                     for(int b=0; b<10; b++) {
                         while (*p && (*p == ' ' || *p == '\t')) p++;
-                        cfg.presets[i].band_gains[b] = atof(p);
+                        sc->cfg.presets[i].band_gains[b] = atof(p);
                         p = strchr(p, ',');
                         if(!p) break;
                         p++;
@@ -1822,46 +1947,57 @@ static esp_err_t api_eq_post_handler(httpd_req_t *req) {
         }
     }
     
-    free(buf);
-    audio_player_set_eq_config(&cfg);
+    audio_player_set_eq_config(&sc->cfg);
+    free(sc);
     httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
 static esp_err_t api_rename_post_handler(httpd_req_t *req) {
-    char buf[1024];
-    int ret = httpd_req_recv(req, buf, req->content_len < sizeof(buf) - 1 ? req->content_len : sizeof(buf) - 1);
-    if (ret <= 0) return ESP_FAIL;
-    buf[ret] = '\0';
+    typedef struct {
+        char buf[1024];
+        char old_path[400];
+        char new_path[400];
+        char old_abs[600];
+        char new_abs[600];
+    } rename_scratch_t;
+
+    rename_scratch_t *sc = (rename_scratch_t *)http_scratch_alloc(sizeof(rename_scratch_t));
+    if (!sc) return ESP_FAIL;
+
+    int ret = httpd_req_recv(req, sc->buf, req->content_len < sizeof(sc->buf) - 1 ? req->content_len : sizeof(sc->buf) - 1);
+    if (ret <= 0) { free(sc); return ESP_FAIL; }
+    sc->buf[ret] = '\0';
     
-    char old_path[400] = {0}, new_path[400] = {0};
-    get_json_string(buf, "old_path", old_path, sizeof(old_path));
-    get_json_string(buf, "new_path", new_path, sizeof(new_path));
+    get_json_string(sc->buf, "old_path", sc->old_path, sizeof(sc->old_path));
+    get_json_string(sc->buf, "new_path", sc->new_path, sizeof(sc->new_path));
     
-    char old_abs[600], new_abs[600];
-    if (!build_abs_path(old_path, old_abs, sizeof(old_abs)) ||
-        !build_abs_path(new_path, new_abs, sizeof(new_abs))) {
+    if (!build_abs_path(sc->old_path, sc->old_abs, sizeof(sc->old_abs)) ||
+        !build_abs_path(sc->new_path, sc->new_abs, sizeof(sc->new_abs))) {
+        free(sc);
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_send(req, "{\"error\":\"caminho invalido\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
 
-    // Proteção: não permitir mover/renomear item para dentro dele mesmo ou subpasta dele
-    size_t old_len = strlen(old_abs);
-    if (strncmp(old_abs, new_abs, old_len) == 0 &&
-        (new_abs[old_len] == '/' || new_abs[old_len] == '\0')) {
+    size_t old_len = strlen(sc->old_abs);
+    if (strncmp(sc->old_abs, sc->new_abs, old_len) == 0 &&
+        (sc->new_abs[old_len] == '/' || sc->new_abs[old_len] == '\0')) {
+        free(sc);
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_send(req, "{\"error\":\"destino nao pode ser o proprio item ou uma subpasta dele\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
 
-    mkdir_p_for_file(new_abs);
-    if (rename(old_abs, new_abs) != 0) {
+    mkdir_p_for_file(sc->new_abs);
+    if (rename(sc->old_abs, sc->new_abs) != 0) {
+        free(sc);
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_send(req, "{\"error\":\"falha ao renomear\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
 
+    free(sc);
     httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
@@ -1871,96 +2007,110 @@ static esp_err_t api_move_post_handler(httpd_req_t *req) {
 }
 
 static esp_err_t api_copy_post_handler(httpd_req_t *req) {
-    char buf[1024];
-    int ret = httpd_req_recv(req, buf, req->content_len < sizeof(buf) - 1 ? req->content_len : sizeof(buf) - 1);
-    if (ret <= 0) return ESP_FAIL;
-    buf[ret] = '\0';
+    typedef struct {
+        char buf[1024];
+        char src_path[400];
+        char dest_path[400];
+        char src_abs[600];
+        char dest_abs[600];
+        char cpy_buf[8192];
+    } copy_scratch_t;
+
+    copy_scratch_t *sc = (copy_scratch_t *)http_scratch_alloc(sizeof(copy_scratch_t));
+    if (!sc) return ESP_FAIL;
+
+    int ret = httpd_req_recv(req, sc->buf, req->content_len < sizeof(sc->buf) - 1 ? req->content_len : sizeof(sc->buf) - 1);
+    if (ret <= 0) { free(sc); return ESP_FAIL; }
+    sc->buf[ret] = '\0';
     
-    char src_path[400] = {0}, dest_path[400] = {0};
-    get_json_string(buf, "src_path", src_path, sizeof(src_path));
-    get_json_string(buf, "dest_path", dest_path, sizeof(dest_path));
+    get_json_string(sc->buf, "src_path", sc->src_path, sizeof(sc->src_path));
+    get_json_string(sc->buf, "dest_path", sc->dest_path, sizeof(sc->dest_path));
     
-    char src_abs[600], dest_abs[600];
-    if (!build_abs_path(src_path, src_abs, sizeof(src_abs)) ||
-        !build_abs_path(dest_path, dest_abs, sizeof(dest_abs))) {
+    if (!build_abs_path(sc->src_path, sc->src_abs, sizeof(sc->src_abs)) ||
+        !build_abs_path(sc->dest_path, sc->dest_abs, sizeof(sc->dest_abs))) {
+        free(sc);
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_send(req, "{\"error\":\"caminho invalido\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
 
-    mkdir_p_for_file(dest_abs);
-    FILE *fs = fopen(src_abs, "rb");
+    mkdir_p_for_file(sc->dest_abs);
+    FILE *fs = fopen(sc->src_abs, "rb");
     if (!fs) {
+        free(sc);
         httpd_resp_set_status(req, "404 Not Found");
         httpd_resp_send(req, "{\"error\":\"origem nao encontrada\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
 
-    FILE *fd = fopen(dest_abs, "wb");
+    FILE *fd = fopen(sc->dest_abs, "wb");
     if (!fd) {
         fclose(fs);
+        free(sc);
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_send(req, "{\"error\":\"falha ao criar destino\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
 
-    char *cpy_buf = (char*)malloc(4096);
-    if (!cpy_buf) {
-        fclose(fd);
-        fclose(fs);
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_send(req, "{\"error\":\"sem memoria\"}", HTTPD_RESP_USE_STRLEN);
-        return ESP_FAIL;
-    }
-
     size_t r;
-    while ((r = fread(cpy_buf, 1, 4096, fs)) > 0) {
-        if (fwrite(cpy_buf, 1, r, fd) != r) break;
+    while ((r = fread(sc->cpy_buf, 1, sizeof(sc->cpy_buf), fs)) > 0) {
+        if (fwrite(sc->cpy_buf, 1, r, fd) != r) break;
     }
-    free(cpy_buf);
     fclose(fd);
     fclose(fs);
+    free(sc);
+    s_status_last_calc_ms = 0;
 
     httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
 static esp_err_t api_mkdir_post_handler(httpd_req_t *req) {
-    char buf[1024];
-    int ret = httpd_req_recv(req, buf, req->content_len < sizeof(buf) - 1 ? req->content_len : sizeof(buf) - 1);
-    if (ret <= 0) return ESP_FAIL;
-    buf[ret] = '\0';
+    typedef struct {
+        char buf[1024];
+        char dir_path[400];
+        char abs_path[600];
+        char abs_file[620];
+        char err_msg[128];
+    } mkdir_scratch_t;
+
+    mkdir_scratch_t *sc = (mkdir_scratch_t *)http_scratch_alloc(sizeof(mkdir_scratch_t));
+    if (!sc) return ESP_FAIL;
+
+    int ret = httpd_req_recv(req, sc->buf, req->content_len < sizeof(sc->buf) - 1 ? req->content_len : sizeof(sc->buf) - 1);
+    if (ret <= 0) { free(sc); return ESP_FAIL; }
+    sc->buf[ret] = '\0';
     
-    char dir_path[400] = {0};
-    get_json_string(buf, "path", dir_path, sizeof(dir_path));
-    if (dir_path[0] == '\0') {
+    get_json_string(sc->buf, "path", sc->dir_path, sizeof(sc->dir_path));
+    if (sc->dir_path[0] == '\0') {
+        free(sc);
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_send(req, "{\"error\":\"path vazio\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
     
-    char abs_path[600];
-    if (!build_abs_path(dir_path, abs_path, sizeof(abs_path))) {
+    if (!build_abs_path(sc->dir_path, sc->abs_path, sizeof(sc->abs_path))) {
+        free(sc);
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_send(req, "{\"error\":\"caminho invalido\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
 
-    char abs_file[620];
-    snprintf(abs_file, sizeof(abs_file), "%s/", abs_path);
-    mkdir_p_for_file(abs_file);
+    snprintf(sc->abs_file, sizeof(sc->abs_file), "%s/", sc->abs_path);
+    mkdir_p_for_file(sc->abs_file);
 
     struct stat st;
-    if (stat(abs_path, &st) != 0) {
-        if (mkdir(abs_path, 0777) != 0 && errno != EEXIST) {
-            char err_msg[128];
-            snprintf(err_msg, sizeof(err_msg), "{\"error\":\"falha ao criar pasta (%s)\"}", strerror(errno));
+    if (stat(sc->abs_path, &st) != 0) {
+        if (mkdir(sc->abs_path, 0777) != 0 && errno != EEXIST) {
+            snprintf(sc->err_msg, sizeof(sc->err_msg), "{\"error\":\"falha ao criar pasta (%s)\"}", strerror(errno));
             httpd_resp_set_status(req, "500 Internal Server Error");
-            httpd_resp_send(req, err_msg, HTTPD_RESP_USE_STRLEN);
+            httpd_resp_send(req, sc->err_msg, HTTPD_RESP_USE_STRLEN);
+            free(sc);
             return ESP_FAIL;
         }
     }
 
+    free(sc);
     httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
@@ -1991,8 +2141,12 @@ static esp_err_t api_ota_get_handler(httpd_req_t *req)
     snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    char json[384];
-    snprintf(json, sizeof(json),
+    char *json = (char *)http_scratch_alloc(384);
+    if (!json) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    snprintf(json, 384,
              "{\"running_version\":\"%s\",\"running_partition\":\"%s\","
              "\"next_partition\":\"%s\",\"battery_percent\":%d,"
              "\"battery_charging\":%s,\"ota_in_progress\":%s,\"mac\":\"%s\"}",
@@ -2006,6 +2160,7 @@ static esp_err_t api_ota_get_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    free(json);
     return ESP_OK;
 }
 
@@ -2308,15 +2463,30 @@ static esp_err_t api_ota_post_handler(httpd_req_t *req)
 
 static esp_err_t api_podcasts_local_get_handler(httpd_req_t *req)
 {
+    typedef struct {
+        char base_dir[128];
+        char chunk[384];
+        char prog_path[512];
+        char file_path[768];
+        char prog_esc[96];
+        char name_esc[160];
+    } pod_scratch_t;
+
+    pod_scratch_t *sc = (pod_scratch_t *)http_scratch_alloc(sizeof(pod_scratch_t));
+    if (!sc) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_sendstr_chunk(req, "{\"podcasts\":[");
 
-    char base_dir[128];
-    snprintf(base_dir, sizeof(base_dir), "%s/Podcasts", SD_MOUNT_POINT);
+    snprintf(sc->base_dir, sizeof(sc->base_dir), "%s/Podcasts", SD_MOUNT_POINT);
 
-    DIR *d_base = opendir(base_dir);
+    DIR *d_base = opendir(sc->base_dir);
     if (!d_base) {
+        free(sc);
         httpd_resp_sendstr_chunk(req, "]}");
         httpd_resp_sendstr_chunk(req, NULL);
         return ESP_OK;
@@ -2324,15 +2494,13 @@ static esp_err_t api_podcasts_local_get_handler(httpd_req_t *req)
 
     struct dirent *prog_entry;
     bool first = true;
-    char chunk[384];
 
     while ((prog_entry = readdir(d_base)) != NULL) {
         if (prog_entry->d_name[0] == '.') continue;
         if (prog_entry->d_type != DT_DIR) continue;
 
-        char prog_path[512];
-        snprintf(prog_path, sizeof(prog_path), "%s/%s", base_dir, prog_entry->d_name);
-        DIR *d_prog = opendir(prog_path);
+        snprintf(sc->prog_path, sizeof(sc->prog_path), "%s/%s", sc->base_dir, prog_entry->d_name);
+        DIR *d_prog = opendir(sc->prog_path);
         if (!d_prog) continue;
 
         struct dirent *ep_entry;
@@ -2341,27 +2509,25 @@ static esp_err_t api_podcasts_local_get_handler(httpd_req_t *req)
             if (ep_entry->d_type == DT_DIR) continue;
             if (strstr(ep_entry->d_name, ".part") != NULL) continue;
 
-            char file_path[768];
-            snprintf(file_path, sizeof(file_path), "%s/%s", prog_path, ep_entry->d_name);
+            snprintf(sc->file_path, sizeof(sc->file_path), "%s/%s", sc->prog_path, ep_entry->d_name);
             struct stat st;
             long size = 0;
-            if (stat(file_path, &st) == 0) {
+            if (stat(sc->file_path, &st) == 0) {
                 size = (long)st.st_size;
             }
 
-            char prog_esc[96];
-            char name_esc[160];
-            json_escape(prog_entry->d_name, prog_esc, sizeof(prog_esc));
-            json_escape(ep_entry->d_name, name_esc, sizeof(name_esc));
+            json_escape(prog_entry->d_name, sc->prog_esc, sizeof(sc->prog_esc));
+            json_escape(ep_entry->d_name, sc->name_esc, sizeof(sc->name_esc));
 
-            snprintf(chunk, sizeof(chunk), "%s{\"program\":\"%s\",\"filename\":\"%s\",\"size\":%ld}",
-                     first ? "" : ",", prog_esc, name_esc, size);
+            snprintf(sc->chunk, sizeof(sc->chunk), "%s{\"program\":\"%s\",\"filename\":\"%s\",\"size\":%ld}",
+                     first ? "" : ",", sc->prog_esc, sc->name_esc, size);
             first = false;
-            httpd_resp_sendstr_chunk(req, chunk);
+            httpd_resp_sendstr_chunk(req, sc->chunk);
         }
         closedir(d_prog);
     }
     closedir(d_base);
+    free(sc);
 
     httpd_resp_sendstr_chunk(req, "]}");
     httpd_resp_sendstr_chunk(req, NULL);
@@ -2385,9 +2551,8 @@ static esp_err_t api_bench_sink_handler(httpd_req_t *req)
 {
     size_t total_len = req->content_len;
     size_t received_total = 0;
-    size_t buf_sz = s_bounce_persist ? s_bounce_persist_sz : 32768;
-    char *rx_buf = s_bounce_persist ? (char *)s_bounce_persist : (char *)heap_caps_malloc(buf_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    bool rx_dyn = (s_bounce_persist == NULL);
+    size_t buf_sz = 32768;
+    char *rx_buf = (char *)heap_caps_malloc(buf_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!rx_buf) {
         buf_sz = 4096;
         rx_buf = (char *)malloc(buf_sz);
@@ -2420,7 +2585,7 @@ static esp_err_t api_bench_sink_handler(httpd_req_t *req)
         received_total += ret;
     }
     int64_t t1 = esp_timer_get_time();
-    if (rx_dyn) free(rx_buf);
+    free(rx_buf);
     int64_t elapsed_us = t1 - t0;
     float elapsed_s = (elapsed_us > 0) ? ((float)elapsed_us / 1000000.0f) : 0.001f;
     float mbs = ((float)received_total / (1024.0f * 1024.0f)) / elapsed_s;
@@ -2482,7 +2647,7 @@ static esp_err_t start_httpd(void)
     if (s_httpd) return ESP_OK;
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.stack_size = 6144; // 6 KB na DRAM interna (api_upload usa ~1 KB de stack; economiza 2 KB de bloco contiguo)
+    config.stack_size = 8192; // 8 KB na DRAM interna (todos os handlers HTTP agora alocam buffers em PSRAM, usando <256B de stack)
     config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     config.core_id = 1; // Roda no Core 1 com 240 MHz livres
     config.ctrl_port = 32768;
@@ -2512,9 +2677,14 @@ static esp_err_t start_httpd(void)
 
     static uint16_t s_ctrl_port_cur = 32768;
     config.ctrl_port = s_ctrl_port_cur;
-    ESP_LOGI(TAG, "Iniciando servidor HTTP (modo=%s, ip=%s, ctrl_port=%d)...",
-             s_mode == WIFI_TRANSFER_MODE_STA ? "STA" : "AP", s_status, config.ctrl_port);
+    ESP_LOGI(TAG, "Iniciando servidor HTTP (modo=%s, ip=%s, ctrl_port=%d, stack=%u)...",
+             s_mode == WIFI_TRANSFER_MODE_STA ? "STA" : "AP", s_status, config.ctrl_port, (unsigned)config.stack_size);
     esp_err_t err = httpd_start(&s_httpd, &config);
+    if (err == ESP_ERR_NO_MEM || err == ESP_ERR_HTTPD_ALLOC_MEM || err == ESP_ERR_HTTPD_TASK) {
+        config.stack_size = 6144;
+        ESP_LOGW(TAG, "Tentando httpd_start com stack=6144...");
+        err = httpd_start(&s_httpd, &config);
+    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Falha ao subir o servidor HTTP: %s (codigo %d) | internal free=%u, maior bloco=%u, ctrl_port=%u",
                  esp_err_to_name(err), (int)err,

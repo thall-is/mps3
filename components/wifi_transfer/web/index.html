@@ -1066,6 +1066,10 @@
         // --- SYSTEM STATUS & DIRECTORY RENDER ---
         let isSdTransferring = false;
         async function fetchStatus(){
+            if (isUploading || isPodSyncing || otaXhr) {
+                updateSdTraffic('writing');
+                return;
+            }
             try{
                 let r=await fetch('/api/status'), j=await r.json();
                 el.sdInfoText.textContent = 'SD: '+fmtSize(j.total-j.free)+' / '+fmtSize(j.total);
@@ -1271,56 +1275,50 @@
             
             el.playerBar.classList.add('active');
             let url = '/api/download?path=' + encodeURIComponent(trk.path);
-            let coverUrl = '/api/cover?path=' + encodeURIComponent(trk.path);
-            
-            // Inicia o áudio imediatamente para resposta instantânea ao usuário
-            el.audio.src = url;
-            el.audio.play().catch(()=>{});
-            updatePlayBtn(true);
             
             // Dados preliminares inteligentes a partir do caminho e nome
             let parts = trk.path.split('/').filter(x => x);
             let defaultArtist = parts.length >= 2 ? parts[parts.length - 2] : 'Cartão SD';
             let title = trk.name.replace(/\.[^.]+$/, '');
             let artist = defaultArtist;
+            let coverSrc = defaultCover;
             
             el.title.textContent = el.fsTitle.textContent = title;
             el.artist.textContent = el.fsArtist.textContent = artist;
             el.art.src = el.fsArt.src = defaultCover;
             el.fsBg.style.backgroundImage = 'none';
 
-            // Carregamento de capa nativo pelo navegador via /api/cover com cache HTTP
-            let coverImg = new Image();
-            coverImg.onload = () => {
-                el.art.src = el.fsArt.src = coverUrl;
-                el.fsBg.style.backgroundImage = 'url("' + coverUrl + '")';
-                updateMediaSession(el.title.textContent, el.artist.textContent, coverUrl);
-            };
-            coverImg.onerror = () => {
-                el.art.src = el.fsArt.src = defaultCover;
-                el.fsBg.style.backgroundImage = 'none';
-            };
-            coverImg.src = coverUrl;
-            
-            // Busca metadados de texto (Título / Artista reais de ID3/Vorbis)
-            (async () => {
+            // Busca metadados de texto e capa embutida (128KB Range request rápida) ANTES do stream contínuo
+            // para não disputar o servidor httpd single-thread do ESP32
+            try {
                 let cached = await getCachedMetadata(trk.path);
-                if (cached && (cached.title || cached.artist)) {
-                    if (cached.title) el.title.textContent = el.fsTitle.textContent = cached.title;
-                    if (cached.artist) el.artist.textContent = el.fsArtist.textContent = cached.artist;
-                    updateMediaSession(cached.title || title, cached.artist || artist, coverUrl);
+                if (cached && (cached.title || cached.artist || cached.picture)) {
+                    if (cached.title) title = el.title.textContent = el.fsTitle.textContent = cached.title;
+                    if (cached.artist) artist = el.artist.textContent = el.fsArtist.textContent = cached.artist;
+                    if (cached.picture) {
+                        coverSrc = el.art.src = el.fsArt.src = cached.picture;
+                        el.fsBg.style.backgroundImage = 'url("' + cached.picture + '")';
+                    }
                 } else {
-                    try {
-                        let t = await extractMetadata(url);
-                        if (t.title) el.title.textContent = el.fsTitle.textContent = t.title;
-                        if (t.artist) el.artist.textContent = el.fsArtist.textContent = t.artist;
-                        if (t.title || t.artist) {
-                            setCachedMetadata(trk.path, { title: t.title || title, artist: t.artist || artist });
-                        }
-                        updateMediaSession(t.title || title, t.artist || artist, coverUrl);
-                    } catch(e) {}
+                    let t = await extractMetadata(url);
+                    if (t.title) title = el.title.textContent = el.fsTitle.textContent = t.title;
+                    if (t.artist) artist = el.artist.textContent = el.fsArtist.textContent = t.artist;
+                    if (t.picture) {
+                        coverSrc = el.art.src = el.fsArt.src = t.picture;
+                        el.fsBg.style.backgroundImage = 'url("' + t.picture + '")';
+                    }
+                    if (t.title || t.artist || t.picture) {
+                        setCachedMetadata(trk.path, { title: title, artist: artist, picture: t.picture || null });
+                    }
                 }
-            })();
+            } catch(e) {}
+
+            updateMediaSession(title, artist, coverSrc !== defaultCover ? coverSrc : '');
+
+            if (isUploading) return;
+            el.audio.src = url;
+            el.audio.play().catch(()=>{});
+            updatePlayBtn(true);
         }function togglePlay() {
             if (isUploading) {
                 alert('Upload em andamento! Aguarde o envio terminar.');
@@ -1889,9 +1887,17 @@
             const list = Array.from(files);
             if (!list.length) return;
 
-            // MUTEX: Pausar reprodução imediatamente
-            if (el.audio) el.audio.pause();
+            // MUTEX: Pausar reprodução e encerrar socket HTTP de streaming imediatamente
+            if (el.audio) {
+                el.audio.pause();
+                if (el.audio.getAttribute('src')) {
+                    el.audio.removeAttribute('src');
+                    el.audio.load();
+                    updatePlayBtn(false);
+                }
+            }
             isUploading = true;
+            updateSdTraffic('writing');
 
             queueItems = [];
             for (const f of list) {
@@ -1945,7 +1951,9 @@
                     break;
                 }
                 window.__batchDoneBefore += f.size;
-                await new Promise(r => setTimeout(r, 400)); // Pausa cooperativa para reciclagem limpa do socket TCP
+                if (i + 1 < list.length) {
+                    await new Promise(r => setTimeout(r, 25)); // Pausa minima de 25ms entre arquivos
+                }
             }
 
             isUploading = false;

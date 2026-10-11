@@ -151,3 +151,59 @@ ota_1,    app,  ota_1,    0x420000, 0x400000,
 4. **Identificação e Auto-Descoberta por MAC de Hardware**:
    - O endpoint `GET /api/ota` reporta o MAC físico (`28:84:85:52:35:84`).
    - O utilitário CLI `versionamento/ota_upload.py` varre as interfaces locais (tabela ARP e ping sweep ativo) para localizar e autenticar o dispositivo automaticamente, permitindo atualização transparente sem dependência de IP fixo ou consultas manuais a roteadores.
+
+---
+
+## 7. Pipeline Dual-Core de Transferência Wi-Fi e Servidor Web (`wifi_transfer`)
+
+Para atingir vazão sustentada de **1,30 a 1,46 MB/s** na escrita em cartão microSD (FAT32 sobre SDMMC 4-bit) através do navegador web, o subsistema HTTP (`components/wifi_transfer/wifi_transfer.c`) implementa um pipeline assíncrono acoplado ao Cache L1 de 32 KB da PSRAM:
+
+1. **Produtor TCP (Core 1 — `httpd`, Prioridade 5, Stack 8 KB em DRAM)**:
+   - Drena o socket TCP via `httpd_req_recv()` usando um buffer enxuto persistente (`s_recv_buf_persist`, 4–8 KB) e empurra os blocos imediatamente para um **RingBuffer elástico de 3 MB na PSRAM Octal** (`s_rb_persist`), mantendo a janela de transferência 100% quente no Cache L1 de 32 KB da PSRAM (`memcpy` a **44,4 MB/s**).
+2. **Consumidor SDMMC DMA (Core 0 — `upload_writer_task`, Prioridade 5, Stack 8 KB em PSRAM)**:
+   - Cria diretórios (`mkdir_p_for_file`) e abre o arquivo (`fopen`) em paralelo no Core 0 enquanto o Core 1 já recebe os primeiros pacotes TCP (`open_ms <= 4 ms`).
+   - Consome fatias de **16 KB (32 setores)** para um *bounce buffer* persistente alinhado em SRAM DMA interna (`s_bounce_persist`, `MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA`), executando comandos SDMMC `CMD25` (*Write Multiple Block*) diretos sem realocação por setor.
+3. **Isolamento de Pilha dos Handlers HTTP (`http_scratch_alloc`)**:
+   - Todos os buffers temporários de caminhos UTF-8, serialização JSON e leitura de diretórios (`list_scratch_t`, `upload_scratch_t`, `dl_scratch_t`, `del_scratch_t`) são alocados dinamicamente na PSRAM via `http_scratch_alloc()`, garantindo consumo de pilha `< 128 bytes` na task `httpd` mesmo sob rajadas concorrentes de requisições do navegador.
+
+---
+
+## 8. Organização de Diretórios do Repositório
+
+```text
+mps3/
+├── components/          # Módulos do firmware ESP32-S3 (audio_player, wifi_transfer, oled_display, eq, usb_manager, etc.)
+├── espidf/              # Projeto principal ESP-IDF v6.0+ (CMakeLists.txt, sdkconfig.defaults, partitions.csv, main/)
+├── src/                 # Espelho do ponto de entrada main.c para compatibilidade de build
+├── bt_companion/        # Firmware do co-processador ESP32 Clássico (A2DP Source LDAC/aptX/SBC + AVRCP)
+├── bt_audio_sink/       # Firmware auxiliar receptor Bluetooth A2DP Sink para testes de bancada
+├── docs/                # Documentação técnica (ARCHITECTURE.md, PROTOCOL.md, WIRING.md, Doxyfile)
+├── tools/               # Ferramentas de desenvolvimento, empacotamento web e benchmarks em tempo real
+│   ├── pack_web.py          # Compactador GZIP (index.html -> include/index_html_gz.h)
+│   ├── wifi_speed_bench.py  # Benchmark de rede (Sink/Source), pipeline SD e fluxo humano de navegador web
+│   ├── mps3_nav.py          # Automação HIL de navegação e captura de tela OLED via UART
+│   ├── testbench_monitor.py # Monitor serial de telemetria de bancada
+│   ├── upload_album.py      # Utilitário CLI para envio de álbuns via HTTP PUT
+│   ├── mobile_relay/        # Relay para sincronização via Hotspot Android/Termux
+│   └── podcast_server/      # Servidor e scraper automatizado de podcasts
+├── tests/               # Suítes de testes automatizados (Web API, OTA MAC Discovery, Play/Pause, USB MSC, Navegação)
+└── versionamento/       # Automação de build, versionamento de binários e deploy OTA/Serial (mps3_version.ps1/.sh, ota_upload.py)
+```
+
+---
+
+## 9. Arquitetura de Segurança e Proteções Embarcadas
+
+1. **Gestão de Segredos e Credenciais Wi-Fi**:
+   - Nenhuma senha de rede doméstica é versionada no código-fonte (`sdkconfig` local e `.mps3_last_ip` são estritamente ignorados pelo `.gitignore`; `Kconfig.projbuild` mantém `WIFI_STA_SSID` e `WIFI_STA_PASSWORD` vazios por padrão).
+   - O endpoint `GET /api/wifi/networks` jamais expõe as senhas salvas em NVS, retornando apenas os nomes das redes (`ssid`) devidamente escapados via `json_escape()`.
+   - Os comandos de diagnóstico UART (`nets` e `net-set`) mascaram as senhas (`********`) nos logs seriais para evitar vazamento acidental em capturas de terminal.
+2. **Proteção contra *Path Traversal* e Truncamento de Caminhos (`build_abs_path` & `url_decode`)**:
+   - Todas as rotas de arquivo (`/api/list`, `/api/upload`, `/api/download`, `/api/delete`, `/api/mkdir`, `/api/rename`, `/api/copy`) validam o caminho relativo através de `build_abs_path()`, que rejeita sequências `..`, barras invertidas `\`, caracteres de controle ASCII (`< 0x20`) e qualquer truncamento de buffer (`snprintf >= out_len`).
+   - `url_decode()` higieniza caracteres proibidos pelo sistema de arquivos FAT32 (`?`, `*`, `:`, `<`, `>`, `|`, `"`, `U+FF1F`).
+3. **Mitigação de Negação de Serviço (DoS) e Exaustão de Sockets/Memória**:
+   - O streaming de áudio (`GET /api/download`) aplica `SO_SNDTIMEO = 8s` e `Connection: close`, impedindo que conexões `<audio>` pausadas pelo navegador retenham a thread do servidor HTTP.
+   - O upload (`PUT /api/upload`) é protegido pelo mutex `s_upload_lock` (retornando `HTTP 503` a tentativas concorrentes) e suspende varreduras pesadas da FAT (`esp_vfs_fat_info()`) durante a escrita ativa.
+4. **Integridade de Firmware OTA**:
+   - `POST /api/ota` exige bateria mínima segura (`>= 15%` ou carregador conectado), valida os cabeçalhos binários da imagem ESP-IDF (`0xE9`, `0xABCD5432`, `project_name == "mps3"`) antes de tocar na Flash e conta com *rollback* automático de bootloader (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`).
+
