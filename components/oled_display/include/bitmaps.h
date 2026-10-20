@@ -20,8 +20,6 @@ extern const unsigned char menu_player_bits[];
 extern const unsigned char menu_usb_bits[];
 
 // Menu animações
-#define MENU_WIFI_FRAMES 28
-#define MENU_CONF_FRAMES 28
 
 // Animação Wi‑Fi – 28 frames de 64x64
 #define MENU_WIFI_W 64
@@ -41,9 +39,9 @@ extern const unsigned char *wifi_download_cloud_frames[WIFI_DOWNLOAD_CLOUD_FRAME
 
 
 // Animação Conf (chave inglesa) – 28 frames de 64x64
-#define MENU_CONF_W 64
-#define MENU_CONF_H 64
-#define MENU_CONF_FRAMES 28
+#define MENU_CONF_W 48
+#define MENU_CONF_H 48
+#define MENU_CONF_FRAMES 24
 extern const unsigned char *menu_conf_frames[MENU_CONF_FRAMES];
 
 // Animação Game of Life – arquivo fornecido contém 24 frames de 64x64.

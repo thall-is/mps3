@@ -60,7 +60,10 @@ typedef enum {
     UI_MODE_RTC_CLOCK   = 18, /**< Tela de relógio de alta precisão e telemetria do RTC DS3231. */
     UI_MODE_CONF_AUDIO   = 19, /**< Submenu de configurações de áudio (Volume, Balanço, EQ, Ordenar). */
     UI_MODE_CONF_DISPLAY = 20, /**< Submenu de configurações de display e LED (Tela, LED RGB). */
-    UI_MODE_CONF_SYSTEM  = 21, /**< Submenu de configurações de sistema (Relógio RTC, Deep Sleep, Wi-Fi). */
+    UI_MODE_CONF_SYSTEM  = 21, /**< Submenu de configurações de sistema e energia. */
+    UI_MODE_GAMES_MENU   = 22, /**< Submenu de seleção de jogos (Game of Life, Tetris, etc.). */
+    UI_MODE_CHRONO       = 23, /**< Aplicativo Cronômetro (Stopwatch). */
+    UI_MODE_LOCK_CLOCK_CFG = 24, /**< Configuração de tempo do relógio de bloqueio. */
 } ui_mode_t;
 
 /**
@@ -86,9 +89,24 @@ void touch_input_set_usb_prompt(void);
 void touch_input_cancel_usb(void);
 
 /**
+ * @brief Força a entrada direta no modo USB MSC (Pendrive / Mass Storage).
+ */
+void touch_input_enter_usb_msc(void);
+
+/**
+ * @brief Força a entrada direta no modo USB DAC.
+ */
+void touch_input_enter_usb_dac(void);
+
+/**
  * @brief Reseta o estado da UI diretamente para o carrossel do menu principal na raiz.
  */
 void touch_input_reset_to_main_menu(void);
+
+/**
+ * @brief Navega diretamente para um item específico do menu principal (0..5).
+ */
+void touch_input_set_menu_cursor(int c);
 
 /**
  * @brief Retorna o timestamp em milissegundos da última ação detectada no joystick.
@@ -232,6 +250,7 @@ int touch_input_get_eq_preset_cursor(void);
  * @return Índice da rede selecionada.
  */
 int touch_input_get_wifi_net_cursor(void);
+int touch_input_get_games_cursor(void);
 
 /**
  * @brief Retorna o índice selecionado no menu de configuração de Deep Sleep.
@@ -274,6 +293,18 @@ void keyboard_start(const char *initial_text, keyboard_callback_t cb);
  * @param[out] is_confirming true se o botão OK estiver selecionado.
  */
 void touch_input_get_keyboard_state(char *text, int *cursor, int *grid_x, int *grid_y, int *page, bool *is_confirming);
+
+void touch_input_register_chrono_entry(void);
+
+// Funções do Cronômetro
+bool touch_input_chrono_is_running(void);
+uint32_t touch_input_chrono_get_elapsed_ms(void);
+int touch_input_chrono_get_laps(uint32_t *out_laps, int max_laps);
+
+// Funções do Relógio Lockscreen / Pré-bloqueio
+bool touch_input_is_lock_clock_visible(void);
+int touch_input_get_lock_clock_timeout_idx(void);
+uint32_t touch_input_get_lock_clock_secs(void);
 
 #ifdef __cplusplus
 }

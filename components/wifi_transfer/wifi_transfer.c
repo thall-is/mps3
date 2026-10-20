@@ -15,6 +15,9 @@
 #include "esp_timer.h"
 
 #include "eq.h"
+#include "podcast_sync.h"
+#include "podcast_history.h"
+#include "psa/crypto.h"
 #include "esp_vfs_fat.h"
 #include "esp_log.h"
 #include "nvs.h"
@@ -346,6 +349,8 @@ typedef enum {
 
 static wifi_ui_state_t s_ui_state = WIFI_UI_IDLE;
 static uint32_t s_done_show_until_ms = 0;
+static wifi_ui_state_t s_wifi_last_drawn_state = (wifi_ui_state_t)-1;
+static uint32_t s_wifi_last_draw_ms = 0;
 
 static volatile bool s_ota_in_progress = false;
 static volatile int s_ota_pct = 0;
@@ -397,6 +402,7 @@ static void update_ui_state(void) {
 }
 
 static bool s_mdns_started = false;
+static char s_mdns_mac_str[18] = {0};
 
 static void start_mdns_service(void)
 {
@@ -411,8 +417,25 @@ static void start_mdns_service(void)
     if (!mdns_service_exists("_http", "_tcp", NULL)) {
         mdns_service_add("MPS3 Radio", "_http", "_tcp", 80, NULL, 0);
     }
+
+    uint8_t mac[6] = {0};
+    if (esp_wifi_get_mac(WIFI_IF_STA, mac) != ESP_OK) {
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    }
+    snprintf(s_mdns_mac_str, sizeof(s_mdns_mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    mdns_txt_item_t mps3_txt[] = {
+        { "mac", s_mdns_mac_str },
+        { "sync_ready", "1" },
+        { "version", "2.0" }
+    };
+    if (!mdns_service_exists("_mps3", "_tcp", NULL)) {
+        mdns_service_add("MPS3 Sync", "_mps3", "_tcp", 80, mps3_txt, 3);
+    }
+
     s_mdns_started = true;
-    ESP_LOGI(TAG, "mDNS iniciado: http://mps3.local");
+    ESP_LOGI(TAG, "mDNS iniciado: http://mps3.local (_mps3._tcp mac=%s)", s_mdns_mac_str);
 }
 
 static void stop_mdns_service(void)
@@ -729,6 +752,56 @@ static void json_escape(const char *in, char *out, size_t out_len)
     out[o] = '\0';
 }
 
+// --- Autenticacao opcional por X-MPS3-Key (NVS namespace "mps3_sync", key "api_key") ---
+static char s_sync_api_key[65] = {0};
+static bool s_sync_api_key_loaded = false;
+static volatile bool s_sync_in_progress = false;
+
+static bool check_api_key(httpd_req_t *req)
+{
+    if (!s_sync_api_key_loaded) {
+        s_sync_api_key[0] = '\0';
+        nvs_handle_t h;
+        if (nvs_open("mps3_sync", NVS_READONLY, &h) == ESP_OK) {
+            size_t len = sizeof(s_sync_api_key);
+            if (nvs_get_str(h, "api_key", s_sync_api_key, &len) != ESP_OK) {
+                s_sync_api_key[0] = '\0';
+            }
+            nvs_close(h);
+        }
+        s_sync_api_key_loaded = true;
+    }
+
+    if (s_sync_api_key[0] == '\0') {
+        return true; // Chave vazia/ausente: 100% transparente
+    }
+
+    char provided[68] = {0};
+    if (httpd_req_get_hdr_value_str(req, "X-MPS3-Key", provided, sizeof(provided)) != ESP_OK) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"unauthorized\"}", HTTPD_RESP_USE_STRLEN);
+        return false;
+    }
+
+    size_t expected_len = strlen(s_sync_api_key);
+    size_t provided_len = strlen(provided);
+    uint8_t diff = (expected_len != provided_len) ? 1 : 0;
+    size_t cmp_len = (expected_len < provided_len) ? expected_len : provided_len;
+    for (size_t i = 0; i < cmp_len; i++) {
+        diff |= (uint8_t)(s_sync_api_key[i] ^ provided[i]);
+    }
+
+    if (diff != 0) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"unauthorized\"}", HTTPD_RESP_USE_STRLEN);
+        return false;
+    }
+
+    return true;
+}
+
 // --- Handlers HTTP ---------------------------------------------------------
 
 static esp_err_t api_list_get_handler(httpd_req_t *req)
@@ -812,8 +885,8 @@ static esp_err_t api_list_get_handler(httpd_req_t *req)
 // --- Pipeline de upload: httpd (Core 1, recepcao TCP) -> RingBuffer PSRAM (3 MB) -> writer task (Core 0, SD DMA) ---
 #define UPLOAD_RINGBUF_SIZE          (3 * 1024 * 1024)  // "pulmao" elastico de 3 MB em PSRAM
 #define UPLOAD_RINGBUF_MIN           (64 * 1024)
-#define UPLOAD_RECV_BUF_SIZE         (32 * 1024)        // 32 KB (alinhado a janela TCP do lwIP)
-#define UPLOAD_BOUNCE_SIZE           (16 * 1024)        // 32 setores = 16 KB em SRAM DMA interna (3.58 MB/s medidos, preserva DRAM p/ httpd)
+#define UPLOAD_RECV_BUF_SIZE         (8 * 1024)         // 8 KB (mantem dados 100% no Cache L1 de 32 KB da PSRAM)
+#define UPLOAD_BOUNCE_SIZE           (16 * 1024)        // 32 setores = 16 KB em SRAM DMA interna (3.58 MB/s medidos)
 #define UPLOAD_LOCK_TIMEOUT_MS       5000
 #define UPLOAD_RING_SEND_TIMEOUT_MS  60000
 
@@ -825,7 +898,122 @@ static size_t s_rb_persist_sz = 0;
 static char *s_recv_buf_persist = NULL;     // Buffer de recepcao TCP de 32 KB em PSRAM reutilizado
 static size_t s_recv_buf_persist_sz = 0;
 
-#define UPLOAD_WRITER_STACK_SIZE     8192 // 8 KB de pilha em PSRAM (suficiente para VFS e FatFS, 0 bytes de DRAM interna)
+#define UPLOAD_WRITER_STACK_SIZE     16384 // 16 KB de pilha em PSRAM (ampla folga para VFS e FatFS, 0 bytes de DRAM interna)
+
+typedef struct {
+    uint32_t state[8];
+    uint64_t bitlen;
+    uint8_t data[64];
+    uint32_t datalen;
+} mps3_sha256_ctx_t;
+
+static const uint32_t s_sha256_k[64] = {
+    0x428a2f98UL, 0x71374491UL, 0xb5c0fbcfUL, 0xe9b5dba5UL, 0x3956c25bUL, 0x59f111f1UL, 0x923f82a4UL, 0xab1c5ed5UL,
+    0xd807aa98UL, 0x12835b01UL, 0x243185beUL, 0x550c7dc3UL, 0x72be5d74UL, 0x80deb1feUL, 0x9bdc06a7UL, 0xc19bf174UL,
+    0xe49b69c1UL, 0xefbe4786UL, 0x0fc19dc6UL, 0x240ca1ccUL, 0x2de92c6fUL, 0x4a7484aaUL, 0x5cb0a9dcUL, 0x76f988daUL,
+    0x983e5152UL, 0xa831c66dUL, 0xb00327c8UL, 0xbf597fc7UL, 0xc6e00bf3UL, 0xd5a79147UL, 0x06ca6351UL, 0x14292967UL,
+    0x27b70a85UL, 0x2e1b2138UL, 0x4d2c6dfcUL, 0x53380d13UL, 0x650a7354UL, 0x766a0abbUL, 0x81c2c92eUL, 0x92722c85UL,
+    0xa2bfe8a1UL, 0xa81a664bUL, 0xc24b8b70UL, 0xc76c51a3UL, 0xd192e819UL, 0xd6990624UL, 0xf40e3585UL, 0x106aa070UL,
+    0x19a4c116UL, 0x1e376c08UL, 0x2748774cUL, 0x34b0bcb5UL, 0x391c0cb3UL, 0x4ed8aa4aUL, 0x5b9cca4fUL, 0x682e6ff3UL,
+    0x748f82eeUL, 0x78a5636fUL, 0x84c87814UL, 0x8cc70208UL, 0x90befffaUL, 0xa4506cebUL, 0xbef9a3f7UL, 0xc67178f2UL
+};
+
+#define MPS3_ROTR32(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
+#define MPS3_CH(x, y, z)  (((x) & (y)) ^ (~(x) & (z)))
+#define MPS3_MAJ(x, y, z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
+#define MPS3_EP0(x)       (MPS3_ROTR32(x, 2) ^ MPS3_ROTR32(x, 13) ^ MPS3_ROTR32(x, 22))
+#define MPS3_EP1(x)       (MPS3_ROTR32(x, 6) ^ MPS3_ROTR32(x, 11) ^ MPS3_ROTR32(x, 25))
+#define MPS3_SIG0(x)      (MPS3_ROTR32(x, 7) ^ MPS3_ROTR32(x, 18) ^ ((x) >> 3))
+#define MPS3_SIG1(x)      (MPS3_ROTR32(x, 17) ^ MPS3_ROTR32(x, 19) ^ ((x) >> 10))
+
+static void mps3_sha256_transform(mps3_sha256_ctx_t *ctx, const uint8_t data[64])
+{
+    uint32_t m[64];
+    for (int i = 0, j = 0; i < 16; ++i, j += 4) {
+        m[i] = ((uint32_t)data[j] << 24) | ((uint32_t)data[j + 1] << 16) |
+               ((uint32_t)data[j + 2] << 8) | ((uint32_t)data[j + 3]);
+    }
+    for (int i = 16; i < 64; ++i) {
+        m[i] = MPS3_SIG1(m[i - 2]) + m[i - 7] + MPS3_SIG0(m[i - 15]) + m[i - 16];
+    }
+
+    uint32_t a = ctx->state[0], b = ctx->state[1], c = ctx->state[2], d = ctx->state[3];
+    uint32_t e = ctx->state[4], f = ctx->state[5], g = ctx->state[6], h = ctx->state[7];
+
+    for (int i = 0; i < 64; ++i) {
+        uint32_t t1 = h + MPS3_EP1(e) + MPS3_CH(e, f, g) + s_sha256_k[i] + m[i];
+        uint32_t t2 = MPS3_EP0(a) + MPS3_MAJ(a, b, c);
+        h = g; g = f; f = e; e = d + t1;
+        d = c; c = b; b = a; a = t1 + t2;
+    }
+
+    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
+    ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
+}
+
+static void mps3_sha256_init(mps3_sha256_ctx_t *ctx)
+{
+    ctx->datalen = 0;
+    ctx->bitlen = 0;
+    ctx->state[0] = 0x6a09e667UL; ctx->state[1] = 0xbb67ae85UL;
+    ctx->state[2] = 0x3c6ef372UL; ctx->state[3] = 0xa54ff53aUL;
+    ctx->state[4] = 0x510e527fUL; ctx->state[5] = 0x9b05688cUL;
+    ctx->state[6] = 0x1f83d9abUL; ctx->state[7] = 0x5be0cd19UL;
+}
+
+static void mps3_sha256_update(mps3_sha256_ctx_t *ctx, const uint8_t *data, size_t len)
+{
+    size_t i = 0;
+    if (ctx->datalen > 0) {
+        size_t take = 64 - ctx->datalen;
+        if (take > len) take = len;
+        memcpy(ctx->data + ctx->datalen, data, take);
+        ctx->datalen += (uint32_t)take;
+        i += take;
+        if (ctx->datalen == 64) {
+            mps3_sha256_transform(ctx, ctx->data);
+            ctx->bitlen += 512;
+            ctx->datalen = 0;
+        }
+    }
+    while (i + 64 <= len) {
+        mps3_sha256_transform(ctx, data + i);
+        ctx->bitlen += 512;
+        i += 64;
+    }
+    if (i < len) {
+        size_t rem = len - i;
+        memcpy(ctx->data, data + i, rem);
+        ctx->datalen = (uint32_t)rem;
+    }
+}
+
+static void mps3_sha256_final(mps3_sha256_ctx_t *ctx, uint8_t hash[32])
+{
+    uint32_t i = ctx->datalen;
+    ctx->bitlen += (uint64_t)ctx->datalen * 8ULL;
+
+    ctx->data[i++] = 0x80;
+    if (ctx->datalen < 56) {
+        while (i < 56) ctx->data[i++] = 0x00;
+    } else {
+        while (i < 64) ctx->data[i++] = 0x00;
+        mps3_sha256_transform(ctx, ctx->data);
+        memset(ctx->data, 0, 56);
+    }
+
+    for (int b = 0; b < 8; ++b) {
+        ctx->data[63 - b] = (uint8_t)((ctx->bitlen >> (b * 8)) & 0xFFU);
+    }
+    mps3_sha256_transform(ctx, ctx->data);
+
+    for (int j = 0; j < 8; ++j) {
+        hash[j * 4 + 0] = (uint8_t)((ctx->state[j] >> 24) & 0xFFU);
+        hash[j * 4 + 1] = (uint8_t)((ctx->state[j] >> 16) & 0xFFU);
+        hash[j * 4 + 2] = (uint8_t)((ctx->state[j] >> 8) & 0xFFU);
+        hash[j * 4 + 3] = (uint8_t)(ctx->state[j] & 0xFFU);
+    }
+}
 
 typedef struct {
     char abs_path[512];
@@ -839,6 +1027,8 @@ typedef struct {
     volatile bool failed;         // erro de abertura ou escrita no SD
     volatile int open_errno;      // errno caso fopen falhe
     volatile size_t written;      // bytes realmente gravados no SD
+    mps3_sha256_ctx_t sha_ctx;    // Contexto SHA-256 zero-alloc embutido
+    char sha256_hex[65];          // SHA-256 hex calculado on-the-fly durante a escrita no SD
     // Telemetria detalhada do consumidor (Core 0)
     int64_t open_us;
     int64_t wr_wait_us;
@@ -851,7 +1041,7 @@ typedef struct {
 } upload_ctx_t;
 
 static upload_ctx_t s_upload_ctx;
-static char s_last_upload_stats_json[384] = "{}\0";
+static char s_last_upload_stats_json[512] = "{}\0";
 
 static void upload_writer_task(void *arg)
 {
@@ -859,6 +1049,8 @@ static void upload_writer_task(void *arg)
     uint8_t *bounce = ctx->bounce;
     size_t chunk_sz = ctx->bounce_size;
     size_t bounce_filled = 0;
+
+    mps3_sha256_init(&ctx->sha_ctx);
 
     // Etapa 1 do Consumidor (Core 0): criar diretorios e abrir arquivo em paralelo
     // enquanto o Core 1 ja esta drenando a janela TCP inicial para a PSRAM!
@@ -914,10 +1106,14 @@ static void upload_writer_task(void *arg)
                              bounce_filled, w, errno, strerror(errno));
                     ctx->failed = true;
                 } else {
+                    mps3_sha256_update(&ctx->sha_ctx, bounce, bounce_filled);
                     ctx->written += bounce_filled;
                 }
             }
             bounce_filled = 0;
+            if ((ctx->fwrite_calls % 4) == 0) {
+                vTaskDelay(1); // Cede 1 tick ao IDLE0 a cada 4 blocos (64-128 KB) para alimentar TWDT
+            }
         }
 
         if (was_done && bounce_filled == 0 && !item) {
@@ -932,12 +1128,22 @@ static void upload_writer_task(void *arg)
         ctx->fclose_us = esp_timer_get_time() - t_close0;
     }
 
+    uint8_t digest[32] = {0};
+    mps3_sha256_final(&ctx->sha_ctx, digest);
+    for (int i = 0; i < 32; i++) {
+        snprintf(&ctx->sha256_hex[i * 2], 3, "%02x", digest[i]);
+    }
+    ctx->sha256_hex[64] = '\0';
+
     xSemaphoreGive(ctx->done_sem);  // ultima coisa tocando ctx
     vTaskDelay(portMAX_DELAY);      // aguarda delecao externa pela task criadora
 }
 
 static esp_err_t api_upload_put_handler(httpd_req_t *req)
 {
+    if (!check_api_key(req)) return ESP_FAIL;
+    podcast_sync_notify_activity();
+
     int64_t t_handler_start = esp_timer_get_time();
 
     if (s_ota_in_progress) {
@@ -953,6 +1159,8 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         char rel_path[400];
         char abs_path[512];
         char fail_detail[128];
+        char expected_sha256[68];
+        char err_json[224];
     } upload_scratch_t;
 
     upload_scratch_t *sc = (upload_scratch_t *)http_scratch_alloc(sizeof(upload_scratch_t));
@@ -985,6 +1193,10 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    if (httpd_req_get_hdr_value_str(req, "X-Expected-SHA256", sc->expected_sha256, sizeof(sc->expected_sha256)) != ESP_OK) {
+        sc->expected_sha256[0] = '\0';
+    }
+
     const char *display_name = sc->rel_path;
     const char *slash = strrchr(sc->rel_path, '/');
     if (slash) display_name = slash + 1;
@@ -1013,6 +1225,14 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
             bounce_sz = 16 * 1024;
             bounce = (uint8_t *)heap_caps_aligned_alloc(16, bounce_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
         }
+        if (!bounce) {
+            bounce_sz = 8 * 1024;
+            bounce = (uint8_t *)heap_caps_aligned_alloc(16, bounce_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        }
+        if (!bounce) {
+            bounce_sz = 4 * 1024;
+            bounce = (uint8_t *)heap_caps_aligned_alloc(16, bounce_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        }
     }
 
     // RingBuffer de 3 MB em PSRAM persistente durante a sessao Wi-Fi (0 ms de alocacao entre arquivos)
@@ -1035,26 +1255,18 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         }
     }
 
-    // Buffer de recepcao TCP em SRAM interna de 240 MHz (6 KB ou 4 KB):
-    // Nao ocupa nenhuma linha do cache L1 de 32 KB da PSRAM, deixando 100% do cache L1
-    // dedicado a janela ativa do RingBuffer PSRAM entre Core 1 e Core 0!
+    // Buffer de recepcao TCP em PSRAM (preserva 100% da SRAM interna para o anel RX do Wi-Fi e lwIP)
     if (!s_recv_buf_persist) {
-        size_t largest_int = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        if (largest_int >= 8192) {
+        s_recv_buf_persist_sz = UPLOAD_RECV_BUF_SIZE;
+        s_recv_buf_persist = (char *)heap_caps_malloc(s_recv_buf_persist_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_recv_buf_persist) {
             s_recv_buf_persist_sz = 6144;
             s_recv_buf_persist = (char *)heap_caps_malloc(s_recv_buf_persist_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        } else if (largest_int >= 5120) {
-            s_recv_buf_persist_sz = 4096;
-            s_recv_buf_persist = (char *)heap_caps_malloc(s_recv_buf_persist_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        }
-        if (!s_recv_buf_persist) {
-            s_recv_buf_persist_sz = 8192;
-            s_recv_buf_persist = (char *)heap_caps_malloc(s_recv_buf_persist_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         }
     }
 
     memset(&s_upload_ctx, 0, sizeof(s_upload_ctx));
-    strncpy(s_upload_ctx.abs_path, sc->abs_path, sizeof(s_upload_ctx.abs_path) - 1);
+    strlcpy(s_upload_ctx.abs_path, sc->abs_path, sizeof(s_upload_ctx.abs_path));
     s_upload_ctx.bounce = bounce;
     s_upload_ctx.bounce_size = bounce_sz;
     s_upload_ctx.rb = s_rb_persist;
@@ -1078,7 +1290,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
             5, // Prioridade 5 no Core 0 (paralelismo real com httpd no Core 1)
             writer_stack,
             writer_tcb,
-            0  // Core 0: grava no SD via DMA enquanto o Core 1 drena o socket TCP sem preempcao!
+            0  // Core 0: paralelismo real com httpd no Core 1
         );
         writer_started = (th != NULL);
     }
@@ -1105,8 +1317,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
     uint32_t n_recv = 0, n_recv_slow = 0, n_ring_calls = 0, n_ring_full = 0;
     strncpy(sc->fail_detail, "conexao interrompida durante o envio", sizeof(sc->fail_detail) - 1);
 
-    // Produtor (Core 1): le para SRAM interna (4-6 KB) e empurra imediatamente para o RingBuffer
-    // mantendo a janela ativa 100% quente no Cache L1 de 32 KB da PSRAM para o Core 0!
+    // Produtor (Core 1): le para o buffer de recepcao e empurra imediatamente para o RingBuffer
     while (remaining > 0) {
         if (s_upload_ctx.failed) {
             if (s_upload_ctx.open_errno != 0) {
@@ -1164,6 +1375,7 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         if (now_ms - last_prog_update_ms >= 250) {
             last_prog_update_ms = now_ms;
             progress_update(s_upload_ctx.written);
+            podcast_sync_notify_activity();
         }
     }
 
@@ -1227,13 +1439,14 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
              "\"recv_ms\":%u,\"recv_calls\":%u,\"recv_max_ms\":%u,\"recv_slow\":%u,"
              "\"ring_ms\":%u,\"ring_calls\":%u,\"ring_full\":%u,\"wr_wait_ms\":%u,\"memcpy_ms\":%u,"
              "\"fwrite_ms\":%u,\"wr_calls\":%u,\"wr_avg_ms\":%u,\"wr_max_ms\":%u,\"wr_slow\":%u,"
-             "\"drain_ms\":%u,\"fclose_ms\":%u,\"rb_kb\":%u,\"bounce_kb\":%u,\"recv_kb\":%u}",
+             "\"drain_ms\":%u,\"fclose_ms\":%u,\"rb_kb\":%u,\"bounce_kb\":%u,\"recv_kb\":%u,\"sha256\":\"%s\"}",
              (unsigned)content_len, (unsigned)total_ms, speed_mbs, (unsigned)alloc_ms, (unsigned)open_ms,
              (unsigned)recv_ms, (unsigned)n_recv, (unsigned)recv_max_ms, (unsigned)n_recv_slow,
              (unsigned)ring_ms, (unsigned)n_ring_calls, (unsigned)n_ring_full, (unsigned)wr_wait_ms, (unsigned)memcpy_ms,
              (unsigned)fwrite_ms, (unsigned)wr_calls, (unsigned)wr_avg_ms, (unsigned)wr_max_ms, (unsigned)wr_slow,
              (unsigned)drain_ms, (unsigned)fclose_ms,
-             (unsigned)(s_rb_persist_sz / 1024), (unsigned)(bounce_sz / 1024), (unsigned)(recv_sz / 1024));
+             (unsigned)(s_rb_persist_sz / 1024), (unsigned)(bounce_sz / 1024), (unsigned)(recv_sz / 1024),
+             s_upload_ctx.sha256_hex);
 
     ESP_LOGW(TAG, "[TELEMETRY] %s", s_last_upload_stats_json);
 
@@ -1249,15 +1462,38 @@ static esp_err_t api_upload_put_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    if (sc->expected_sha256[0] != '\0' && strcasecmp(sc->expected_sha256, s_upload_ctx.sha256_hex) != 0) {
+        remove(sc->abs_path);
+        ESP_LOGE(TAG, "SHA256 mismatch em %s: esperado=%s, calculado=%s",
+                 sc->rel_path, sc->expected_sha256, s_upload_ctx.sha256_hex);
+        snprintf(sc->err_json, sizeof(sc->err_json),
+                 "{\"error\":\"sha256_mismatch\",\"expected\":\"%s\",\"actual\":\"%s\"}",
+                 sc->expected_sha256, s_upload_ctx.sha256_hex);
+        httpd_resp_set_status(req, "422 Unprocessable Entity");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "X-Content-SHA256", s_upload_ctx.sha256_hex);
+        httpd_resp_set_hdr(req, "X-Upload-Stats", s_last_upload_stats_json);
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_send(req, sc->err_json, HTTPD_RESP_USE_STRLEN);
+        free(sc);
+        progress_end();
+        return ESP_FAIL;
+    }
+
     progress_finish_file(content_len);
     if (idx >= count) progress_end();
 
     s_files_received++;
-    ESP_LOGI(TAG, "Recebido: %s (%d/%d) em %u ms (%.2f MB/s)", sc->rel_path, idx, count, (unsigned)total_ms, speed_mbs);
-    free(sc);
+    ESP_LOGI(TAG, "Recebido: %s (%d/%d) em %u ms (%.2f MB/s) sha256=%s",
+             sc->rel_path, idx, count, (unsigned)total_ms, speed_mbs, s_upload_ctx.sha256_hex);
+    snprintf(sc->err_json, sizeof(sc->err_json),
+             "{\"status\":\"ok\",\"bytes\":%u,\"sha256\":\"%s\"}",
+             (unsigned)content_len, s_upload_ctx.sha256_hex);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "X-Content-SHA256", s_upload_ctx.sha256_hex);
     httpd_resp_set_hdr(req, "X-Upload-Stats", s_last_upload_stats_json);
-    httpd_resp_set_hdr(req, "Connection", "close");
-    httpd_resp_send(req, NULL, 0);
+    httpd_resp_send(req, sc->err_json, HTTPD_RESP_USE_STRLEN);
+    free(sc);
     return ESP_OK;
 }
 
@@ -1417,9 +1653,15 @@ static esp_err_t api_download_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static void get_json_string(const char *json, const char *key, char *out, size_t max_len);
+
 static esp_err_t api_delete_handler(httpd_req_t *req)
 {
+    if (!check_api_key(req)) return ESP_FAIL;
+    podcast_sync_notify_activity();
+
     typedef struct {
+        char body[512];
         char query[512];
         char path_enc[400];
         char rel_path[400];
@@ -1432,29 +1674,46 @@ static esp_err_t api_delete_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    if (httpd_req_get_url_query_str(req, sc->query, sizeof(sc->query)) != ESP_OK ||
-        httpd_query_key_value(sc->query, "path", sc->path_enc, sizeof(sc->path_enc)) != ESP_OK) {
+    if (httpd_req_get_url_query_str(req, sc->query, sizeof(sc->query)) == ESP_OK &&
+        httpd_query_key_value(sc->query, "path", sc->path_enc, sizeof(sc->path_enc)) == ESP_OK) {
+        url_decode(sc->rel_path, sc->path_enc, sizeof(sc->rel_path));
+    } else if (req->content_len > 0) {
+        int to_read = (req->content_len < sizeof(sc->body) - 1) ? (int)req->content_len : (int)(sizeof(sc->body) - 1);
+        int ret = httpd_req_recv(req, sc->body, to_read);
+        if (ret > 0) {
+            sc->body[ret] = '\0';
+            get_json_string(sc->body, "path", sc->rel_path, sizeof(sc->rel_path));
+        }
+    }
+
+    if (sc->rel_path[0] == '\0') {
         free(sc);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "faltou o parametro 'path'");
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"missing_path\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
-    url_decode(sc->rel_path, sc->path_enc, sizeof(sc->rel_path));
 
     if (!build_abs_path(sc->rel_path, sc->abs_path, sizeof(sc->abs_path)) || sc->rel_path[0] == '\0') {
         free(sc);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "caminho invalido");
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"invalid_path\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
 
     if (recursive_delete(sc->abs_path) != ESP_OK) {
         free(sc);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "falha ao apagar");
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"delete_failed\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
     s_status_last_calc_ms = 0;
     ESP_LOGI(TAG, "Apagado: %s", sc->rel_path);
     free(sc);
-    httpd_resp_send(req, NULL, 0);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
@@ -1573,8 +1832,8 @@ static void known_networks_load(void)
             char pass[WIFI_PASS_MAX_LEN] = {0};
             len = sizeof(pass);
             nvs_get_str(h, "pass", pass, &len);
-            strncpy(s_known[0].ssid, ssid, sizeof(s_known[0].ssid) - 1);
-            strncpy(s_known[0].pass, pass, sizeof(s_known[0].pass) - 1);
+            strlcpy(s_known[0].ssid, ssid, sizeof(s_known[0].ssid));
+            strlcpy(s_known[0].pass, pass, sizeof(s_known[0].pass));
             s_known_count = 1;
         }
         nvs_close(h);
@@ -1954,6 +2213,9 @@ static esp_err_t api_eq_post_handler(httpd_req_t *req) {
 }
 
 static esp_err_t api_rename_post_handler(httpd_req_t *req) {
+    if (!check_api_key(req)) return ESP_FAIL;
+    podcast_sync_notify_activity();
+
     typedef struct {
         char buf[1024];
         char old_path[400];
@@ -1997,6 +2259,7 @@ static esp_err_t api_rename_post_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
+    s_status_last_calc_ms = 0;
     free(sc);
     httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
@@ -2066,6 +2329,9 @@ static esp_err_t api_copy_post_handler(httpd_req_t *req) {
 }
 
 static esp_err_t api_mkdir_post_handler(httpd_req_t *req) {
+    if (!check_api_key(req)) return ESP_FAIL;
+    podcast_sync_notify_activity();
+
     typedef struct {
         char buf[1024];
         char dir_path[400];
@@ -2238,11 +2504,20 @@ static esp_err_t api_ota_post_handler(httpd_req_t *req)
     snprintf(s_ota_status, sizeof(s_ota_status), "Validando cabecalho...");
     s_ui_state = WIFI_UI_OTA_UPDATING;
 
-    // Buffer de 4 KB alocado obrigatoriamente na DRAM interna (obrigatorio para operacoes de Flash/OTA no ESP32)
-    char *ota_write_data = (char *)heap_caps_malloc(OTA_BUFF_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
-    if (!ota_write_data) {
-        ota_write_data = (char *)malloc(OTA_BUFF_SIZE);
+    // Reutiliza o buffer DMA persistente s_bounce_persist (8 KB na SRAM interna) se disponivel,
+    // eliminando qualquer alocacao adicional na DRAM interna que causaria escassez e 'wifi:mem fail'
+    char *ota_write_data = NULL;
+    bool ota_buf_allocated = false;
+    if (s_bounce_persist && s_bounce_persist_sz >= OTA_BUFF_SIZE) {
+        ota_write_data = (char *)s_bounce_persist;
+    } else {
+        ota_write_data = (char *)heap_caps_malloc(OTA_BUFF_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
+        if (!ota_write_data) {
+            ota_write_data = (char *)malloc(OTA_BUFF_SIZE);
+        }
+        ota_buf_allocated = true;
     }
+
     if (!ota_write_data) {
         s_ota_in_progress = false;
         s_ui_state = WIFI_UI_CONNECTED;
@@ -2253,7 +2528,7 @@ static esp_err_t api_ota_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    // Receber primeiro chunk de pelo menos min_hdr (288 bytes) para validar cabecalhos antes de apagar flash
+    // Receber primeiro chunk de pelo menos min_hdr (288 bytes) para validar cabecalhos antes de gravar na flash
     int first_chunk_len = 0;
     int first_chunk_timeouts = 0;
     while (first_chunk_len < min_hdr && first_chunk_len < total_len) {
@@ -2273,7 +2548,7 @@ static esp_err_t api_ota_post_handler(httpd_req_t *req)
     }
 
     if (first_chunk_len < min_hdr) {
-        free(ota_write_data);
+        if (ota_buf_allocated) free(ota_write_data);
         s_ota_in_progress = false;
         s_ui_state = WIFI_UI_CONNECTED;
         s_ota_status[0] = '\0';
@@ -2287,7 +2562,7 @@ static esp_err_t api_ota_post_handler(httpd_req_t *req)
     esp_image_header_t *img_hdr = (esp_image_header_t *)ota_write_data;
     if (img_hdr->magic != ESP_IMAGE_HEADER_MAGIC) {
         ESP_LOGE(TAG, "Magic header invalido: 0x%02X (esperado 0x%02X)", img_hdr->magic, ESP_IMAGE_HEADER_MAGIC);
-        free(ota_write_data);
+        if (ota_buf_allocated) free(ota_write_data);
         s_ota_in_progress = false;
         s_ui_state = WIFI_UI_CONNECTED;
         s_ota_status[0] = '\0';
@@ -2305,7 +2580,7 @@ static esp_err_t api_ota_post_handler(httpd_req_t *req)
         app_desc.project_name[sizeof(app_desc.project_name) - 1] = '\0';
         ESP_LOGE(TAG, "esp_app_desc invalido: magic=0x%08X (esp: 0x%08X), project='%s' (esp: 'mps3')",
                  (unsigned int)app_desc.magic_word, (unsigned int)ESP_APP_DESC_MAGIC_WORD, app_desc.project_name);
-        free(ota_write_data);
+        if (ota_buf_allocated) free(ota_write_data);
         s_ota_in_progress = false;
         s_ui_state = WIFI_UI_CONNECTED;
         s_ota_status[0] = '\0';
@@ -2329,70 +2604,81 @@ static esp_err_t api_ota_post_handler(httpd_req_t *req)
         s_ota_in_progress = false;
         s_ui_state = WIFI_UI_CONNECTED;
         s_ota_status[0] = '\0';
-        free(ota_write_data);
+        if (ota_buf_allocated) free(ota_write_data);
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, "{\"error\":\"Falha ao inicializar particao flash OTA\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
 
-    // Gravar o primeiro chunk ja lido
-    err = esp_ota_write(ota_handle, (const void *)ota_write_data, first_chunk_len);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ota_write falhou no primeiro bloco: %s", esp_err_to_name(err));
-        esp_ota_abort(ota_handle);
-        s_ota_in_progress = false;
-        s_ui_state = WIFI_UI_CONNECTED;
-        s_ota_status[0] = '\0';
-        free(ota_write_data);
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req, "{\"error\":\"Falha ao gravar bloco inicial na flash\"}", HTTPD_RESP_USE_STRLEN);
-        return ESP_FAIL;
-    }
-
-    int bytes_written = first_chunk_len;
-    s_ota_pct = (int)((bytes_written * 100LL) / total_len);
+    int bytes_written = 0;
+    int chunk_accum = first_chunk_len;
     int block_cnt = 0;
     bool write_failed = false;
     int consecutive_timeouts = 0;
 
-    while (bytes_written < total_len) {
-        int to_read = (total_len - bytes_written < OTA_BUFF_SIZE) ? (total_len - bytes_written) : OTA_BUFF_SIZE;
-        int r = httpd_req_recv(req, ota_write_data, to_read);
-        if (r < 0) {
-            if (r == HTTPD_SOCK_ERR_TIMEOUT) {
-                if (++consecutive_timeouts > 20) {
-                    ESP_LOGE(TAG, "OTA abortado: conexao inativa por muito tempo (timeouts)");
-                    write_failed = true;
-                    break;
+    // Loop de recepcao e gravacao com acumulacao de blocos alinhados a 4 KB
+    while (bytes_written + chunk_accum < total_len) {
+        // Completa o buffer de 4 KB
+        while (chunk_accum < OTA_BUFF_SIZE && (bytes_written + chunk_accum < total_len)) {
+            int to_read = (total_len - (bytes_written + chunk_accum) < (OTA_BUFF_SIZE - chunk_accum))
+                          ? (int)(total_len - (bytes_written + chunk_accum))
+                          : (int)(OTA_BUFF_SIZE - chunk_accum);
+            int r = httpd_req_recv(req, ota_write_data + chunk_accum, to_read);
+            if (r < 0) {
+                if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+                    if (++consecutive_timeouts > 20) {
+                        ESP_LOGE(TAG, "OTA abortado: conexao inativa por muito tempo (timeouts)");
+                        write_failed = true;
+                        break;
+                    }
+                    continue;
                 }
-                continue;
+                ESP_LOGE(TAG, "httpd_req_recv falhou: %d", r);
+                write_failed = true;
+                break;
             }
-            ESP_LOGE(TAG, "httpd_req_recv falhou: %d", r);
-            write_failed = true;
-            break;
-        }
-        if (r == 0) break;
-        consecutive_timeouts = 0;
-
-        err = esp_ota_write(ota_handle, (const void *)ota_write_data, r);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "esp_ota_write falhou (%d bytes): %s", r, esp_err_to_name(err));
-            write_failed = true;
-            break;
+            if (r == 0) {
+                write_failed = true;
+                break;
+            }
+            consecutive_timeouts = 0;
+            chunk_accum += r;
         }
 
-        bytes_written += r;
-        s_ota_pct = (int)((bytes_written * 100LL) / total_len);
+        if (write_failed) break;
 
-        block_cnt++;
-        if (block_cnt % 4 == 0) {
+        // Grava o bloco na particao OTA
+        if (chunk_accum > 0) {
+            err = esp_ota_write(ota_handle, (const void *)ota_write_data, chunk_accum);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "esp_ota_write falhou (%d bytes): %s", chunk_accum, esp_err_to_name(err));
+                write_failed = true;
+                break;
+            }
+            bytes_written += chunk_accum;
+            chunk_accum = 0;
+            s_ota_pct = (int)((bytes_written * 100LL) / total_len);
             vTaskDelay(1);
         }
     }
 
-    free(ota_write_data);
+    // Se sobrou algum dado final acumulado (ex: ultimo setor parcial)
+    if (!write_failed && chunk_accum > 0) {
+        err = esp_ota_write(ota_handle, (const void *)ota_write_data, chunk_accum);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write falhou no bloco final (%d bytes): %s", chunk_accum, esp_err_to_name(err));
+            write_failed = true;
+        } else {
+            bytes_written += chunk_accum;
+            chunk_accum = 0;
+            s_ota_pct = (int)((bytes_written * 100LL) / total_len);
+        }
+    }
+
+    if (ota_buf_allocated) {
+        free(ota_write_data);
+    }
 
     if (write_failed || bytes_written != total_len) {
         ESP_LOGE(TAG, "OTA abortado: gravados %d de %d bytes", bytes_written, total_len);
@@ -2407,8 +2693,47 @@ static esp_err_t api_ota_post_handler(httpd_req_t *req)
     }
 
     err = esp_ota_end(ota_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ota_end falhou: %s", esp_err_to_name(err));
+    bool ota_valid = (err == ESP_OK);
+    if (!ota_valid) {
+        ESP_LOGW(TAG, "esp_ota_end retornou %s. Validando SHA-256 diretamente da particao %s...",
+                 esp_err_to_name(err), target_part->label);
+
+        if (total_len > 32) {
+            size_t sha_len = total_len - 32;
+            mps3_sha256_ctx_t sha_ctx;
+            mps3_sha256_init(&sha_ctx);
+
+            uint8_t check_buf[1024];
+            size_t rd_offset = 0;
+            bool read_err = false;
+            while (rd_offset < sha_len) {
+                size_t to_rd = (sha_len - rd_offset < sizeof(check_buf)) ? (sha_len - rd_offset) : sizeof(check_buf);
+                if (esp_partition_read(target_part, rd_offset, check_buf, to_rd) != ESP_OK) {
+                    read_err = true;
+                    break;
+                }
+                mps3_sha256_update(&sha_ctx, check_buf, to_rd);
+                rd_offset += to_rd;
+            }
+
+            if (!read_err) {
+                uint8_t calc_hash[32];
+                mps3_sha256_final(&sha_ctx, calc_hash);
+
+                uint8_t expected_hash[32];
+                if (esp_partition_read(target_part, sha_len, expected_hash, 32) == ESP_OK) {
+                    if (memcmp(calc_hash, expected_hash, 32) == 0) {
+                        ESP_LOGI(TAG, "SHA-256 verificado com SUCESSO na particao %s! Firmware 100%% integro.", target_part->label);
+                        ota_valid = true;
+                    } else {
+                        ESP_LOGE(TAG, "Hash SHA-256 da flash diverge do hash esperado da imagem!");
+                    }
+                }
+            }
+        }
+    }
+
+    if (!ota_valid) {
         s_ota_in_progress = false;
         s_ui_state = WIFI_UI_CONNECTED;
         s_ota_status[0] = '\0';
@@ -2534,6 +2859,386 @@ static esp_err_t api_podcasts_local_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t api_sync_manifest_get_handler(httpd_req_t *req)
+{
+    if (!check_api_key(req)) return ESP_FAIL;
+    podcast_sync_notify_activity();
+
+    typedef struct {
+        char base_dir[128];
+        char prog_path[512];
+        char file_path[768];
+        char rel_path[640];
+        char prog_esc[256];
+        char name_esc[384];
+        char rel_esc[768];
+        char chunk[2048];
+    } manifest_scratch_t;
+
+    manifest_scratch_t *sc = (manifest_scratch_t *)http_scratch_alloc(sizeof(manifest_scratch_t));
+    if (!sc) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    uint8_t mac[6] = {0};
+    if (esp_wifi_get_mac(WIFI_IF_STA, mac) != ESP_OK) {
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    }
+
+    uint64_t total_bytes = 0, free_bytes = 0;
+    esp_vfs_fat_info(SD_MOUNT_POINT, &total_bytes, &free_bytes);
+
+    int bat_pct = battery_get_percent();
+    bool charging = battery_is_charging();
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    snprintf(sc->chunk, sizeof(sc->chunk),
+             "{\"device_mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
+             "\"firmware_version\":\"%s\","
+             "\"free_bytes\":%llu,\"total_bytes\":%llu,"
+             "\"battery_pct\":%d,\"charging\":%s,\"podcasts\":[",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+             app_desc ? app_desc->version : "unknown",
+             (unsigned long long)free_bytes, (unsigned long long)total_bytes,
+             bat_pct, charging ? "true" : "false");
+    httpd_resp_sendstr_chunk(req, sc->chunk);
+
+    snprintf(sc->base_dir, sizeof(sc->base_dir), "%s/Podcasts", SD_MOUNT_POINT);
+    DIR *d_base = opendir(sc->base_dir);
+    if (d_base) {
+        struct dirent *prog_entry;
+        bool first = true;
+
+        while ((prog_entry = readdir(d_base)) != NULL) {
+            if (prog_entry->d_name[0] == '.') continue;
+            if (prog_entry->d_type != DT_DIR) continue;
+
+            snprintf(sc->prog_path, sizeof(sc->prog_path), "%s/%s", sc->base_dir, prog_entry->d_name);
+            DIR *d_prog = opendir(sc->prog_path);
+            if (!d_prog) continue;
+
+            struct dirent *ep_entry;
+            while ((ep_entry = readdir(d_prog)) != NULL) {
+                if (ep_entry->d_name[0] == '.') continue;
+                if (ep_entry->d_type == DT_DIR) continue;
+                if (strstr(ep_entry->d_name, ".part") != NULL) continue;
+
+                snprintf(sc->file_path, sizeof(sc->file_path), "%s/%s", sc->prog_path, ep_entry->d_name);
+                snprintf(sc->rel_path, sizeof(sc->rel_path), "Podcasts/%s/%s", prog_entry->d_name, ep_entry->d_name);
+
+                struct stat st;
+                long long size = 0;
+                long long mtime = 0;
+                if (stat(sc->file_path, &st) == 0) {
+                    size = (long long)st.st_size;
+                    mtime = (long long)st.st_mtime;
+                }
+
+                bool played = podcast_history_is_played(sc->rel_path);
+
+                json_escape(prog_entry->d_name, sc->prog_esc, sizeof(sc->prog_esc));
+                json_escape(ep_entry->d_name, sc->name_esc, sizeof(sc->name_esc));
+                json_escape(sc->rel_path, sc->rel_esc, sizeof(sc->rel_esc));
+
+                snprintf(sc->chunk, sizeof(sc->chunk),
+                         "%s{\"program\":\"%s\",\"filename\":\"%s\",\"rel_path\":\"%s\","
+                         "\"size\":%lld,\"mtime\":%lld,\"played\":%s}",
+                         first ? "" : ",", sc->prog_esc, sc->name_esc, sc->rel_esc,
+                         size, mtime, played ? "true" : "false");
+                first = false;
+                httpd_resp_sendstr_chunk(req, sc->chunk);
+            }
+            closedir(d_prog);
+        }
+        closedir(d_base);
+    }
+
+    httpd_resp_sendstr_chunk(req, "],\"played_history\":[");
+
+    int hist_cnt = podcast_history_get_count();
+    bool first_hist = true;
+    for (int i = 0; i < hist_cnt; i++) {
+        if (podcast_history_get_entry(i, sc->rel_path, sizeof(sc->rel_path), NULL, NULL)) {
+            json_escape(sc->rel_path, sc->rel_esc, sizeof(sc->rel_esc));
+            snprintf(sc->chunk, sizeof(sc->chunk), "%s\"%s\"", first_hist ? "" : ",", sc->rel_esc);
+            first_hist = false;
+            httpd_resp_sendstr_chunk(req, sc->chunk);
+        }
+    }
+
+    free(sc);
+    httpd_resp_sendstr_chunk(req, "]}");
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
+
+static esp_err_t api_sync_verify_post_handler(httpd_req_t *req)
+{
+    if (!check_api_key(req)) return ESP_FAIL;
+    podcast_sync_notify_activity();
+
+    typedef struct {
+        char body[1024];
+        char query[512];
+        char path_enc[400];
+        char rel_path[400];
+        char abs_path[600];
+        char rel_esc[450];
+        char expected_sha256[68];
+        char sha256_hex[65];
+        char resp_json[640];
+        mps3_sha256_ctx_t sha_ctx;
+        uint8_t read_buf[32768];
+    } verify_scratch_t;
+
+    verify_scratch_t *sc = (verify_scratch_t *)http_scratch_alloc(sizeof(verify_scratch_t));
+    if (!sc) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    if (req->content_len > 0) {
+        int to_read = (req->content_len < sizeof(sc->body) - 1) ? (int)req->content_len : (int)(sizeof(sc->body) - 1);
+        int ret = httpd_req_recv(req, sc->body, to_read);
+        if (ret > 0) {
+            sc->body[ret] = '\0';
+            get_json_string(sc->body, "path", sc->rel_path, sizeof(sc->rel_path));
+            get_json_string(sc->body, "expected_sha256", sc->expected_sha256, sizeof(sc->expected_sha256));
+            if (sc->expected_sha256[0] == '\0') {
+                get_json_string(sc->body, "sha256", sc->expected_sha256, sizeof(sc->expected_sha256));
+            }
+        }
+    }
+
+    if (sc->rel_path[0] == '\0') {
+        if (httpd_req_get_url_query_str(req, sc->query, sizeof(sc->query)) == ESP_OK &&
+            httpd_query_key_value(sc->query, "path", sc->path_enc, sizeof(sc->path_enc)) == ESP_OK) {
+            url_decode(sc->rel_path, sc->path_enc, sizeof(sc->rel_path));
+        }
+    }
+
+    if (sc->rel_path[0] == '\0' || !build_abs_path(sc->rel_path, sc->abs_path, sizeof(sc->abs_path))) {
+        free(sc);
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"invalid_path\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    struct stat st;
+    if (stat(sc->abs_path, &st) != 0 || S_ISDIR(st.st_mode)) {
+        free(sc);
+        httpd_resp_set_status(req, "404 Not Found");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"not_found\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    FILE *fp = fopen(sc->abs_path, "rb");
+    if (!fp) {
+        free(sc);
+        httpd_resp_set_status(req, "404 Not Found");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"not_found\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    mps3_sha256_init(&sc->sha_ctx);
+
+    uint8_t *rd_buf = (!s_progress_active && s_bounce_persist && s_bounce_persist_sz >= 16384)
+        ? s_bounce_persist
+        : sc->read_buf;
+    size_t rd_buf_sz = (rd_buf == s_bounce_persist) ? s_bounce_persist_sz : sizeof(sc->read_buf);
+
+    size_t total_read = 0;
+    size_t r;
+    int chunks = 0;
+    while ((r = fread(rd_buf, 1, rd_buf_sz, fp)) > 0) {
+        mps3_sha256_update(&sc->sha_ctx, rd_buf, r);
+        total_read += r;
+        chunks++;
+        if (chunks % 16 == 0) {
+            podcast_sync_notify_activity();
+            vTaskDelay(1);
+        }
+    }
+    fclose(fp);
+
+    uint8_t digest[32] = {0};
+    mps3_sha256_final(&sc->sha_ctx, digest);
+
+    for (int i = 0; i < 32; i++) {
+        snprintf(&sc->sha256_hex[i * 2], 3, "%02x", digest[i]);
+    }
+    sc->sha256_hex[64] = '\0';
+
+    if (sc->expected_sha256[0] != '\0' && strcasecmp(sc->expected_sha256, sc->sha256_hex) != 0) {
+        snprintf(sc->resp_json, sizeof(sc->resp_json),
+                 "{\"error\":\"sha256_mismatch\",\"expected\":\"%s\",\"actual\":\"%s\"}",
+                 sc->expected_sha256, sc->sha256_hex);
+        httpd_resp_set_status(req, "422 Unprocessable Entity");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, sc->resp_json, HTTPD_RESP_USE_STRLEN);
+        free(sc);
+        return ESP_FAIL;
+    }
+
+    json_escape(sc->rel_path, sc->rel_esc, sizeof(sc->rel_esc));
+    snprintf(sc->resp_json, sizeof(sc->resp_json),
+             "{\"status\":\"ok\",\"path\":\"%s\",\"size\":%llu,\"sha256\":\"%s\"}",
+             sc->rel_esc, (unsigned long long)total_read, sc->sha256_hex);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, sc->resp_json, HTTPD_RESP_USE_STRLEN);
+    free(sc);
+    return ESP_OK;
+}
+
+static esp_err_t api_sync_begin_post_handler(httpd_req_t *req)
+{
+    if (!check_api_key(req)) return ESP_FAIL;
+    podcast_sync_notify_activity();
+
+    // Pausa reproducao se estiver ativa para liberar barramento SD durante o sync
+    playback_state_t st;
+    audio_player_get_state(&st);
+    if (st.playing && !st.paused) {
+        audio_player_toggle_play_pause();
+    }
+    audio_player_stop_url();
+
+    char *staging_dir = (char *)http_scratch_alloc(256);
+    if (!staging_dir) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    int total_files = 0;
+    uint64_t plan_bytes = 0;
+    if (req->content_len > 0) {
+        int to_read = (req->content_len < 255) ? (int)req->content_len : 255;
+        int ret = httpd_req_recv(req, staging_dir, to_read);
+        if (ret > 0) {
+            staging_dir[ret] = '\0';
+            const char *pf = strstr(staging_dir, "\"total_files\"");
+            if (pf) {
+                pf = strchr(pf, ':');
+                if (pf) total_files = atoi(pf + 1);
+            }
+            const char *pb = strstr(staging_dir, "\"total_bytes\"");
+            if (pb) {
+                pb = strchr(pb, ':');
+                if (pb) plan_bytes = (uint64_t)strtoull(pb + 1, NULL, 10);
+            }
+        }
+    }
+
+    snprintf(staging_dir, 256, "%s/Podcasts", SD_MOUNT_POINT);
+    mkdir(staging_dir, 0777);
+
+    snprintf(staging_dir, 256, "%s/Podcasts/.staging", SD_MOUNT_POINT);
+    recursive_delete(staging_dir);
+    mkdir(staging_dir, 0777);
+
+    s_sync_in_progress = true;
+    podcast_sync_on_begin(total_files, plan_bytes);
+
+    uint64_t total_bytes = 0, free_bytes = 0;
+    esp_vfs_fat_info(SD_MOUNT_POINT, &total_bytes, &free_bytes);
+
+    snprintf(staging_dir, 256, "{\"status\":\"ok\",\"free_bytes\":%llu}", (unsigned long long)free_bytes);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, staging_dir, HTTPD_RESP_USE_STRLEN);
+    free(staging_dir);
+    return ESP_OK;
+}
+
+static esp_err_t api_sync_done_post_handler(httpd_req_t *req)
+{
+    if (!check_api_key(req)) return ESP_FAIL;
+    podcast_sync_notify_activity();
+
+    char *staging_dir = (char *)http_scratch_alloc(256);
+    if (staging_dir) {
+        snprintf(staging_dir, 256, "%s/Podcasts/.staging", SD_MOUNT_POINT);
+        recursive_delete(staging_dir);
+        free(staging_dir);
+    }
+
+    s_sync_in_progress = false;
+    s_status_last_calc_ms = 0;
+    progress_end();
+    podcast_sync_mark_completed();
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t api_podcasts_played_post_handler(httpd_req_t *req)
+{
+    if (!check_api_key(req)) return ESP_FAIL;
+    podcast_sync_notify_activity();
+
+    typedef struct {
+        char buf[1024];
+        char rel_path[400];
+    } played_scratch_t;
+
+    played_scratch_t *sc = (played_scratch_t *)http_scratch_alloc(sizeof(played_scratch_t));
+    if (!sc) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    int ret = httpd_req_recv(req, sc->buf, req->content_len < sizeof(sc->buf) - 1 ? req->content_len : sizeof(sc->buf) - 1);
+    if (ret <= 0) {
+        free(sc);
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"empty_body\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+    sc->buf[ret] = '\0';
+
+    get_json_string(sc->buf, "rel_path", sc->rel_path, sizeof(sc->rel_path));
+    if (sc->rel_path[0] == '\0') {
+        get_json_string(sc->buf, "path", sc->rel_path, sizeof(sc->rel_path));
+    }
+    if (sc->rel_path[0] == '\0') {
+        free(sc);
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"missing_rel_path\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    bool played = true;
+    const char *p = strstr(sc->buf, "\"played\"");
+    if (p) {
+        p += 8;
+        while (*p && (*p == ' ' || *p == '\t' || *p == ':')) p++;
+        if (*p == 'f' || *p == 'F' || *p == '0') {
+            played = false;
+        }
+    }
+
+    if (played) {
+        podcast_history_mark_played(sc->rel_path, 0);
+    } else {
+        podcast_history_unmark_played(sc->rel_path);
+    }
+
+    free(sc);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 static esp_err_t http_socket_open_cb(httpd_handle_t hd, int sockfd)
 {
     int enable_nodelay = 1;
@@ -2642,6 +3347,64 @@ static esp_err_t api_bench_source_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t api_bench_sd_clock_handler(httpd_req_t *req)
+{
+    char query[64] = {0};
+    char freq_str[32] = {0};
+    uint32_t freq_khz = SDMMC_FREQ_DEFAULT;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        if (httpd_query_key_value(query, "freq", freq_str, sizeof(freq_str)) == ESP_OK) {
+            int mhz = atoi(freq_str);
+            if (mhz == 40) freq_khz = SDMMC_FREQ_HIGHSPEED;
+            else freq_khz = SDMMC_FREQ_DEFAULT;
+        }
+    }
+    sd_card_set_frequency(freq_khz);
+    char resp[128];
+    snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"freq_khz\":%u,\"freq_mhz\":%.1f}",
+             (unsigned)freq_khz, (double)freq_khz / 1000.0);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
+static esp_err_t api_analytics_manifest_get_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    char *line = (char *)http_scratch_alloc(1024);
+    if (!line) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    httpd_resp_sendstr_chunk(req, "{\"status\":\"ok\",\"analytics_dir\":\"/.mps3_analytics\",\"files\":[");
+    DIR *dir = opendir("/sdcard/.mps3_analytics");
+    bool first = true;
+    if (dir) {
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+            if (ent->d_name[0] == '.') continue;
+            char full[320];
+            snprintf(full, sizeof(full), "/sdcard/.mps3_analytics/%s", ent->d_name);
+            struct stat st;
+            if (stat(full, &st) == 0 && S_ISREG(st.st_mode)) {
+                snprintf(line, 1024, "%s{\"name\":\"%s\",\"download_path\":\"/.mps3_analytics/%s\",\"size\":%llu,\"mtime\":%llu}",
+                         first ? "" : ",", ent->d_name, ent->d_name,
+                         (unsigned long long)st.st_size, (unsigned long long)st.st_mtime);
+                httpd_resp_sendstr_chunk(req, line);
+                first = false;
+            }
+        }
+        closedir(dir);
+    }
+    httpd_resp_sendstr_chunk(req, "]}");
+    httpd_resp_sendstr_chunk(req, NULL);
+    free(line);
+    return ESP_OK;
+}
+
 static esp_err_t start_httpd(void)
 {
     if (s_httpd) return ESP_OK;
@@ -2651,9 +3414,9 @@ static esp_err_t start_httpd(void)
     config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     config.core_id = 1; // Roda no Core 1 com 240 MHz livres
     config.ctrl_port = 32768;
-    config.max_uri_handlers = 36;
-    config.max_open_sockets = 7;
-    config.backlog_conn = 5;
+    config.max_uri_handlers = 48;
+    config.max_open_sockets = 10;
+    config.backlog_conn = 8;
     config.lru_purge_enable = true;
     config.keep_alive_enable = true;
     config.keep_alive_idle = 10;
@@ -2676,13 +3439,24 @@ static esp_err_t start_httpd(void)
     UNLOCK_TCPIP_CORE();
 
     static uint16_t s_ctrl_port_cur = 32768;
+    size_t largest_int = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    if (largest_int >= 16384) {
+        config.stack_size = 6144;
+    } else {
+        config.stack_size = 4096;
+    }
+
     config.ctrl_port = s_ctrl_port_cur;
-    ESP_LOGI(TAG, "Iniciando servidor HTTP (modo=%s, ip=%s, ctrl_port=%d, stack=%u)...",
-             s_mode == WIFI_TRANSFER_MODE_STA ? "STA" : "AP", s_status, config.ctrl_port, (unsigned)config.stack_size);
+    ESP_LOGI(TAG, "Iniciando servidor HTTP (modo=%s, ip=%s, ctrl_port=%d, stack=%u, largest_int=%u)...",
+             s_mode == WIFI_TRANSFER_MODE_STA ? "STA" : "AP", s_status, config.ctrl_port,
+             (unsigned)config.stack_size, (unsigned)largest_int);
     esp_err_t err = httpd_start(&s_httpd, &config);
     if (err == ESP_ERR_NO_MEM || err == ESP_ERR_HTTPD_ALLOC_MEM || err == ESP_ERR_HTTPD_TASK) {
-        config.stack_size = 6144;
-        ESP_LOGW(TAG, "Tentando httpd_start com stack=6144...");
+        s_ctrl_port_cur = (s_ctrl_port_cur >= 32800) ? 32768 : (uint16_t)(s_ctrl_port_cur + 1);
+        config.ctrl_port = s_ctrl_port_cur;
+        config.stack_size = 4608;
+        ESP_LOGW(TAG, "Tentando httpd_start com stack=4608 (ctrl_port=%u)...", (unsigned)config.ctrl_port);
         err = httpd_start(&s_httpd, &config);
     }
     if (err != ESP_OK) {
@@ -2709,6 +3483,7 @@ static esp_err_t start_httpd(void)
     httpd_uri_t status_uri = { .uri = "/api/status", .method = HTTP_GET,    .handler = api_status_get_handler };
     httpd_uri_t upload_uri = { .uri = "/api/upload", .method = HTTP_PUT,    .handler = api_upload_put_handler };
     httpd_uri_t delete_uri = { .uri = "/api/delete", .method = HTTP_DELETE, .handler = api_delete_handler };
+    httpd_uri_t delete_post_uri = { .uri = "/api/delete", .method = HTTP_POST, .handler = api_delete_handler };
     httpd_uri_t download_uri = { .uri = "/api/download", .method = HTTP_GET, .handler = api_download_get_handler };
     httpd_uri_t wifi_nets_get_uri    = { .uri = "/api/wifi/networks", .method = HTTP_GET,    .handler = api_wifi_networks_get_handler };
     httpd_uri_t wifi_nets_post_uri   = { .uri = "/api/wifi/networks", .method = HTTP_POST,   .handler = api_wifi_networks_post_handler };
@@ -2729,6 +3504,7 @@ static esp_err_t start_httpd(void)
     httpd_register_uri_handler(s_httpd, &status_uri);
     httpd_register_uri_handler(s_httpd, &upload_uri);
     httpd_register_uri_handler(s_httpd, &delete_uri);
+    httpd_register_uri_handler(s_httpd, &delete_post_uri);
     httpd_register_uri_handler(s_httpd, &download_uri);
     httpd_register_uri_handler(s_httpd, &wifi_nets_get_uri);
     httpd_register_uri_handler(s_httpd, &wifi_nets_post_uri);
@@ -2756,10 +3532,26 @@ static esp_err_t start_httpd(void)
     httpd_uri_t podcasts_local_get_uri = { .uri = "/api/podcasts_local", .method = HTTP_GET, .handler = api_podcasts_local_get_handler };
     httpd_register_uri_handler(s_httpd, &podcasts_local_get_uri);
 
+    httpd_uri_t sync_manifest_uri = { .uri = "/api/sync/manifest", .method = HTTP_GET,  .handler = api_sync_manifest_get_handler };
+    httpd_uri_t sync_verify_uri   = { .uri = "/api/sync/verify",   .method = HTTP_POST, .handler = api_sync_verify_post_handler };
+    httpd_uri_t sync_begin_uri    = { .uri = "/api/sync/begin",    .method = HTTP_POST, .handler = api_sync_begin_post_handler };
+    httpd_uri_t sync_done_uri     = { .uri = "/api/sync/done",     .method = HTTP_POST, .handler = api_sync_done_post_handler };
+    httpd_uri_t podcasts_played_uri = { .uri = "/api/podcasts/played", .method = HTTP_POST, .handler = api_podcasts_played_post_handler };
+    httpd_register_uri_handler(s_httpd, &sync_manifest_uri);
+    httpd_register_uri_handler(s_httpd, &sync_verify_uri);
+    httpd_register_uri_handler(s_httpd, &sync_begin_uri);
+    httpd_register_uri_handler(s_httpd, &sync_done_uri);
+    httpd_register_uri_handler(s_httpd, &podcasts_played_uri);
+
     httpd_uri_t bench_sink_uri = { .uri = "/api/bench_sink", .method = HTTP_POST, .handler = api_bench_sink_handler };
     httpd_uri_t bench_source_uri = { .uri = "/api/bench_source", .method = HTTP_GET, .handler = api_bench_source_handler };
+    httpd_uri_t analytics_manifest_uri = { .uri = "/api/analytics/manifest", .method = HTTP_GET, .handler = api_analytics_manifest_get_handler };
     httpd_register_uri_handler(s_httpd, &bench_sink_uri);
     httpd_register_uri_handler(s_httpd, &bench_source_uri);
+    httpd_register_uri_handler(s_httpd, &analytics_manifest_uri);
+
+    httpd_uri_t bench_sd_clock_uri = { .uri = "/api/bench/sd_clock", .method = HTTP_POST, .handler = api_bench_sd_clock_handler };
+    httpd_register_uri_handler(s_httpd, &bench_sd_clock_uri);
 
     httpd_register_err_handler(s_httpd, HTTPD_404_NOT_FOUND, http_404_error_handler);
 
@@ -2909,43 +3701,51 @@ static esp_err_t ensure_stack_ready(void)
     if (!s_netif_sta) s_netif_sta = esp_netif_create_default_wifi_sta();
     if (!s_netif_ap)  s_netif_ap  = esp_netif_create_default_wifi_ap();
 
-    // Reserva o bounce DMA do upload ANTES do esp_wifi_init: depois que o Wi-Fi sobe, a SRAM
-    // interna DMA-capable fica fragmentada e a alocacao dinamica por upload falha.
-    ESP_LOGW(TAG, "[MEM] pre-init: internal free=%u, largest DMA block=%u",
+    ESP_LOGI(TAG, "[MEM] pre-init: internal free=%u, largest DMA block=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+
+    // Com CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y, os buffers dinamicos RX/TX ficam na PSRAM (8 MB),
+    // enquanto static_rx_buf_num fica na SRAM interna.
+    // NUNCA alocar buffers auxiliares antes do esp_wifi_init para garantir que o driver Wi-Fi
+    // tenha toda a SRAM interna DMA contígua necessária para inicializar seus descritores e tarefas.
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    cfg.static_rx_buf_num = 4;
+    cfg.dynamic_rx_buf_num = 32;
+    cfg.tx_buf_type = 0;        // Buffer de transmissao estatico em SRAM DMA para confianca absoluta de TX/ARP/ACK
+    cfg.static_tx_buf_num = 8;  // 8 buffers estaticos DMA na SRAM interna (~12.8 KB)
+    cfg.dynamic_tx_buf_num = 32;
+    cfg.cache_tx_buf_num = 16;
+    cfg.rx_mgmt_buf_type = 0;
+    cfg.rx_ba_win = 32;         // Janela Block Ack 32
+    cfg.mgmt_sbuf_num = 8;
+    err = esp_wifi_init(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_init customizado falhou (%s), tentando DEFAULT...", esp_err_to_name(err));
+        wifi_init_config_t def_cfg = WIFI_INIT_CONFIG_DEFAULT();
+        err = esp_wifi_init(&def_cfg);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_init falhou: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    // Aloca o bounce DMA de upload APÓS o Wi-Fi já ter subido com sucesso
     if (!s_bounce_persist) {
-        s_bounce_persist_sz = UPLOAD_BOUNCE_SIZE;
-        s_bounce_persist = (uint8_t *)heap_caps_aligned_alloc(16, s_bounce_persist_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-        if (!s_bounce_persist) {
-            s_bounce_persist_sz = 16 * 1024;
+        size_t max_dma = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (max_dma >= 16384 + 1024) {
+            s_bounce_persist_sz = 16384;
+            s_bounce_persist = (uint8_t *)heap_caps_aligned_alloc(16, s_bounce_persist_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        } else if (max_dma >= 8192 + 1024) {
+            s_bounce_persist_sz = 8192;
+            s_bounce_persist = (uint8_t *)heap_caps_aligned_alloc(16, s_bounce_persist_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        } else if (max_dma >= 4096) {
+            s_bounce_persist_sz = 4096;
             s_bounce_persist = (uint8_t *)heap_caps_aligned_alloc(16, s_bounce_persist_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
         }
     }
 
-    // Com CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y, os buffers dinamicos RX/TX ficam na PSRAM (8 MB),
-    // enquanto static_rx_buf_num fica na SRAM interna: 4 estaticos + 64 dinamicos em PSRAM + rx_ba_win=32
-    // absorvem janelas TCP inteiras de 64 KB sem gastar DRAM interna!
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    cfg.static_rx_buf_num = 4;
-    cfg.dynamic_rx_buf_num = 64;
-    cfg.dynamic_tx_buf_num = 32;
-    cfg.rx_ba_win = 32;
-    cfg.mgmt_sbuf_num = 16;
-    err = esp_wifi_init(&cfg);
-    if (err != ESP_OK) {
-        cfg.rx_ba_win = 16;
-        err = esp_wifi_init(&cfg);
-    }
-    if (err != ESP_OK && s_bounce_persist) {
-        ESP_LOGE(TAG, "[MEM] esp_wifi_init falhou com bounce reservado (%s); liberando e repetindo", esp_err_to_name(err));
-        heap_caps_free(s_bounce_persist);
-        s_bounce_persist = NULL;
-        s_bounce_persist_sz = 0;
-        err = esp_wifi_init(&cfg);
-    }
-    if (err != ESP_OK) return err;
-    ESP_LOGW(TAG, "[MEM] pos-init: internal free=%u, largest DMA block=%u, bounce reservado=%u B",
+    ESP_LOGI(TAG, "[MEM] pos-init: internal free=%u, largest DMA block=%u, bounce reservado=%u B",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
              (unsigned)s_bounce_persist_sz);
@@ -2998,6 +3798,10 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
         return err;
     }
 
+    // Comuta o barramento SDMMC dinamicamente para 20 MHz (Default Speed)
+    // para eliminar a interferencia da 61a harmonica de 40 MHz (2440 MHz) sobre o canal 6 do Wi-Fi (2437 MHz).
+    sd_card_set_frequency(SDMMC_FREQ_DEFAULT);
+
     s_mode = mode;
     s_files_received = 0;
     s_exit_requested = false;
@@ -3006,6 +3810,8 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
     s_sta_failed = false;
     s_sta_retry = 0;
     s_auto_fallback = (mode == WIFI_TRANSFER_MODE_STA);
+    s_wifi_last_drawn_state = (wifi_ui_state_t)-1;
+    s_wifi_last_draw_ms = 0;
     if (mode == WIFI_TRANSFER_MODE_AP || mode == WIFI_TRANSFER_MODE_APSTA) {
         strncpy(s_status, "192.168.4.1", sizeof(s_status) - 1);
     } else {
@@ -3020,13 +3826,13 @@ esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode)
         strncpy((char *)ap_config.ap.ssid, CONFIG_WIFI_AP_SSID, sizeof(ap_config.ap.ssid) - 1);
         ap_config.ap.ssid_len = strlen(CONFIG_WIFI_AP_SSID);
         strncpy((char *)ap_config.ap.password, CONFIG_WIFI_AP_PASSWORD, sizeof(ap_config.ap.password) - 1);
-        ap_config.ap.channel = 1;
+        ap_config.ap.channel = 11;
         ap_config.ap.beacon_interval = 100;
         ap_config.ap.max_connection = 4;
         ap_config.ap.authmode = strlen(CONFIG_WIFI_AP_PASSWORD) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
 
         ESP_LOGI(TAG, "===> MODO HOTSPOT ATIVO <===");
-        ESP_LOGI(TAG, "Rede gerada pelo MPS3: SSID='%s' | Senha='%s' | Canal=1", CONFIG_WIFI_AP_SSID, CONFIG_WIFI_AP_PASSWORD);
+        ESP_LOGI(TAG, "Rede gerada pelo MPS3: SSID='%s' | Senha='%s' | Canal=11", CONFIG_WIFI_AP_SSID, CONFIG_WIFI_AP_PASSWORD);
         ESP_LOGI(TAG, "Conecte o seu PC/celular a essa rede e acesse: http://192.168.4.1 ou http://mps3.local");
     }
 
@@ -3101,6 +3907,25 @@ bool wifi_transfer_poll(void)
     static uint32_t s_last_httpd_attempt_ms = 0;
     uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 
+    // Keepalive de ARP/broadcast na rede local a cada 3s para evitar que roteadores e switches percam o MAC do MPS3
+    static uint32_t s_last_arp_keepalive_ms = 0;
+    if (s_got_ip && (now_ms - s_last_arp_keepalive_ms >= 3000)) {
+        s_last_arp_keepalive_ms = now_ms;
+        int ks = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+        if (ks >= 0) {
+            int bcast = 1;
+            setsockopt(ks, SOL_SOCKET, SO_BROADCAST, &bcast, sizeof(bcast));
+            struct sockaddr_in dst = {
+                .sin_family = AF_INET,
+                .sin_port = htons(5353),
+                .sin_addr.s_addr = inet_addr("255.255.255.255")
+            };
+            const char bcast_msg[] = "MPS3";
+            sendto(ks, bcast_msg, sizeof(bcast_msg), 0, (struct sockaddr *)&dst, sizeof(dst));
+            close(ks);
+        }
+    }
+
     if (!s_httpd) {
         bool can_start = false;
         if (s_mode == WIFI_TRANSFER_MODE_APSTA && (s_ap_ready || s_got_ip)) {
@@ -3144,11 +3969,12 @@ bool wifi_transfer_poll(void)
             strncpy((char *)wifi_config.ap.ssid, CONFIG_WIFI_AP_SSID, sizeof(wifi_config.ap.ssid) - 1);
             wifi_config.ap.ssid_len = strlen(CONFIG_WIFI_AP_SSID);
             strncpy((char *)wifi_config.ap.password, CONFIG_WIFI_AP_PASSWORD, sizeof(wifi_config.ap.password) - 1);
+            wifi_config.ap.channel = 11;
             wifi_config.ap.max_connection = 4;
             wifi_config.ap.authmode = strlen(CONFIG_WIFI_AP_PASSWORD) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
 
             ESP_LOGI(TAG, "===> MODO HOTSPOT ATIVO (Fallback) <===");
-            ESP_LOGI(TAG, "Rede gerada pelo MPS3: SSID='%s' | Senha='%s'", CONFIG_WIFI_AP_SSID, CONFIG_WIFI_AP_PASSWORD);
+            ESP_LOGI(TAG, "Rede gerada pelo MPS3: SSID='%s' | Senha='%s' | Canal=11", CONFIG_WIFI_AP_SSID, CONFIG_WIFI_AP_PASSWORD);
             ESP_LOGI(TAG, "Conecte o seu PC/celular a essa rede e acesse: http://192.168.4.1 ou http://mps3.local");
 
             esp_wifi_set_mode(WIFI_MODE_AP);
@@ -3205,7 +4031,8 @@ bool wifi_transfer_poll(void)
         if (remount_err != ESP_OK) {
             ESP_LOGE(TAG, "Falha ao remontar SD Card apos WiFi: %s", esp_err_to_name(remount_err));
         } else {
-            ESP_LOGI(TAG, "SD Card remontado com sucesso apos WiFi");
+            ESP_LOGI(TAG, "SD Card remontado com sucesso apos WiFi (40 MHz High-Speed restaurado)");
+            sd_card_set_frequency(SDMMC_FREQ_HIGHSPEED);
         }
         audio_player_reacquire_sd_after_usb();
         ESP_LOGI(TAG, "Modo WiFi encerrado (%d arquivo(s) recebido(s))", s_files_received);
@@ -3248,8 +4075,7 @@ bool wifi_transfer_get_gateway_ip(char *out_gw, size_t max_len)
 void wifi_transfer_get_status(char *out, size_t out_len, int *files_received)
 {
     if (out && out_len > 0) {
-        strncpy(out, s_status, out_len - 1);
-        out[out_len - 1] = '\0';
+        strlcpy(out, s_status, out_len);
     }
     if (files_received) *files_received = s_files_received;
 }
@@ -3270,21 +4096,19 @@ static void wifi_menu_draw_status(void)
 {
     static int s_cached_rssi = -50;
     static uint32_t s_last_rssi_ms = 0;
-    static uint32_t s_last_draw_ms = 0;
-    static wifi_ui_state_t s_last_drawn_state = (wifi_ui_state_t)-1;
 
     uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-    bool state_changed = (s_ui_state != s_last_drawn_state);
+    bool state_changed = (s_ui_state != s_wifi_last_drawn_state);
 
-    // Controla a frequencia de redesenho I2C (34 ms por quadro no Core 0):
-    // - Em transferencia: 300 ms (~3.3 FPS) para barra fluida sem roubar interrupcoes do Wi-Fi/SDMMC no Core 0
-    // - Em repouso/conectado: 1000 ms (1 FPS) ou imediato na mudanca de estado (evita 25 FPS de I2C durante bench_sink/source/download!)
-    uint32_t min_interval_ms = (s_ui_state == WIFI_UI_TRANSFERRING || s_ui_state == WIFI_UI_OTA_UPDATING) ? 300 : 1000;
-    if (!state_changed && (now_ms - s_last_draw_ms < min_interval_ms)) {
+    // Controla a frequencia de redesenho I2C:
+    // - Em transferencia: 100 ms (~10 FPS) para barra de progresso fluida
+    // - Em repouso/conectado: 250 ms (~4 FPS) ou imediato na mudanca de estado
+    uint32_t min_interval_ms = (s_ui_state == WIFI_UI_TRANSFERRING || s_ui_state == WIFI_UI_OTA_UPDATING) ? 100 : 250;
+    if (!state_changed && (now_ms - s_wifi_last_draw_ms < min_interval_ms)) {
         return;
     }
-    s_last_draw_ms = now_ms;
-    s_last_drawn_state = s_ui_state;
+    s_wifi_last_draw_ms = now_ms;
+    s_wifi_last_drawn_state = s_ui_state;
 
     wifi_transfer_progress_t prog;
     wifi_transfer_get_progress(&prog);
@@ -3296,8 +4120,7 @@ static void wifi_menu_draw_status(void)
     // Extrai IP do status
     char ip[16] = "0.0.0.0";
     if (strchr(status, '.') != NULL) {
-        strncpy(ip, status, sizeof(ip)-1);
-        ip[sizeof(ip)-1] = '\0';
+        strlcpy(ip, status, sizeof(ip));
     }
 
     // Nunca chama esp_wifi_sta_get_rssi() durante transferencia ativa (evita lock IPC na task Wi-Fi!)

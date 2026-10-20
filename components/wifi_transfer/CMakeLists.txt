@@ -20,5 +20,7 @@ idf_component_register(
         esp_partition
         board_io
         esp_app_format
+        mbedtls
+        podcast_sync
 )
 

@@ -81,7 +81,7 @@ esp_err_t u8g2_hal_i2c_init(int sda_gpio, int scl_gpio, uint8_t i2c_addr_7bit)
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = i2c_addr_7bit,
-        .scl_speed_hz = 400000, // 400 kHz Fast Mode (padrao confiavel do SSD1306)
+        .scl_speed_hz = 800000, // 800 kHz Fast-Mode Plus para taxa de quadros maxima (~60-75 FPS)
     };
     ret = i2c_master_bus_add_device(s_bus, &dev_cfg, &s_dev);
     if (ret != ESP_OK) {
@@ -123,6 +123,15 @@ uint8_t u8g2_hal_byte_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_p
 
         case U8X8_MSG_BYTE_SEND: {
             const uint8_t *data = (const uint8_t *)arg_ptr;
+            if (arg_int == 0) break;
+
+            // Fast-path: control byte ja registrado e bloco cabe inteiro no buffer de 2048B
+            if (s_have_ctrl && (s_txlen + arg_int <= sizeof(s_txbuf))) {
+                memcpy(&s_txbuf[s_txlen], data, arg_int);
+                s_txlen += arg_int;
+                break;
+            }
+
             for (uint8_t i = 0; i < arg_int; i++) {
                 // O primeiro byte que passa por aqui depois de um
                 // START_TRANSFER e' sempre o control byte desta
@@ -134,14 +143,8 @@ uint8_t u8g2_hal_byte_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_p
 
                 if (s_txlen >= sizeof(s_txbuf)) {
                     // Buffer encheu no MEIO de uma transferencia logica -
-                    // manda o que ja' tem acumulado agora (em vez de
-                    // descartar o resto, que era o bug original) e segue
-                    // acumulando o restante numa NOVA transacao I2C. Essa
-                    // nova transacao precisa comecar com o mesmo control
-                    // byte da transferencia original, senao o SSD1306
-                    // reinterpreta o proximo byte como control byte e
-                    // corrompe o resto do quadro (era essa a causa real
-                    // da fonte 4x6 virar "hieroglifo").
+                    // manda o que ja' tem acumulado agora e segue
+                    // acumulando o restante numa NOVA transacao I2C com o mesmo control byte.
                     flush_txbuf();
                     s_txbuf[s_txlen++] = s_ctrl_byte;
                 }
@@ -152,6 +155,67 @@ uint8_t u8g2_hal_byte_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_p
 
         case U8X8_MSG_BYTE_END_TRANSFER:
             flush_txbuf();
+            break;
+
+        default:
+            return 0;
+    }
+    return 1;
+}
+
+uint8_t u8x8_cad_mps3_fast_i2c(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr)
+{
+    static uint8_t s_in_cmd_transfer = 0;
+
+    switch (msg) {
+        case U8X8_MSG_CAD_SEND_CMD:
+            // Modo "lightning" SSD1306: agrupa todos os comandos e argumentos consecutivos
+            // em uma unica transacao I2C precedida pelo control byte 0x00 (Co=0, D/C#=0).
+            if (s_in_cmd_transfer == 0) {
+                u8x8_byte_StartTransfer(u8x8);
+                u8x8_byte_SendByte(u8x8, 0x00); // Control byte: stream de comandos
+                s_in_cmd_transfer = 1;
+            }
+            u8x8_byte_SendByte(u8x8, arg_int);
+            break;
+
+        case U8X8_MSG_CAD_SEND_ARG:
+            if (s_in_cmd_transfer == 0) {
+                u8x8_byte_StartTransfer(u8x8);
+                u8x8_byte_SendByte(u8x8, 0x00);
+                s_in_cmd_transfer = 1;
+            }
+            u8x8_byte_SendByte(u8x8, arg_int);
+            break;
+
+        case U8X8_MSG_CAD_SEND_DATA:
+            if (s_in_cmd_transfer != 0) {
+                u8x8_byte_EndTransfer(u8x8);
+                s_in_cmd_transfer = 0;
+            }
+            // Transmite a pagina inteira (128 bytes) em uma unica transacao I2C DMA
+            // sem a fragmentacao legada de 24 bytes do u8x8_cad_ssd13xx_fast_i2c.
+            u8x8_byte_StartTransfer(u8x8);
+            u8x8_byte_SendByte(u8x8, 0x40); // Control byte: stream de dados GDDRAM
+            u8x8->byte_cb(u8x8, U8X8_MSG_BYTE_SEND, arg_int, arg_ptr);
+            u8x8_byte_EndTransfer(u8x8);
+            break;
+
+        case U8X8_MSG_CAD_INIT:
+            if (u8x8->i2c_address == 255) {
+                u8x8->i2c_address = 0x78;
+            }
+            return u8x8->byte_cb(u8x8, msg, arg_int, arg_ptr);
+
+        case U8X8_MSG_CAD_START_TRANSFER:
+            s_in_cmd_transfer = 0;
+            break;
+
+        case U8X8_MSG_CAD_END_TRANSFER:
+            if (s_in_cmd_transfer != 0) {
+                u8x8_byte_EndTransfer(u8x8);
+                s_in_cmd_transfer = 0;
+            }
             break;
 
         default:

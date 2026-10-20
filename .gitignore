@@ -37,6 +37,9 @@ __pycache__/
 *.jpeg
 *.xml
 scratch/
+scratch_*.py
+tools/design_lab/
+.agents/
 tools/read_*.py
 tools/patch_*.py
 tools/trace_*.py

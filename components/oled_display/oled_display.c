@@ -7,6 +7,9 @@
 #include "freertos/task.h"
 #include "i2s_output.h"
 #include "qrcode.h"
+#include "audio_meter.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -28,6 +31,46 @@ static bool s_ready = false;
 static uint8_t s_target_brightness = 255;
 static uint8_t s_current_brightness = 255;
 
+// Shadow framebuffer de 1024 bytes para Dirty-Page Tracking (atualizacao diferencial por pagina de 128B)
+static uint8_t s_prev_fb[1024];
+static bool s_fb_dirty_all = true;
+
+// Tabela LUT de Seno em ponto fixo Q10 (0..90 graus, escala 1024 = 1.0)
+// Elimina chamadas a sinf/cosf/roundf em software/FPU durante animacoes de UI a 40 FPS
+static const int16_t s_sin_q10_lut[91] = {
+       0,   18,   36,   54,   71,   89,  107,  125,  143,  160,
+     178,  195,  213,  230,  248,  265,  282,  299,  316,  333,
+     350,  367,  384,  400,  416,  433,  449,  465,  481,  496,
+     512,  527,  543,  558,  573,  587,  602,  616,  630,  644,
+     658,  672,  685,  698,  711,  724,  737,  749,  761,  773,
+     784,  796,  807,  818,  828,  839,  849,  859,  868,  878,
+     887,  896,  904,  912,  920,  928,  935,  943,  949,  956,
+     962,  968,  974,  979,  984,  989,  994,  998, 1002, 1005,
+    1008, 1011, 1014, 1016, 1018, 1020, 1022, 1023, 1023, 1024,
+    1024
+};
+
+static inline int fast_sin_q10(int deg)
+{
+    deg %= 360;
+    if (deg < 0) deg += 360;
+    if (deg <= 90)  return  s_sin_q10_lut[deg];
+    if (deg <= 180) return  s_sin_q10_lut[180 - deg];
+    if (deg <= 270) return -s_sin_q10_lut[deg - 180];
+    return -s_sin_q10_lut[360 - deg];
+}
+
+static inline int fast_cos_q10(int deg)
+{
+    return fast_sin_q10(deg + 90);
+}
+
+static inline int fast_scale_trig(int radius, int trig_q10)
+{
+    int prod = radius * trig_q10;
+    return (prod >= 0) ? ((prod + 512) >> 10) : ((prod - 512) >> 10);
+}
+
 static void apply_brightness_if_needed(void) {
     if (s_target_brightness != s_current_brightness) {
         s_current_brightness = s_target_brightness;
@@ -35,8 +78,63 @@ static void apply_brightness_if_needed(void) {
     }
 }
 
+static void oled_flush_buffer(void)
+{
+    uint8_t *fb = u8g2_GetBufferPtr(&s_u8g2);
+    if (!fb || s_fb_dirty_all) {
+        u8g2_SendBuffer(&s_u8g2);
+        if (fb) {
+            memcpy(s_prev_fb, fb, 1024);
+        }
+        s_fb_dirty_all = false;
+        return;
+    }
 
-// Frames para animaÃ§Ãµes WiFi
+    // Dirty-Page Update: verifica cada uma das 8 paginas horizontais (128 bytes por pagina)
+    // e transmite via I2C apenas as paginas cujo conteudo mudou em relacao ao frame anterior.
+    for (uint8_t page = 0; page < 8; page++) {
+        size_t offset = (size_t)page * 128;
+        if (memcmp(fb + offset, s_prev_fb + offset, 128) != 0) {
+            u8g2_UpdateDisplayArea(&s_u8g2, 0, page, 16, 1);
+            memcpy(s_prev_fb + offset, fb + offset, 128);
+        }
+    }
+}
+
+// Modos de visualizacao na tela Now Playing
+static oled_display_viz_mode_t s_viz_mode = VIZ_MODE_CLASSIC;
+static uint32_t s_overlay_until_ms = 0;
+static char s_last_track_title[128] = {0};
+
+void oled_display_set_viz_mode(oled_display_viz_mode_t mode)
+{
+    if (mode >= VIZ_MODE_COUNT) mode = VIZ_MODE_CLASSIC;
+    s_viz_mode = mode;
+    nvs_handle_t h;
+    if (nvs_open("mps3_settings", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, "viz_mode", (uint8_t)mode);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+oled_display_viz_mode_t oled_display_get_viz_mode(void)
+{
+    return s_viz_mode;
+}
+
+void oled_display_cycle_viz_mode(void)
+{
+    oled_display_viz_mode_t next = (oled_display_viz_mode_t)((s_viz_mode + 1) % VIZ_MODE_COUNT);
+    oled_display_set_viz_mode(next);
+}
+
+void oled_display_trigger_viz_overlay(void)
+{
+    s_overlay_until_ms = (uint32_t)(esp_timer_get_time() / 1000ULL) + 3000;
+}
+
+// Frames para animações WiFi
 static int s_wifi_attention_frame = 0;
 static int s_wifi_sync_frame = 0;
 static int s_wifi_download_frame = 0;
@@ -52,13 +150,27 @@ esp_err_t oled_display_init(void)
 
     u8g2_Setup_ssd1306_i2c_128x64_noname_f(&s_u8g2, U8G2_R2,
                                             u8g2_hal_byte_cb, u8g2_hal_gpio_and_delay_cb);
+    // Substitui o CAD padrao (que fragmenta transferencias em blocos de 24 bytes)
+    // pelo nosso CAD de alta velocidade em burst de pagina completa (128 bytes).
+    s_u8g2.u8x8.cad_cb = u8x8_cad_mps3_fast_i2c;
+
     u8g2_InitDisplay(&s_u8g2);
     u8g2_SetPowerSave(&s_u8g2, 0);
     u8g2_SetBitmapMode(&s_u8g2, 1);
     u8g2_SetFontMode(&s_u8g2, 1);
     u8g2_ClearBuffer(&s_u8g2);
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    s_fb_dirty_all = true;
+    oled_flush_buffer();
+
+    nvs_handle_t h;
+    if (nvs_open("mps3_settings", NVS_READONLY, &h) == ESP_OK) {
+        uint8_t v = 0;
+        if (nvs_get_u8(h, "viz_mode", &v) == ESP_OK && v < VIZ_MODE_COUNT) {
+            s_viz_mode = (oled_display_viz_mode_t)v;
+        }
+        nvs_close(h);
+    }
 
     s_ready = true;
     return ESP_OK;
@@ -66,9 +178,11 @@ esp_err_t oled_display_init(void)
 
 static void format_time(uint32_t total_seconds, char *out, size_t out_len)
 {
+    if (!out || out_len == 0) return;
     uint32_t m = total_seconds / 60;
     uint32_t s = total_seconds % 60;
-    snprintf(out, out_len, "%02u:%02u", (unsigned)m, (unsigned)s);
+    if (m > 99) m = 99;
+    snprintf(out, out_len, "%02d:%02d", (int)(m % 100), (int)(s % 60));
 }
 
 // As fontes u8g2 usadas aqui (u8g2_font_5x7_tr, u8g2_font_t0_17_tr - sufixo
@@ -145,6 +259,30 @@ static void draw_marquee(marquee_t *m, const char *text, int x_start, int y, int
     }
 
     const int gap = 16; // espaco entre o fim e a copia repetida
+    int x = x_start - m->offset_px;
+    u8g2_DrawStr(&s_u8g2, x, y, m->text);
+    u8g2_DrawStr(&s_u8g2, x + text_w + gap, y, m->text);
+
+    m->offset_px += step_px;
+    if (m->offset_px >= text_w + gap) {
+        m->offset_px = 0;
+    }
+}
+
+// Funcao para marquee com largura disponivel explicita
+static void draw_marquee_width(marquee_t *m, const char *text, int x_start, int available_w, int y, int step_px)
+{
+    marquee_reset_if_new(m, text);
+
+    int text_w = u8g2_GetStrWidth(&s_u8g2, m->text);
+    if (text_w <= available_w) {
+        int tx = x_start + (available_w - text_w) / 2;
+        u8g2_DrawStr(&s_u8g2, tx, y, m->text);
+        m->offset_px = 0;
+        return;
+    }
+
+    const int gap = 16;
     int x = x_start - m->offset_px;
     u8g2_DrawStr(&s_u8g2, x, y, m->text);
     u8g2_DrawStr(&s_u8g2, x + text_w + gap, y, m->text);
@@ -370,14 +508,52 @@ static void draw_battery_icon(int y, int percent)
 // audio_player.cpp pra' expor 3 campos, so' separamos aqui onde houver 2+
 // espacos seguidos (o formato sempre usa isso entre os campos, nunca
 // dentro de um campo - "16 Bits" tem 1 espaco so', fica junto).
-void oled_display_show_now_playing(const playback_state_t *state)
+static void draw_viz_dynamic_overlay(const playback_state_t *state)
 {
-    if (!s_ready || !state) return;
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    if (now_ms >= s_overlay_until_ms) return;
 
-    u8g2_ClearBuffer(&s_u8g2);
+    // Tarja de overlay superior com fundo opaco
+    u8g2_SetDrawColor(&s_u8g2, 0);
+    u8g2_DrawBox(&s_u8g2, 0, 0, 128, 11);
     u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_DrawHLine(&s_u8g2, 0, 10, 128);
 
-    // --- Topo: play/pause, artista dinâmico, bateria ---
+    draw_play_pause_icon(state->playing && !state->paused);
+    draw_battery_icon(1, battery_get_percent());
+
+    // Tempo decorrido / total
+    char el_str[8], tot_str[8], time_buf[20];
+    format_time(state->elapsed_sec, el_str, sizeof(el_str));
+    format_time(state->total_sec, tot_str, sizeof(tot_str));
+    snprintf(time_buf, sizeof(time_buf), "%s/%s", el_str, tot_str);
+
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    int time_w = u8g2_GetStrWidth(&s_u8g2, time_buf);
+    int time_x = 113 - time_w;
+    u8g2_DrawStr(&s_u8g2, time_x, 8, time_buf);
+
+    // Titulo com marquee no espaco entre icone e tempo
+    char safe_title[128];
+    sanitize_for_display(state->title, safe_title, sizeof(safe_title));
+    int title_x0 = 14;
+    int title_x1 = time_x - 3;
+    int avail_w = title_x1 - title_x0;
+    if (avail_w > 15) {
+        u8g2_SetClipWindow(&s_u8g2, title_x0, 0, title_x1, 10);
+        int tw = u8g2_GetStrWidth(&s_u8g2, safe_title);
+        if (tw <= avail_w) {
+            u8g2_DrawStr(&s_u8g2, title_x0 + (avail_w - tw)/2, 8, safe_title);
+        } else {
+            draw_marquee_width(&s_artist_marquee, safe_title, title_x0, avail_w, 8, 1);
+        }
+        u8g2_SetMaxClipWindow(&s_u8g2);
+    }
+}
+
+static void oled_display_show_now_playing_classic(const playback_state_t *state)
+{
+    // --- Topo: play/pause, artista dinamico, bateria ---
     draw_play_pause_icon(state->playing && !state->paused);
     draw_battery_icon(1, battery_get_percent());
     
@@ -419,7 +595,7 @@ void oled_display_show_now_playing(const playback_state_t *state)
     // --- Titulo da musica ---
     char safe_title[128];
     sanitize_for_display(state->title, safe_title, sizeof(safe_title));
-    u8g2_SetFont(&s_u8g2, u8g2_font_t0_22b_tr); // A fonte do mockup
+    u8g2_SetFont(&s_u8g2, u8g2_font_t0_22b_tr);
     
     int tw = u8g2_GetStrWidth(&s_u8g2, safe_title);
     if (tw <= 128) {
@@ -455,7 +631,6 @@ void oled_display_show_now_playing(const playback_state_t *state)
     // --- 4 Cards dinamicos em forma de Brackets (Formato, Res, SR, Bitrate) ---
     char card_fmt[20], card_res[20], card_sr[20], card_br[20];
     
-    // Extrai formato de state->format_name ou da extensao de filename
     const char *fmt_str = state->format_name;
     if (fmt_str[0] == '\0' && state->filename[0] != '\0') {
         const char *dot = strrchr(state->filename, '.');
@@ -511,7 +686,7 @@ void oled_display_show_now_playing(const playback_state_t *state)
         int w_sr  = u8g2_GetStrWidth(&s_u8g2, card_sr);
         int w_br  = u8g2_GetStrWidth(&s_u8g2, card_br);
         
-        int pad = 2; // espacamento de padding
+        int pad = 2;
         int bw_fmt = w_fmt + pad * 2;
         int bw_res = w_res + pad * 2;
         int bw_sr  = w_sr + pad * 2;
@@ -538,36 +713,246 @@ void oled_display_show_now_playing(const playback_state_t *state)
         
         #undef DRAW_BRACKET
     }
+}
+
+static void oled_display_show_now_playing_hybrid(const playback_state_t *state)
+{
+    // 1. Topo: Play/Pause, Artista com brackets, Bateria
+    draw_play_pause_icon(state->playing && !state->paused);
+    draw_battery_icon(1, battery_get_percent());
+    
+    if (state->artist[0] != '\0') {
+        char safe_artist[64];
+        sanitize_for_display(state->artist, safe_artist, sizeof(safe_artist));
+        u8g2_SetFont(&s_u8g2, u8g2_font_helvB08_tr);
+        int aw = u8g2_GetStrWidth(&s_u8g2, safe_artist);
+        int max_left = 12, max_right = 113, center_x = 64;
+        int br_left = center_x - aw/2 - 3, br_right = center_x + aw/2 + 3;
+        bool needs_marquee = false;
+        if (br_left < max_left || br_right > max_right) {
+            br_left = max_left;
+            br_right = max_right;
+            needs_marquee = true;
+        }
+        u8g2_DrawLine(&s_u8g2, br_left, 11, br_right, 11);
+        u8g2_DrawLine(&s_u8g2, br_left, 10, br_left, 0);
+        u8g2_DrawLine(&s_u8g2, br_right, 11, br_right, 0);
+        if (!needs_marquee) {
+            u8g2_DrawStr(&s_u8g2, center_x - aw/2, 9, safe_artist);
+        } else {
+            u8g2_SetClipWindow(&s_u8g2, br_left + 2, 0, br_right - 1, 10);
+            draw_marquee(&s_artist_marquee, safe_artist, br_left + 2, 9, 1);
+            u8g2_SetMaxClipWindow(&s_u8g2);
+        }
+    }
+
+    // 2. Titulo da musica (22px)
+    char safe_title[128];
+    sanitize_for_display(state->title, safe_title, sizeof(safe_title));
+    u8g2_SetFont(&s_u8g2, u8g2_font_t0_22b_tr);
+    int tw = u8g2_GetStrWidth(&s_u8g2, safe_title);
+    if (tw <= 128) {
+        u8g2_DrawStr(&s_u8g2, (128 - tw) / 2, 28, safe_title);
+    } else {
+        u8g2_SetClipWindow(&s_u8g2, 0, 12, 128, 31);
+        draw_marquee(&s_now_playing_marquee, safe_title, 0, 28, 1);
+        u8g2_SetMaxClipWindow(&s_u8g2);
+    }
+
+    // 3. Barra de progresso com tempo embutido (Y=33..43)
+    draw_progress_bar_with_time(0, 33, 128, 11, state->elapsed_sec, state->total_sec, state->duration_is_estimate);
+
+    // 4. Album compacto (Y=44..51)
+    if (state->album[0] != '\0') {
+        char safe_album[64];
+        sanitize_for_display(state->album, safe_album, sizeof(safe_album));
+        u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+        int alw = u8g2_GetStrWidth(&s_u8g2, safe_album);
+        if (alw <= 126) {
+            u8g2_DrawStr(&s_u8g2, (128 - alw) / 2, 50, safe_album);
+        } else {
+            u8g2_SetClipWindow(&s_u8g2, 1, 45, 127, 51);
+            draw_marquee(&s_album_marquee, safe_album, 1, 50, 1);
+            u8g2_SetMaxClipWindow(&s_u8g2);
+        }
+    }
+
+    // 5. Mini VU Estéreo L/R na base (Y=53..63)
+    float peak_l = 0.0f, peak_r = 0.0f, hold_l = 0.0f, hold_r = 0.0f;
+    audio_meter_get_levels(&peak_l, &peak_r, &hold_l, &hold_r, NULL, NULL);
+
+    const int vu_x = 9;
+    const int vu_w = 118; // Frame de 118px -> 116px uteis
+    const int vu_inner_w = 114;
+
+    // --- Canal L ---
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    u8g2_DrawStr(&s_u8g2, 0, 57, "L");
+    u8g2_DrawFrame(&s_u8g2, vu_x, 53, vu_w, 5);
+    int fill_l = (int)(peak_l * (float)vu_inner_w + 0.5f);
+    if (fill_l > vu_inner_w) fill_l = vu_inner_w;
+    if (fill_l > 0) {
+        u8g2_DrawBox(&s_u8g2, vu_x + 2, 54, fill_l, 3);
+    }
+    int hold_l_px = (int)(hold_l * (float)vu_inner_w + 0.5f);
+    if (hold_l_px > vu_inner_w - 2) hold_l_px = vu_inner_w - 2;
+    if (hold_l_px > 0) {
+        u8g2_DrawBox(&s_u8g2, vu_x + 2 + hold_l_px, 54, 2, 3);
+    }
+
+    // --- Canal R ---
+    u8g2_DrawStr(&s_u8g2, 0, 63, "R");
+    u8g2_DrawFrame(&s_u8g2, vu_x, 59, vu_w, 5);
+    int fill_r = (int)(peak_r * (float)vu_inner_w + 0.5f);
+    if (fill_r > vu_inner_w) fill_r = vu_inner_w;
+    if (fill_r > 0) {
+        u8g2_DrawBox(&s_u8g2, vu_x + 2, 60, fill_r, 3);
+    }
+    int hold_r_px = (int)(hold_r * (float)vu_inner_w + 0.5f);
+    if (hold_r_px > vu_inner_w - 2) hold_r_px = vu_inner_w - 2;
+    if (hold_r_px > 0) {
+        u8g2_DrawBox(&s_u8g2, vu_x + 2 + hold_r_px, 60, 2, 3);
+    }
+}
+
+static void oled_display_show_now_playing_spectrum(const playback_state_t *state)
+{
+    float bands[AUDIO_METER_SPECTRUM_BANDS] = {0};
+    float peaks[AUDIO_METER_SPECTRUM_BANDS] = {0};
+    audio_meter_get_spectrum_bands(bands, peaks);
+
+    // Linha de base estetica
+    u8g2_DrawHLine(&s_u8g2, 2, 63, 124);
+
+    // 11 bandas de espectro: largura 7px, gap 4px, x0 = 5 (11*7 + 10*4 = 117 px)
+    const int bar_w = 7;
+    const int bar_step = 11;
+    const int x0 = 5;
+    const int max_h = 50;
+
+    for (int i = 0; i < AUDIO_METER_SPECTRUM_BANDS; i++) {
+        int bx = x0 + i * bar_step;
+        int h = (int)(bands[i] * (float)max_h + 0.5f);
+        if (h > max_h) h = max_h;
+
+        if (h > 0) {
+            // Segmentos Hi-Fi (2px de altura com 1px de espacamento)
+            for (int by = 61; by > 61 - h; by -= 3) {
+                u8g2_DrawBox(&s_u8g2, bx, by - 1, bar_w, 2);
+            }
+        }
+
+        // Marcador flutuante de pico (Peak-Hold)
+        int ph = (int)(peaks[i] * (float)max_h + 0.5f);
+        if (ph > max_h) ph = max_h;
+        if (ph < h) ph = h;
+        int peak_y = 61 - ph - 2;
+        if (peak_y >= 2) {
+            u8g2_DrawHLine(&s_u8g2, bx, peak_y, bar_w);
+        }
+    }
+
+    // Overlay dinamico com titulo e tempo (some apos 3s)
+    draw_viz_dynamic_overlay(state);
+}
+
+static void oled_display_show_now_playing_analog(const playback_state_t *state)
+{
+    float db_l = -40.0f, db_r = -40.0f;
+    audio_meter_get_levels(NULL, NULL, NULL, NULL, &db_l, &db_r);
+
+    // Molduras vintage dos 2 medidores estilo McIntosh / Technics
+    u8g2_DrawFrame(&s_u8g2, 2, 12, 60, 52);
+    u8g2_DrawFrame(&s_u8g2, 66, 12, 60, 52);
+
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    u8g2_DrawStr(&s_u8g2, 5, 20, "L");
+    u8g2_DrawStr(&s_u8g2, 69, 20, "R");
+
+    // Escala com marcas graduadas nos 2 medidores
+    // Canal L: Pivô (32, 63), Raio 35. Canal R: Pivô (96, 63), Raio 35
+    static const int8_t s_scale_deg[6] = { -34, -18, -5, 7, 20, 34 };
+
+    for (int m = 0; m < 6; m++) {
+        int deg = s_scale_deg[m];
+        int sin_q10 = fast_sin_q10(deg);
+        int cos_q10 = fast_cos_q10(deg);
+
+        int dx32 = fast_scale_trig(32, sin_q10);
+        int dy32 = fast_scale_trig(32, cos_q10);
+        int dx36 = fast_scale_trig(36, sin_q10);
+        int dy36 = fast_scale_trig(36, cos_q10);
+
+        // Arco do Canal L
+        u8g2_DrawLine(&s_u8g2, 32 + dx32, 63 - dy32, 32 + dx36, 63 - dy36);
+
+        // Arco do Canal R
+        u8g2_DrawLine(&s_u8g2, 96 + dx32, 63 - dy32, 96 + dx36, 63 - dy36);
+    }
+
+    // Texto de decibeis
+    u8g2_DrawStr(&s_u8g2, 28, 22, "dB");
+    u8g2_DrawStr(&s_u8g2, 92, 22, "dB");
+
+    // --- Ponteiro Canal L ---
+    float norm_l = (db_l - (-40.0f)) / 43.0f; // Mapeia -40dB a +3dB
+    if (norm_l < 0.0f) norm_l = 0.0f;
+    if (norm_l > 1.0f) norm_l = 1.0f;
+    int ang_l_deg = -34 + (int)(norm_l * 68.0f + 0.5f);
+    int px_l = 32 + fast_scale_trig(34, fast_sin_q10(ang_l_deg));
+    int py_l = 63 - fast_scale_trig(34, fast_cos_q10(ang_l_deg));
+    u8g2_DrawLine(&s_u8g2, 32, 63, px_l, py_l);
+    u8g2_DrawDisc(&s_u8g2, 32, 63, 2, U8G2_DRAW_ALL);
+
+    // --- Ponteiro Canal R ---
+    float norm_r = (db_r - (-40.0f)) / 43.0f;
+    if (norm_r < 0.0f) norm_r = 0.0f;
+    if (norm_r > 1.0f) norm_r = 1.0f;
+    int ang_r_deg = -34 + (int)(norm_r * 68.0f + 0.5f);
+    int px_r = 96 + fast_scale_trig(34, fast_sin_q10(ang_r_deg));
+    int py_r = 63 - fast_scale_trig(34, fast_cos_q10(ang_r_deg));
+    u8g2_DrawLine(&s_u8g2, 96, 63, px_r, py_r);
+    u8g2_DrawDisc(&s_u8g2, 96, 63, 2, U8G2_DRAW_ALL);
+
+    // Overlay dinamico com titulo e tempo (some apos 3s)
+    draw_viz_dynamic_overlay(state);
+}
+
+void oled_display_show_now_playing(const playback_state_t *state)
+{
+    if (!s_ready || !state) return;
+
+    // Detecta troca de musica para engatilhar overlay dinamico de 3s
+    if (strncmp(state->title, s_last_track_title, sizeof(s_last_track_title)) != 0) {
+        strncpy(s_last_track_title, state->title, sizeof(s_last_track_title) - 1);
+        s_last_track_title[sizeof(s_last_track_title) - 1] = '\0';
+        oled_display_trigger_viz_overlay();
+    }
+
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    switch (s_viz_mode) {
+        case VIZ_MODE_HYBRID:
+            oled_display_show_now_playing_hybrid(state);
+            break;
+        case VIZ_MODE_SPECTRUM:
+            oled_display_show_now_playing_spectrum(state);
+            break;
+        case VIZ_MODE_ANALOG:
+            oled_display_show_now_playing_analog(state);
+            break;
+        case VIZ_MODE_CLASSIC:
+        default:
+            oled_display_show_now_playing_classic(state);
+            break;
+    }
+
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 static marquee_t s_list_topbar_marquee = {0};
-
-// Nova funÃ§Ã£o para marquee com largura disponÃ­vel explÃ­cita
-void draw_marquee_width(marquee_t *m, const char *text, int x_start, int available_w, int y, int step_px)
-{
-    marquee_reset_if_new(m, text);
-
-    int text_w = u8g2_GetStrWidth(&s_u8g2, m->text);
-    if (text_w <= available_w) {
-        // Centraliza no espaÃ§o disponÃ­vel
-        int tx = x_start + (available_w - text_w) / 2;
-        u8g2_DrawStr(&s_u8g2, tx, y, m->text);
-        m->offset_px = 0;
-        return;
-    }
-
-    const int gap = 16; // espaÃ§o entre o fim e a cÃ³pia repetida
-    int x = x_start - m->offset_px;
-    u8g2_DrawStr(&s_u8g2, x, y, m->text);
-    u8g2_DrawStr(&s_u8g2, x + text_w + gap, y, m->text);
-
-    m->offset_px += step_px;
-    if (m->offset_px >= text_w + gap) {
-        m->offset_px = 0;
-    }
-}
 
 void oled_display_show_list(const char **names, int count, int cursor, const playback_state_t *now_playing)
 {
@@ -637,7 +1022,7 @@ void oled_display_show_list(const char **names, int count, int cursor, const pla
         u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
         u8g2_DrawStr(&s_u8g2, 1, list_top + 9, "Lista vazia");
         apply_brightness_if_needed();
-        u8g2_SendBuffer(&s_u8g2);
+        oled_flush_buffer();
         return;
     }
 
@@ -706,7 +1091,7 @@ void oled_display_show_list(const char **names, int count, int cursor, const pla
     }
     
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_message(const char *line1, const char *line2)
@@ -720,7 +1105,7 @@ void oled_display_show_message(const char *line1, const char *line2)
         u8g2_DrawStr(&s_u8g2, 0, 26, line2);
     }
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_bt_devices(const char **names, int count, int cursor, bool scanning)
@@ -769,7 +1154,7 @@ void oled_display_show_bt_devices(const char **names, int count, int cursor, boo
     u8g2_DrawStr(&s_u8g2, 0, 62, "Dir/Centro: OK | Segure Esq: Sair");
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_bt_connected(const char *dev_name, const char *codec_name, uint32_t sample_rate, int8_t rssi)
@@ -809,7 +1194,7 @@ void oled_display_show_bt_connected(const char *dev_name, const char *codec_name
     u8g2_DrawStr(&s_u8g2, 0, 62, "Dir: Testar Som | O: Descon");
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_blank(void)
@@ -817,7 +1202,8 @@ void oled_display_blank(void)
     if (!s_ready) return;
     u8g2_ClearBuffer(&s_u8g2);
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    s_fb_dirty_all = true;
+    oled_flush_buffer();
 }
 
 void oled_display_show_volume(int volume_percent)
@@ -843,7 +1229,7 @@ void oled_display_show_volume(int volume_percent)
     }
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_balance(int balance)
@@ -914,7 +1300,7 @@ void oled_display_show_balance(int balance)
     u8g2_DrawStr(&s_u8g2, (OLED_WIDTH - hw) / 2, 60, hint);
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 static marquee_t s_transfer_marquee = {0};
@@ -1017,7 +1403,7 @@ void oled_display_show_transfer(const char *label, const char *filename, int per
     u8g2_DrawStr(&s_u8g2, (OLED_WIDTH - eta_w) / 2, eta_y, eta_label);
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 // =========================================================================
 // Game of Life - tela de bloqueio. Grade de celulas maiores que 1px (ver
@@ -1119,7 +1505,7 @@ void oled_display_show_locked(void)
         }
     }
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_usb_mode(void)
@@ -1140,20 +1526,21 @@ void oled_display_show_usb_mode(void)
     u8g2_DrawXBMP(&s_u8g2, 31, 17, BITMAP_USBTREE_W, BITMAP_USBTREE_H, image_UsbTree_bits);
     
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
-// Controle de animaÃ§Ã£o do menu principal
+// Controle de animação do menu principal
 static int wifi_frame = 0;
 static int conf_frame = 0;
 static int game_frame = 0;
+static int s_menu_anim_tick = 0;
 static uint32_t last_anim_ms = 0;
 #define ANIM_INTERVAL_MS 42   // ~24 fps (mesmo ritmo dos mockups)
 
 void oled_display_update_animations(void) {
     uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
 
-    // Atualiza animaÃ§Ãµes WiFi a cada 42ms (~24fps)
+    // Atualiza animações WiFi a cada 42ms (~24fps)
     if (now - s_wifi_last_frame_ms >= 42) {
         s_wifi_attention_frame = (s_wifi_attention_frame + 1) % WIFI_ATTENTION_CLOUD_FRAMES;
         s_wifi_sync_frame = (s_wifi_sync_frame + 1) % WIFI_SYNC_CLOUD_FRAMES;
@@ -1161,115 +1548,722 @@ void oled_display_update_animations(void) {
         s_wifi_last_frame_ms = now;
     }
 
-    // Atualiza animaÃ§Ãµes do menu principal (mesmo ritmo)
+    // Atualiza animações do menu principal (mesmo ritmo)
     if (now - last_anim_ms >= ANIM_INTERVAL_MS) {
         wifi_frame = (wifi_frame + 1) % MENU_WIFI_FRAMES;
         conf_frame = (conf_frame + 1) % MENU_CONF_FRAMES;
         game_frame = (game_frame + 1) % MENU_GAME_FRAMES;
+        s_menu_anim_tick++;
         last_anim_ms = now;
     }
 }
 
-void oled_display_show_main_menu(int cursor) {
+// Ícone WiFi grande (64x46) extraído pixel a pixel do mockup do usuário
+#include "menu_wifi_big.inc"
+
+static bool s_menu_anim_enabled = true;
+
+bool oled_display_is_anim_enabled(void)
+{
+    return s_menu_anim_enabled;
+}
+
+void oled_display_set_anim_enabled(bool en)
+{
+    s_menu_anim_enabled = en;
+}
+
+// Tag com cantos chanfrados em 45 graus (superior-esquerdo e inferior-direito)
+static void draw_menu_chamfered_tag(int x, int y, int w, int h)
+{
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    for (int r = 0; r < h; r++) {
+        int x_start = x;
+        int x_end = x + w - 1;
+        if (r == 0) x_start = x + 3;
+        else if (r == 1) x_start = x + 2;
+        else if (r == 2) x_start = x + 1;
+
+        if (r == h - 3) x_end = x + w - 2;
+        else if (r == h - 2) x_end = x + w - 3;
+        else if (r == h - 1) x_end = x + w - 4;
+
+        if (x_end >= x_start) {
+            u8g2_DrawHLine(&s_u8g2, x_start, y + r, x_end - x_start + 1);
+        }
+    }
+}
+
+// Rosa dos Ventos / Navigation Compass (9x9 pixels)
+static void draw_nav_compass(int cx, int cy, bool up, bool down, bool left, bool right, bool center)
+{
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    if (up) {
+        u8g2_DrawPixel(&s_u8g2, cx, cy - 4);
+        u8g2_DrawPixel(&s_u8g2, cx - 1, cy - 3);
+        u8g2_DrawPixel(&s_u8g2, cx + 1, cy - 3);
+    }
+    if (down) {
+        u8g2_DrawPixel(&s_u8g2, cx - 1, cy + 3);
+        u8g2_DrawPixel(&s_u8g2, cx + 1, cy + 3);
+        u8g2_DrawPixel(&s_u8g2, cx, cy + 4);
+    }
+    if (left) {
+        u8g2_DrawPixel(&s_u8g2, cx - 3, cy - 1);
+        u8g2_DrawPixel(&s_u8g2, cx - 4, cy);
+        u8g2_DrawPixel(&s_u8g2, cx - 3, cy + 1);
+    }
+    if (right) {
+        u8g2_DrawPixel(&s_u8g2, cx + 3, cy - 1);
+        u8g2_DrawPixel(&s_u8g2, cx + 4, cy);
+        u8g2_DrawPixel(&s_u8g2, cx + 3, cy + 1);
+    }
+    if (center) {
+        u8g2_DrawPixel(&s_u8g2, cx, cy);
+    }
+}
+
+// Badge de Bateria no canto inferior direito [59] (11x9 pixels)
+static void draw_battery_badge(int x, int y, int percent)
+{
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_DrawFrame(&s_u8g2, x, y, 11, 9);
+    if (percent < 0) percent = 0;
+    if (percent > 99) percent = 99;
+    char buf[4];
+    snprintf(buf, sizeof(buf), "%d", percent);
+    oled_draw_mini_text(x + 2, y + 2, buf);
+}
+
+// Barra superior de reprodução no Menu Principal
+static void draw_main_menu_topbar(const playback_state_t *now_playing)
+{
+    // Moldura lateral e linha divisória inferior
+    u8g2_DrawLine(&s_u8g2, 0, 0, 0, 8);
+    u8g2_DrawLine(&s_u8g2, 127, 0, 127, 8);
+    u8g2_DrawHLine(&s_u8g2, 0, 8, 128);
+
+    // Barra de progresso (fill_w)
+    if (now_playing->total_sec > 0) {
+        int fill_w = (int)(((long)128 * now_playing->elapsed_sec) / now_playing->total_sec);
+        if (fill_w > 128) fill_w = 128;
+        if (fill_w > 0) {
+            u8g2_DrawBox(&s_u8g2, 0, 0, fill_w, 8);
+        }
+    }
+
+    // Textos em modo XOR
+    u8g2_SetFontMode(&s_u8g2, 1);
+    u8g2_SetDrawColor(&s_u8g2, 2);
+
+    char elapsed_str[8], total_str[8];
+    format_time(now_playing->elapsed_sec, elapsed_str, sizeof(elapsed_str));
+    format_time(now_playing->total_sec, total_str, sizeof(total_str));
+
+    int mini_y = 2; // Y para mini-fonte (altura 5) dentro de Y=0..8
+    oled_draw_mini_text(2, mini_y, elapsed_str);
+
+    int total_w = text_width_px(total_str);
+    oled_draw_mini_text(126 - total_w, mini_y, total_str);
+
+    // Título da música
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    char safe_title[128];
+    sanitize_for_display(now_playing->title, safe_title, sizeof(safe_title));
+    int elapsed_w = text_width_px(elapsed_str);
+    int title_x0 = 2 + elapsed_w + 3;
+    int title_x1 = 126 - total_w - 3;
+    int title_area_w = title_x1 - title_x0;
+
+    if (title_area_w > 0) {
+        int title_w = u8g2_GetStrWidth(&s_u8g2, safe_title);
+        u8g2_SetClipWindow(&s_u8g2, title_x0, 0, title_x1, 8);
+        if (title_w <= title_area_w) {
+            int tx = title_x0 + (title_area_w - title_w) / 2;
+            u8g2_DrawStr(&s_u8g2, tx, 6, safe_title);
+        } else {
+            draw_marquee_width(&s_list_topbar_marquee, safe_title, title_x0, title_area_w, 6, 1);
+        }
+        u8g2_SetMaxClipWindow(&s_u8g2);
+    }
+    u8g2_SetDrawColor(&s_u8g2, 1);
+}
+
+// -------------------------------------------------------------------------
+// ÍCONES ANIMADOS DO MENU PRINCIPAL (Área Segura: X in [42, 108], Y in [14, 60])
+// -------------------------------------------------------------------------
+
+static void draw_animated_play_icon(int frame)
+{
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // 1. Linha de base tática em Y=58
+    u8g2_DrawHLine(&s_u8g2, 48, 58, 56);
+
+    // 2. 11 Barras de espectro sonoro altas e densas (3px largura, 2px gap) com Peak-Hold flutuante
+    // Cobrem horizontalmente de X=49 a X=103 (largura total 53px, perfeitamente centrada em CX=76)
+    // Alturas de 12px a 40px (atingindo Y=17, com 9px limpos de respiro abaixo da topbar)
+    static const uint8_t s_heights[16][11] = {
+        { 14, 22, 32, 38, 28, 40, 34, 38, 26, 18, 12 },
+        { 18, 28, 36, 32, 36, 34, 38, 32, 30, 24, 16 },
+        { 24, 34, 40, 26, 38, 28, 32, 26, 34, 28, 20 },
+        { 28, 38, 32, 20, 32, 22, 26, 20, 38, 32, 24 },
+        { 34, 40, 24, 16, 26, 18, 22, 16, 32, 36, 28 },
+        { 38, 32, 18, 12, 20, 14, 18, 22, 26, 38, 32 },
+        { 32, 24, 14, 18, 16, 20, 24, 28, 20, 32, 36 },
+        { 26, 18, 20, 24, 22, 26, 30, 34, 16, 26, 30 },
+        { 20, 14, 26, 30, 28, 32, 36, 38, 14, 20, 24 },
+        { 16, 20, 32, 36, 34, 38, 40, 32, 20, 16, 18 },
+        { 12, 26, 38, 40, 38, 40, 34, 26, 26, 14, 14 },
+        { 16, 32, 40, 34, 40, 34, 28, 20, 32, 20, 12 },
+        { 22, 38, 34, 28, 34, 28, 22, 16, 36, 26, 16 },
+        { 28, 40, 28, 22, 28, 22, 18, 22, 40, 32, 22 },
+        { 32, 34, 22, 16, 22, 18, 24, 28, 34, 38, 26 },
+        { 22, 28, 16, 22, 18, 24, 30, 34, 28, 30, 18 },
+    };
+
+    int f_idx = s_menu_anim_enabled ? (frame % 16) : 0;
+    int x_start = 49;
+    int base_y = 57;
+
+    for (int i = 0; i < 11; i++) {
+        int h = s_heights[f_idx][i];
+        int bx = x_start + i * 5;
+        u8g2_DrawBox(&s_u8g2, bx, base_y - h, 3, h);
+        int peak_y = base_y - h - 3;
+        if (peak_y >= 12) {
+            u8g2_DrawHLine(&s_u8g2, bx, peak_y, 3);
+        }
+    }
+
+    // 3. Triângulo Play central: interior apagado em 0 (recorta as barras) e borda delimitada em 1
+    // Centralizado visualmente em CX=76, CY=37, altura=23px, base=19px
+    int play_x0 = 67;
+    int play_cy = 37;
+    int play_h = 23;
+    int half_h = play_h / 2;
+    int w_total = 19;
+
+    // Passo A: Preenche o interior do triângulo com cor 0 (preto), apagando as barras que passam por trás
+    u8g2_SetDrawColor(&s_u8g2, 0);
+    for (int r = 0; r < play_h; r++) {
+        int dy = abs(r - half_h);
+        int w = (int)roundf((float)w_total * (1.0f - ((float)dy / (float)(half_h + 1))));
+        if (w < 1) w = 1;
+        int y = (play_cy - half_h) + r;
+        u8g2_DrawHLine(&s_u8g2, play_x0, y, w);
+    }
+
+    // Passo B: Delimita a borda do triângulo com cor 1 (branco sólido)
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    // Linha vertical base
+    u8g2_DrawVLine(&s_u8g2, play_x0, play_cy - half_h, play_h);
+    // Arestas diagonais superior e inferior
+    for (int r = 0; r < play_h; r++) {
+        int dy = abs(r - half_h);
+        int w = (int)roundf((float)w_total * (1.0f - ((float)dy / (float)(half_h + 1))));
+        int y = (play_cy - half_h) + r;
+        u8g2_DrawPixel(&s_u8g2, play_x0 + w - 1, y);
+    }
+}
+
+static void draw_animated_wifi_icon(int frame)
+{
+    int fr = s_menu_anim_enabled ? (frame % MENU_WIFI_FRAMES) : 0;
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    if (menu_wifi_frames[fr]) {
+        u8g2_DrawXBMP(&s_u8g2, 43, 8, 64, 64, menu_wifi_frames[fr]);
+    } else {
+        u8g2_DrawXBMP(&s_u8g2, 43, 17, 64, 46, menu_wifi_big_bits);
+    }
+}
+
+static void draw_animated_bt_icon(int frame)
+{
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // 1. Runa Bluetooth oficial 32x32 perfeitamente proporcionada
+    static const uint8_t s_bt_rune_bits[] = {
+        0x00, 0x1c, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x00,
+        0x00, 0x7c, 0x00, 0x00, 0x00, 0xfc, 0x01, 0x00,
+        0x00, 0xfc, 0x03, 0x00, 0x00, 0xfc, 0x0f, 0x00,
+        0x00, 0xbc, 0x1f, 0x00, 0x00, 0x3c, 0x3f, 0x00,
+        0xc0, 0x3c, 0xfc, 0x00, 0xe0, 0x3d, 0xf8, 0x01,
+        0xe0, 0x3f, 0xf8, 0x01, 0xc0, 0x3f, 0xfc, 0x00,
+        0x80, 0x3f, 0x3f, 0x00, 0x00, 0xbf, 0x1f, 0x00,
+        0x00, 0xfe, 0x07, 0x00, 0x00, 0xfc, 0x03, 0x00,
+        0x00, 0xfc, 0x03, 0x00, 0x00, 0xfe, 0x07, 0x00,
+        0x00, 0xbf, 0x1f, 0x00, 0x80, 0x3f, 0x3f, 0x00,
+        0xc0, 0x3f, 0xfc, 0x00, 0xe0, 0x3f, 0xf8, 0x01,
+        0xe0, 0x3d, 0xf8, 0x01, 0xc0, 0x3c, 0xfc, 0x00,
+        0x00, 0x3c, 0x3f, 0x00, 0x00, 0xbc, 0x1f, 0x00,
+        0x00, 0xfc, 0x0f, 0x00, 0x00, 0xfc, 0x03, 0x00,
+        0x00, 0xfc, 0x01, 0x00, 0x00, 0x7c, 0x00, 0x00,
+        0x00, 0x3c, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00,
+    };
+    u8g2_DrawXBMP(&s_u8g2, 60, 20, 32, 32, s_bt_rune_bits);
+
+    // 2. 4 Ondas de rádio contínuas e perfeitamente simétricas irradiando de cada lado
+    int cx = 74;
+    int cy = 36;
+    int wave_phase = s_menu_anim_enabled ? ((frame / 3) % 5) : 3;
+    static const int s_bt_radii[4] = { 14, 19, 24, 29 };
+
+    for (int w = 0; w < 4; w++) {
+        if (w <= wave_phase) {
+            int r = s_bt_radii[w];
+            // Abertura angular de ~68° (dy máximo = r * sin(34°))
+            int max_dy = (int)(r * 0.559f + 0.5f);
+            int r2 = r * r;
+            for (int dy = -max_dy; dy <= max_dy; dy++) {
+                int dx = (int)(sqrtf((float)(r2 - dy * dy)) + 0.5f);
+                int ry = cy + dy;
+                if (ry >= 12 && ry <= 60) {
+                    int rx = cx + dx;
+                    int lx = cx - dx;
+                    if (rx >= 43 && rx <= 110) {
+                        u8g2_DrawPixel(&s_u8g2, rx, ry);
+                    }
+                    if (lx >= 43 && lx <= 110) {
+                        u8g2_DrawPixel(&s_u8g2, lx, ry);
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void draw_animated_conf_icon(int frame)
+{
+    int fr = s_menu_anim_enabled ? (frame % MENU_CONF_FRAMES) : 0;
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    if (menu_conf_frames[fr]) {
+        u8g2_DrawXBMP(&s_u8g2, 50, 12, MENU_CONF_W, MENU_CONF_H, menu_conf_frames[fr]);
+    }
+}
+
+// Árvore Clássica USB extraída em fidelidade matemática 100% da arte em pixels do usuário
+// Dimensões: 24x49 px, X=63, Y=11
+// O interior do quadrado em (83, 21) foi desmarcado no bitmap para rotação vetorial fluida
+static const uint8_t s_usb_tree_chassis_xbm[] = {
+    0x00, 0x08, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x3e, 0x00, 0x00, 0x7f, 0x00,
+    0x80, 0xff, 0x00, 0x00, 0x08, 0x00, 0x00, 0x08, 0x00, 0x00, 0x08, 0x00,
+    0x00, 0x08, 0x00, 0x00, 0x08, 0x00, 0x00, 0x08, 0x00, 0x00, 0x08, 0x00,
+    0x00, 0x08, 0x00, 0x1c, 0x08, 0x00, 0x3e, 0x08, 0x10, 0x7f, 0x08, 0x10,
+    0x7f, 0x08, 0x10, 0x7f, 0x0c, 0x10, 0x3e, 0x0c, 0x10, 0x1c, 0x0c, 0x10,
+    0x08, 0x0c, 0x18, 0x08, 0x0c, 0x18, 0x08, 0x0c, 0x0c, 0x08, 0x0c, 0x06,
+    0x08, 0x0c, 0x03, 0x08, 0x8c, 0x01, 0x18, 0xcc, 0x00, 0x18, 0x6c, 0x00,
+    0x30, 0x3c, 0x00, 0x60, 0x1c, 0x00, 0xc0, 0x0c, 0x00, 0x80, 0x0d, 0x00,
+    0x00, 0x0f, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x0c, 0x00,
+    0x00, 0x0c, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x0c, 0x00,
+    0x00, 0x0c, 0x00, 0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x80, 0xff, 0x00,
+    0x80, 0xff, 0x00, 0x80, 0xff, 0x00, 0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00,
+    0x00, 0x1c, 0x00,
+};
+
+static const int8_t s_usb_sq_corners[16][4][2] = {
+    { {80, 18}, {86, 18}, {86, 24}, {80, 24} }, // Frame 0
+    { {81, 17}, {87, 19}, {85, 25}, {79, 23} }, // Frame 1
+    { {83, 17}, {87, 21}, {83, 25}, {79, 21} }, // Frame 2
+    { {85, 17}, {87, 23}, {81, 25}, {79, 19} }, // Frame 3
+    { {86, 18}, {86, 24}, {80, 24}, {80, 18} }, // Frame 4
+    { {87, 19}, {85, 25}, {79, 23}, {81, 17} }, // Frame 5
+    { {87, 21}, {83, 25}, {79, 21}, {83, 17} }, // Frame 6
+    { {87, 23}, {81, 25}, {79, 19}, {85, 17} }, // Frame 7
+    { {86, 24}, {80, 24}, {80, 18}, {86, 18} }, // Frame 8
+    { {85, 25}, {79, 23}, {81, 17}, {87, 19} }, // Frame 9
+    { {83, 25}, {79, 21}, {83, 17}, {87, 21} }, // Frame 10
+    { {81, 25}, {79, 19}, {85, 17}, {87, 23} }, // Frame 11
+    { {80, 24}, {80, 18}, {86, 18}, {86, 24} }, // Frame 12
+    { {79, 23}, {81, 17}, {87, 19}, {85, 25} }, // Frame 13
+    { {79, 21}, {83, 17}, {87, 21}, {83, 25} }, // Frame 14
+    { {79, 19}, {85, 17}, {87, 23}, {81, 25} }, // Frame 15
+};
+
+static const int8_t s_usb_orbit_pts[16][2][2] = {
+    { {71, 27}, {61, 27} }, // Frame 0
+    { {71, 25}, {61, 29} }, // Frame 1
+    { {70, 23}, {62, 31} }, // Frame 2
+    { {68, 22}, {64, 32} }, // Frame 3
+    { {66, 22}, {66, 32} }, // Frame 4
+    { {64, 22}, {68, 32} }, // Frame 5
+    { {62, 23}, {70, 31} }, // Frame 6
+    { {61, 25}, {71, 29} }, // Frame 7
+    { {61, 27}, {71, 27} }, // Frame 8
+    { {61, 29}, {71, 25} }, // Frame 9
+    { {62, 31}, {70, 23} }, // Frame 10
+    { {64, 32}, {68, 22} }, // Frame 11
+    { {66, 32}, {66, 22} }, // Frame 12
+    { {68, 32}, {64, 22} }, // Frame 13
+    { {70, 31}, {62, 23} }, // Frame 14
+    { {71, 29}, {61, 25} }, // Frame 15
+};
+
+static void draw_animated_usb_icon(int frame)
+{
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // 1. Chassi Clássico da Árvore USB (Base exata do usuário)
+    u8g2_DrawXBMP(&s_u8g2, 63, 11, 24, 49, s_usb_tree_chassis_xbm);
+
+    if (!s_menu_anim_enabled) {
+        // Modo estático: desenha o quadrado sólido original
+        u8g2_DrawBox(&s_u8g2, 80, 18, 7, 7);
+        return;
+    }
+
+    int f = frame % 16;
+
+    // 2. Cinética do Quadrado Direito: rotação 360° em torno do eixo
+    const int8_t (*c)[2] = s_usb_sq_corners[f];
+    for (int i = 0; i < 4; i++) {
+        int next = (i + 1) % 4;
+        u8g2_DrawLine(&s_u8g2, c[i][0], c[i][1], c[next][0], c[next][1]);
+    }
+    u8g2_DrawPixel(&s_u8g2, 83, 21); // Pivô central
+
+    // 3. Cinética do Círculo Esquerdo: satélites em órbita contínua
+    u8g2_DrawPixel(&s_u8g2, s_usb_orbit_pts[f][0][0], s_usb_orbit_pts[f][0][1]);
+    u8g2_DrawPixel(&s_u8g2, s_usb_orbit_pts[f][1][0], s_usb_orbit_pts[f][1][1]);
+
+    // 4. Fluxo de Pacotes / Cometas nas Trilhas
+    if (f <= 1) {
+        // Flash na base circular
+        u8g2_SetDrawColor(&s_u8g2, 0);
+        u8g2_DrawPixel(&s_u8g2, 74, 55);
+        u8g2_SetDrawColor(&s_u8g2, 1);
+        u8g2_DrawPixel(&s_u8g2, 73, 55);
+        u8g2_DrawPixel(&s_u8g2, 75, 55);
+    } else if (f >= 2 && f <= 4) {
+        // Pulso subindo pelo tronco central
+        int ty = 51 - (f - 2) * 5;
+        u8g2_SetDrawColor(&s_u8g2, 0);
+        u8g2_DrawPixel(&s_u8g2, 74, ty);
+        u8g2_DrawPixel(&s_u8g2, 75, ty);
+        u8g2_SetDrawColor(&s_u8g2, 1);
+        u8g2_DrawPixel(&s_u8g2, 73, ty);
+        u8g2_DrawPixel(&s_u8g2, 76, ty);
+    } else if (f >= 5 && f <= 7) {
+        // Três vias simultâneas
+        int cy = 35 - (f - 5) * 8;
+        if (cy >= 16 && cy <= 35) {
+            u8g2_SetDrawColor(&s_u8g2, 0);
+            u8g2_DrawPixel(&s_u8g2, 74, cy);
+            u8g2_SetDrawColor(&s_u8g2, 1);
+            u8g2_DrawPixel(&s_u8g2, 73, cy);
+            u8g2_DrawPixel(&s_u8g2, 75, cy);
+        }
+        if (f == 5) {
+            u8g2_SetDrawColor(&s_u8g2, 0); u8g2_DrawPixel(&s_u8g2, 71, 39);
+            u8g2_SetDrawColor(&s_u8g2, 1); u8g2_DrawPixel(&s_u8g2, 70, 39);
+            u8g2_SetDrawColor(&s_u8g2, 0); u8g2_DrawPixel(&s_u8g2, 77, 37);
+            u8g2_SetDrawColor(&s_u8g2, 1); u8g2_DrawPixel(&s_u8g2, 78, 37);
+        } else if (f == 6) {
+            u8g2_SetDrawColor(&s_u8g2, 0); u8g2_DrawPixel(&s_u8g2, 67, 34);
+            u8g2_SetDrawColor(&s_u8g2, 1); u8g2_DrawPixel(&s_u8g2, 66, 34);
+            u8g2_SetDrawColor(&s_u8g2, 0); u8g2_DrawPixel(&s_u8g2, 81, 33);
+            u8g2_SetDrawColor(&s_u8g2, 1); u8g2_DrawPixel(&s_u8g2, 82, 33);
+        } else if (f == 7) {
+            u8g2_SetDrawColor(&s_u8g2, 0); u8g2_DrawPixel(&s_u8g2, 66, 29);
+            u8g2_SetDrawColor(&s_u8g2, 1); u8g2_DrawPixel(&s_u8g2, 65, 29); u8g2_DrawPixel(&s_u8g2, 67, 29);
+            u8g2_SetDrawColor(&s_u8g2, 0); u8g2_DrawPixel(&s_u8g2, 84, 26);
+            u8g2_SetDrawColor(&s_u8g2, 1); u8g2_DrawPixel(&s_u8g2, 83, 26); u8g2_DrawPixel(&s_u8g2, 85, 26);
+        }
+    }
+
+    // 5. Ondas de Choque de Ressonância (Impacto nos Terminais)
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    if (f == 8) {
+        u8g2_DrawCircle(&s_u8g2, 66, 27, 4, U8G2_DRAW_ALL);
+        u8g2_DrawFrame(&s_u8g2, 83 - 4, 21 - 4, 9, 9);
+        u8g2_DrawPixel(&s_u8g2, 74, 10);
+    } else if (f == 9) {
+        u8g2_DrawCircle(&s_u8g2, 66, 27, 5, U8G2_DRAW_ALL);
+        u8g2_DrawFrame(&s_u8g2, 83 - 5, 21 - 5, 11, 11);
+        u8g2_DrawPixel(&s_u8g2, 74, 9);
+        u8g2_DrawPixel(&s_u8g2, 73, 9);
+        u8g2_DrawPixel(&s_u8g2, 75, 9);
+    } else if (f == 10) {
+        u8g2_DrawPixel(&s_u8g2, 74, 9);
+    }
+
+    u8g2_SetDrawColor(&s_u8g2, 1);
+}
+
+static void draw_animated_games_icon(int frame)
+{
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Moldura estilo Console / Arcade Split-Screen (59x48 px, centralizada em X=50..108, Y=12..59)
+    u8g2_DrawFrame(&s_u8g2, 50, 12, 59, 48);
+    // Cantos chanfrados do monitor
+    u8g2_SetDrawColor(&s_u8g2, 0);
+    u8g2_DrawPixel(&s_u8g2, 50, 12);
+    u8g2_DrawPixel(&s_u8g2, 108, 12);
+    u8g2_DrawPixel(&s_u8g2, 50, 59);
+    u8g2_DrawPixel(&s_u8g2, 108, 59);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_DrawPixel(&s_u8g2, 51, 13);
+    u8g2_DrawPixel(&s_u8g2, 107, 13);
+    u8g2_DrawPixel(&s_u8g2, 51, 58);
+    u8g2_DrawPixel(&s_u8g2, 107, 58);
+
+    // Linha de cabeçalho do monitor
+    u8g2_DrawHLine(&s_u8g2, 53, 15, 53);
+
+    // Divisória pontilhada central separando Tetris (esquerda) e Game of Life (direita)
+    for (int y = 16; y <= 57; y++) {
+        if (y % 3 != 0) {
+            u8g2_DrawPixel(&s_u8g2, 79, y);
+        }
+    }
+
+    // =========================================================
+    // 1. TETRIS (Lado Esquerdo: X = 53..78)
+    // =========================================================
+    // Pilha de blocos estáticos na base com visual vazado clássico (células 4x4)
+    // Linha inferior (Y = 54..57)
+    static const uint8_t row1_cols[] = { 0, 1, 3, 4, 5 };
+    for (int i = 0; i < 5; i++) {
+        int bx = 53 + row1_cols[i] * 4;
+        u8g2_DrawBox(&s_u8g2, bx, 54, 4, 4);
+        u8g2_SetDrawColor(&s_u8g2, 0);
+        u8g2_DrawPixel(&s_u8g2, bx + 1, 55);
+        u8g2_SetDrawColor(&s_u8g2, 1);
+    }
+    // Segunda linha (Y = 50..53)
+    static const uint8_t row2_cols[] = { 0, 1, 4 };
+    for (int i = 0; i < 3; i++) {
+        int bx = 53 + row2_cols[i] * 4;
+        u8g2_DrawBox(&s_u8g2, bx, 50, 4, 4);
+        u8g2_SetDrawColor(&s_u8g2, 0);
+        u8g2_DrawPixel(&s_u8g2, bx + 1, 51);
+        u8g2_SetDrawColor(&s_u8g2, 1);
+    }
+    // Terceira linha (Y = 46..49)
+    u8g2_DrawBox(&s_u8g2, 53, 46, 4, 4);
+    u8g2_SetDrawColor(&s_u8g2, 0);
+    u8g2_DrawPixel(&s_u8g2, 54, 47);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Peça em queda animada (alterna peça T e peça J)
+    if (s_menu_anim_enabled) {
+        int piece_type = (frame / 12) % 2;
+        int drop = 17 + ((frame * 3) % 27);
+        if (piece_type == 0) {
+            // Peça T descendo na coluna central
+            u8g2_DrawBox(&s_u8g2, 61, drop, 4, 4);
+            u8g2_DrawBox(&s_u8g2, 65, drop, 4, 4);
+            u8g2_DrawBox(&s_u8g2, 69, drop, 4, 4);
+            u8g2_DrawBox(&s_u8g2, 65, drop + 4, 4, 4);
+            u8g2_SetDrawColor(&s_u8g2, 0);
+            u8g2_DrawPixel(&s_u8g2, 62, drop + 1);
+            u8g2_DrawPixel(&s_u8g2, 66, drop + 1);
+            u8g2_DrawPixel(&s_u8g2, 70, drop + 1);
+            u8g2_DrawPixel(&s_u8g2, 66, drop + 5);
+            u8g2_SetDrawColor(&s_u8g2, 1);
+        } else {
+            // Peça J descendo
+            u8g2_DrawBox(&s_u8g2, 65, drop, 4, 4);
+            u8g2_DrawBox(&s_u8g2, 65, drop + 4, 4, 4);
+            u8g2_DrawBox(&s_u8g2, 65, drop + 8, 4, 4);
+            u8g2_DrawBox(&s_u8g2, 61, drop + 8, 4, 4);
+            u8g2_SetDrawColor(&s_u8g2, 0);
+            u8g2_DrawPixel(&s_u8g2, 66, drop + 1);
+            u8g2_DrawPixel(&s_u8g2, 66, drop + 5);
+            u8g2_DrawPixel(&s_u8g2, 66, drop + 9);
+            u8g2_DrawPixel(&s_u8g2, 62, drop + 9);
+            u8g2_SetDrawColor(&s_u8g2, 1);
+        }
+    } else {
+        // Modo estático: T estático
+        u8g2_DrawBox(&s_u8g2, 61, 28, 4, 4);
+        u8g2_DrawBox(&s_u8g2, 65, 28, 4, 4);
+        u8g2_DrawBox(&s_u8g2, 69, 28, 4, 4);
+        u8g2_DrawBox(&s_u8g2, 65, 32, 4, 4);
+    }
+
+    // =========================================================
+    // 2. GAME OF LIFE (Lado Direito: X = 81..106)
+    // =========================================================
+    // Glider autônomo viajando diagonalmente pela tela
+    static const int8_t s_glider_shapes[4][5][2] = {
+        { {1,0}, {2,1}, {0,2}, {1,2}, {2,2} },
+        { {0,1}, {2,1}, {1,2}, {2,2}, {1,3} },
+        { {2,0}, {0,1}, {2,1}, {1,2}, {2,2} },
+        { {1,0}, {2,1}, {0,2}, {1,2}, {2,2} }
+    };
+    int g_phase = s_menu_anim_enabled ? ((frame / 2) % 4) : 0;
+    int g_step  = s_menu_anim_enabled ? ((frame / 2) % 6) : 2;
+    int g_x0 = 82 + g_step * 2;
+    int g_y0 = 19 + g_step * 3;
+
+    for (int i = 0; i < 5; i++) {
+        int cx = g_x0 + s_glider_shapes[g_phase][i][0] * 3;
+        int cy = g_y0 + s_glider_shapes[g_phase][i][1] * 3;
+        if (cx >= 82 && cx <= 104 && cy >= 17 && cy <= 45) {
+            u8g2_DrawBox(&s_u8g2, cx, cy, 2, 2);
+        }
+    }
+
+    // Bloco estável 2x2 (Still Life) no canto inferior direito
+    u8g2_DrawBox(&s_u8g2, 101, 51, 2, 2);
+    u8g2_DrawBox(&s_u8g2, 104, 51, 2, 2);
+    u8g2_DrawBox(&s_u8g2, 101, 54, 2, 2);
+    u8g2_DrawBox(&s_u8g2, 104, 54, 2, 2);
+
+    // Oscilador Blinker no rodapé direito
+    if ((frame / 2) % 2 == 0) {
+        u8g2_DrawBox(&s_u8g2, 84, 53, 2, 2);
+        u8g2_DrawBox(&s_u8g2, 87, 53, 2, 2);
+        u8g2_DrawBox(&s_u8g2, 90, 53, 2, 2);
+    } else {
+        u8g2_DrawBox(&s_u8g2, 87, 50, 2, 2);
+        u8g2_DrawBox(&s_u8g2, 87, 53, 2, 2);
+        u8g2_DrawBox(&s_u8g2, 87, 56, 2, 2);
+    }
+}
+
+static void draw_animated_chrono_icon(int frame)
+{
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Centro do mostrador circular vintage: CX = 75, CY = 42, Raio R = 17
+    // Proporciona 8 pixels limpos de folga abaixo da topbar (Y=8) e 4 pixels na base (Y=63)
+    int cx = 75;
+    int cy = 42;
+    int r = 17;
+
+    // 1. Coroa superior vintage (haste e botao central)
+    // Haste de fixação
+    u8g2_DrawBox(&s_u8g2, cx - 2, cy - r - 2, 5, 3);
+    // Botão / coroa
+    u8g2_DrawBox(&s_u8g2, cx - 4, cy - r - 5, 9, 3);
+    // Anel / alça de bolso no topo (topo em Y = 16, folga de 8 px da barra superior)
+    u8g2_DrawCircle(&s_u8g2, cx, cy - r - 5, 4, U8G2_DRAW_UPPER_RIGHT | U8G2_DRAW_UPPER_LEFT);
+
+    // 2. Botão lateral de Lap a 45 graus (canto superior direito)
+    u8g2_DrawLine(&s_u8g2, cx + 12, cy - 12, cx + 15, cy - 15);
+    u8g2_DrawLine(&s_u8g2, cx + 13, cy - 11, cx + 16, cy - 14);
+
+    // 3. Mostrador circular duplo do cronometro
+    u8g2_DrawCircle(&s_u8g2, cx, cy, r, U8G2_DRAW_ALL);
+    u8g2_DrawCircle(&s_u8g2, cx, cy, r - 2, U8G2_DRAW_ALL);
+
+    // 4. Marcadores de segundos nos quadrantes principais (12, 3, 6, 9)
+    u8g2_DrawVLine(&s_u8g2, cx, cy - r + 3, 3); // 12h
+    u8g2_DrawHLine(&s_u8g2, cx + r - 5, cy, 3); // 3h
+    u8g2_DrawVLine(&s_u8g2, cx, cy + r - 5, 3); // 6h
+    u8g2_DrawHLine(&s_u8g2, cx - r + 3, cy, 3); // 9h
+
+    // 5. Sub-mostrador pequeno de minutos em CX=75, CY=cy-5 (raio 4)
+    u8g2_DrawCircle(&s_u8g2, cx, cy - 5, 4, U8G2_DRAW_ALL);
+    int mini_angle = (frame * 6) % 360;
+    int mx = cx + fast_scale_trig(3, fast_sin_q10(mini_angle));
+    int my = (cy - 5) - fast_scale_trig(3, fast_cos_q10(mini_angle));
+    u8g2_DrawLine(&s_u8g2, cx, cy - 5, mx, my);
+
+    // 6. Pivô central
+    u8g2_DrawDisc(&s_u8g2, cx, cy, 2, U8G2_DRAW_ALL);
+
+    // 7. Ponteiro principal rotativo animado (varre 360 graus suavemente)
+    int angle_deg = s_menu_anim_enabled ? ((frame * 15) % 360) : 300;
+    int sin_q10 = fast_sin_q10(angle_deg);
+    int cos_q10 = fast_cos_q10(angle_deg);
+    int hx = cx + fast_scale_trig(12, sin_q10);
+    int hy = cy - fast_scale_trig(12, cos_q10);
+    int tx = cx - fast_scale_trig(4, sin_q10);
+    int ty = cy + fast_scale_trig(4, cos_q10);
+
+    u8g2_DrawLine(&s_u8g2, tx, ty, hx, hy);
+}
+
+void oled_display_show_main_menu(int cursor, const playback_state_t *now_playing)
+{
     if (!s_ready) return;
 
     if (cursor < 0) cursor = 0;
-    if (cursor > 5) cursor = 5;
+    if (cursor > 6) cursor = 6;
 
     u8g2_ClearBuffer(&s_u8g2);
     u8g2_SetFontMode(&s_u8g2, 1);
     u8g2_SetBitmapMode(&s_u8g2, 1);
     u8g2_SetDrawColor(&s_u8g2, 1);
 
+    bool show_topbar = now_playing && (now_playing->track_loaded || now_playing->playing);
+    if (show_topbar) {
+        draw_main_menu_topbar(now_playing);
+    }
+
+    // 1. Ícones Animados Centrais (Área Segura: X in [42, 108], Y in [14, 60])
     switch (cursor) {
-        case 0: // Player
-            // Icone estatico do Player (128x64, 4bpp)
-            u8g2_DrawXBMP(&s_u8g2, 32, 0, MENU_PLAYER_W, MENU_PLAYER_H, menu_player_bits);
-            // play
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont22_tr);
-            u8g2_DrawStr(&s_u8g2, 1, 39, "Play");
-            // wifi
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont15_tr);
-            u8g2_DrawStr(&s_u8g2, 7, 53, "Wifi");
-            // BT
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont10_tr);
-            u8g2_DrawStr(&s_u8g2, 10, 62, "BT");
+        case 0: // Play (Equalizador de Espectro Cyberpunk + Triângulo Play)
+            draw_animated_play_icon(s_menu_anim_tick);
             break;
+        case 1: // WiFi (Animação de Ondas de Rádio 64x64 em loop)
+            draw_animated_wifi_icon(s_menu_anim_tick);
+            break;
+        case 2: // Bluetooth (Runa Central + Ondas de Rádio Irradiando)
+            draw_animated_bt_icon(s_menu_anim_tick);
+            break;
+        case 3: // Conf (Engrenagens Mecânicas Rotativas Sincronizadas)
+            draw_animated_conf_icon(s_menu_anim_tick);
+            break;
+        case 4: // USB (Tridente USB com Fluxo de Dados)
+            draw_animated_usb_icon(s_menu_anim_tick);
+            break;
+        case 5: // Games (Console Arcade: Tetris + Conway's Game of Life)
+            draw_animated_games_icon(s_menu_anim_tick);
+            break;
+        case 6: // Chrono (Cronômetro Clássico Vintage com Ponteiro Rotativo)
+            draw_animated_chrono_icon(s_menu_anim_tick);
+            break;
+    }
 
-        case 1: // WiFi
-            // Animacao WiFi (64x64)
-            u8g2_DrawXBMP(&s_u8g2, 64, -1, MENU_WIFI_W, MENU_WIFI_H,
-                          menu_wifi_frames[wifi_frame]);
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont22_tr);
-            u8g2_DrawStr(&s_u8g2, 1, 39, "Wifi");
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont15_tr);
-            u8g2_DrawStr(&s_u8g2, 7, 53, "BT");
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont10_tr);
-            u8g2_DrawStr(&s_u8g2, 12, 64, "Conf");
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont15_tr);
-            u8g2_DrawStr(&s_u8g2, 7, 18, "Play");
-            break;
+    // 2. Carrossel circular à esquerda com Tag Chanfrada
+    static const char *s_menu_labels[7] = {
+        "Play", "Wifi", "BT", "Conf", "USB", "Games", "Chrono"
+    };
 
-        case 2: // Bluetooth
-            // Emblema Bluetooth renderizado geometricamente com precisao
-            u8g2_DrawCircle(&s_u8g2, 94, 31, 27, U8G2_DRAW_ALL);
-            u8g2_DrawCircle(&s_u8g2, 94, 31, 26, U8G2_DRAW_ALL);
-            for (int d = -1; d <= 1; d++) {
-                u8g2_DrawLine(&s_u8g2, 94 + d, 14, 94 + d, 48);
-                u8g2_DrawLine(&s_u8g2, 94 + d, 14, 105 + d, 23);
-                u8g2_DrawLine(&s_u8g2, 105 + d, 23, 83 + d, 39);
-                u8g2_DrawLine(&s_u8g2, 83 + d, 23, 105 + d, 39);
-                u8g2_DrawLine(&s_u8g2, 105 + d, 39, 94 + d, 48);
-            }
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont22_tr);
-            u8g2_DrawStr(&s_u8g2, 2, 37, "BT");
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont15_tr);
-            u8g2_DrawStr(&s_u8g2, 9, 20, "Wifi");
-            u8g2_DrawStr(&s_u8g2, 7, 53, "Conf");
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont10_tr);
-            u8g2_DrawStr(&s_u8g2, 9, 6, "Play");
-            u8g2_DrawStr(&s_u8g2, 12, 62, "USB");
-            break;
+    int prev_idx  = (cursor - 1 + 7) % 7;
+    int cur_idx   = cursor;
+    int next_idx  = (cursor + 1) % 7;
+    int next2_idx = (cursor + 2) % 7;
 
-        case 3: // Conf (chave inglesa)
-            // Animacao Conf (64x64)
-            u8g2_DrawXBMP(&s_u8g2, 62, 2, MENU_CONF_W, MENU_CONF_H,
-                          menu_conf_frames[conf_frame]);
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont22_tr);
-            u8g2_DrawStr(&s_u8g2, 0, 37, "Conf");
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont15_tr);
-            u8g2_DrawStr(&s_u8g2, 9, 20, "BT");
-            u8g2_DrawStr(&s_u8g2, 11, 53, "USB");
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont10_tr);
-            u8g2_DrawStr(&s_u8g2, 9, 6, "Wifi");
-            u8g2_DrawStr(&s_u8g2, 12, 62, "Life");
-            break;
+    u8g2_SetFont(&s_u8g2, u8g2_font_helvB08_tr);
 
-        case 4: // USB
-            u8g2_DrawXBMP(&s_u8g2, 25, 4, MENU_USB_W, MENU_USB_H, menu_usb_bits);
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont22_tr);
-            u8g2_DrawStr(&s_u8g2, 5, 37, "USB");
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont10_tr);
-            u8g2_DrawStr(&s_u8g2, 12, 8, "BT");
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont15_tr);
-            u8g2_DrawStr(&s_u8g2, 9, 20, "Conf");
-            u8g2_DrawStr(&s_u8g2, 8, 53, "Life");
-            break;
+    // Item -1 (anterior): baseline Y = 21
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_DrawStr(&s_u8g2, 4, 21, s_menu_labels[prev_idx]);
 
-        case 5: // Game of Life
-            u8g2_DrawXBMP(&s_u8g2, 62, 0, MENU_GAME_W, MENU_GAME_H,
-                          menu_game_frames[game_frame]);
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont22_tr);
-            u8g2_DrawStr(&s_u8g2, 0, 37, "Life");
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont15_tr);
-            u8g2_DrawStr(&s_u8g2, 13, 20, "USB");
-            u8g2_SetFont(&s_u8g2, u8g2_font_profont10_tr);
-            u8g2_DrawStr(&s_u8g2, 13, 7, "Conf");
-            break;
-        }
+    // Item 0 (selecionado): tag chanfrada Y = 26..37 (altura 12)
+    const char *sel_text = s_menu_labels[cur_idx];
+    int sel_w = u8g2_GetStrWidth(&s_u8g2, sel_text);
+    int tag_w = sel_w + 8;
+    if (tag_w < 28) tag_w = 28;
+
+    draw_menu_chamfered_tag(0, 26, tag_w, 12);
+
+    u8g2_SetFontMode(&s_u8g2, 1);
+    u8g2_SetDrawColor(&s_u8g2, 2); // XOR
+    u8g2_DrawStr(&s_u8g2, 4, 35, sel_text);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Item +1 (próximo): baseline Y = 49
+    u8g2_DrawStr(&s_u8g2, 4, 49, s_menu_labels[next_idx]);
+
+    // Item +2 (segundo próximo): baseline Y = 61
+    u8g2_DrawStr(&s_u8g2, 3, 61, s_menu_labels[next2_idx]);
+
+    // 3. Rosa dos Ventos no quadrante direito (122, 48)
+    // Cima, Baixo, Direita, Centro sempre válidos; Esquerda abre Now Playing
+    draw_nav_compass(122, 48, true, true, true, true, true);
+
+    // 4. Badge de Bateria [XX] no canto inferior direito (117, 55)
+    draw_battery_badge(117, 55, battery_get_percent());
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 // =========================================================================
@@ -1315,7 +2309,7 @@ void oled_display_show_wifi_idle(const char *ip, const char *mdns_host, bool dns
     u8g2_DrawStr(&s_u8g2, (128 - sw) / 2, 50, sub);
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_wifi_connected(const char *ip, const char *mdns_host, int rssi, int clients)
@@ -1369,7 +2363,7 @@ void oled_display_show_wifi_connected(const char *ip, const char *mdns_host, int
     u8g2_DrawStr(&s_u8g2, (128 - hint_w) / 2, 59, hint);
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_wifi_transfer(const char *filename, int file_pct, int overall_pct,
@@ -1472,7 +2466,7 @@ void oled_display_show_wifi_transfer(const char *filename, int file_pct, int ove
     u8g2_SetDrawColor(&s_u8g2, 1);
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_wifi_done(int files_received)
@@ -1495,7 +2489,7 @@ void oled_display_show_wifi_done(int files_received)
     u8g2_DrawStr(&s_u8g2, 57, 33, buf);
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 // =========================================================================
 // Tela do Equalizador (10 bandas + Geral)
@@ -1575,7 +2569,7 @@ void oled_display_show_eq(const float gains[11], int selected_band, bool eq_enab
     }
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 
@@ -1584,42 +2578,193 @@ static const uint8_t image_Battery_bits[] = {0x00,0x00,0x00,0x00,0x80,0x01,0xc0,
 static const uint8_t image_menu_settings_sliders_square_bits[] = {0x00,0x00,0x1e,0x00,0xf3,0x3f,0x1e,0x00,0x00,0x00,0x00,0x00,0x00,0x1e,0xff,0x33,0x00,0x1e,0x00,0x00,0x00,0x00,0x1e,0x00,0xf3,0x3f,0x1e,0x00,0x00,0x00,0x00,0x00};
 
 // =========================================================================
-// Telas de USB Sentinela
 // =========================================================================
+// Telas de USB Sentinela (S4: Colmeia Hexagonal Simétrica - Geometria 45°)
+// =========================================================================
+
+static void draw_crisp_arrow(int x, int y, int dir)
+{
+    if (dir == 1) { // UP (largura 7, altura 4)
+        u8g2_DrawHLine(&s_u8g2, x + 3, y, 1);
+        u8g2_DrawHLine(&s_u8g2, x + 2, y + 1, 3);
+        u8g2_DrawHLine(&s_u8g2, x + 1, y + 2, 5);
+        u8g2_DrawHLine(&s_u8g2, x,     y + 3, 7);
+    } else if (dir == 4) { // DOWN (largura 7, altura 4)
+        u8g2_DrawHLine(&s_u8g2, x,     y, 7);
+        u8g2_DrawHLine(&s_u8g2, x + 1, y + 1, 5);
+        u8g2_DrawHLine(&s_u8g2, x + 2, y + 2, 3);
+        u8g2_DrawHLine(&s_u8g2, x + 3, y + 3, 1);
+    } else if (dir == 3) { // LEFT (largura 4, altura 7)
+        u8g2_DrawPixel(&s_u8g2, x + 3, y);
+        u8g2_DrawHLine(&s_u8g2, x + 2, y + 1, 2);
+        u8g2_DrawHLine(&s_u8g2, x + 1, y + 2, 3);
+        u8g2_DrawHLine(&s_u8g2, x,     y + 3, 4);
+        u8g2_DrawHLine(&s_u8g2, x + 1, y + 4, 3);
+        u8g2_DrawHLine(&s_u8g2, x + 2, y + 5, 2);
+        u8g2_DrawPixel(&s_u8g2, x + 3, y + 6);
+    } else if (dir == 2) { // RIGHT (largura 4, altura 7)
+        u8g2_DrawPixel(&s_u8g2, x,     y);
+        u8g2_DrawHLine(&s_u8g2, x,     y + 1, 2);
+        u8g2_DrawHLine(&s_u8g2, x,     y + 2, 3);
+        u8g2_DrawHLine(&s_u8g2, x,     y + 3, 4);
+        u8g2_DrawHLine(&s_u8g2, x,     y + 4, 3);
+        u8g2_DrawHLine(&s_u8g2, x,     y + 5, 2);
+        u8g2_DrawPixel(&s_u8g2, x,     y + 6);
+    }
+}
+
+static void draw_colmeia_capsule(int x, int y, int w, int h, const char *title, int dir_arrow, bool is_sel)
+{
+    const int c = 4; // Chanfro exato de 45 graus (deltaX = deltaY = 4)
+
+    if (is_sel) {
+        // Preenchimento sólido chanfrado 100% simétrico
+        u8g2_SetDrawColor(&s_u8g2, 1);
+        u8g2_DrawBox(&s_u8g2, x, y + c, w, h - 2 * c);
+        for (int i = 0; i < c; i++) {
+            u8g2_DrawHLine(&s_u8g2, x + c - i, y + i, w - 2 * (c - i));
+            u8g2_DrawHLine(&s_u8g2, x + c - i, y + h - 1 - i, w - 2 * (c - i));
+        }
+        // Conteúdo negativo em preto sobre fundo aceso
+        u8g2_SetDrawColor(&s_u8g2, 0);
+    } else {
+        // Contorno chanfrado 45°
+        u8g2_SetDrawColor(&s_u8g2, 1);
+        u8g2_DrawHLine(&s_u8g2, x + c, y, w - 2 * c);
+        u8g2_DrawHLine(&s_u8g2, x + c, y + h - 1, w - 2 * c);
+        u8g2_DrawVLine(&s_u8g2, x, y + c, h - 2 * c);
+        u8g2_DrawVLine(&s_u8g2, x + w - 1, y + c, h - 2 * c);
+        u8g2_DrawLine(&s_u8g2, x, y + c, x + c, y);
+        u8g2_DrawLine(&s_u8g2, x + w - c - 1, y, x + w - 1, y + c);
+        u8g2_DrawLine(&s_u8g2, x, y + h - c - 1, x + c, y + h - 1);
+        u8g2_DrawLine(&s_u8g2, x + w - c - 1, y + h - 1, x + w - 1, y + h - c - 1);
+    }
+
+    u8g2_SetFont(&s_u8g2, u8g2_font_helvB08_tr);
+    int tw = u8g2_GetStrWidth(&s_u8g2, title);
+    const int arr_w = (dir_arrow == 1 || dir_arrow == 4) ? 7 : 4;
+    const int gap = 3;
+    int total_w = tw + arr_w + gap;
+    int start_x = x + (w - total_w) / 2;
+    int ty = y + 11;
+
+    if (dir_arrow == 1 || dir_arrow == 4) {
+        // CIMA (1) ou BAIXO (4): Seta 7x4 perfeitamente alinhada
+        draw_crisp_arrow(start_x, y + 5, dir_arrow);
+        u8g2_DrawStr(&s_u8g2, start_x + arr_w + gap, ty, title);
+    } else if (dir_arrow == 3) {
+        // ESQUERDA (3): Seta 4x7 alinhada à altura exata das maiúsculas
+        draw_crisp_arrow(start_x, y + 4, 3);
+        u8g2_DrawStr(&s_u8g2, start_x + arr_w + gap, ty, title);
+    } else if (dir_arrow == 2) {
+        // DIREITA (2): Seta 4x7 alinhada à altura exata das maiúsculas
+        u8g2_DrawStr(&s_u8g2, start_x, ty, title);
+        draw_crisp_arrow(start_x + tw + gap, y + 4, 2);
+    } else {
+        u8g2_DrawStr(&s_u8g2, x + (w - tw) / 2, ty, title);
+    }
+}
+
+static void draw_hex_center(int cx, int cy, bool is_sel)
+{
+    // Octógono central perfeitamente simétrico de 20 × 20 px:
+    // X em [54..73], Y em [22..41], chanfros exatos 45° de deltaX = deltaY = 7
+    if (is_sel) {
+        u8g2_SetDrawColor(&s_u8g2, 1);
+        for (int dy = 0; dy < 7; dy++) {
+            u8g2_DrawHLine(&s_u8g2, 61 - dy, 22 + dy, 6 + 2 * dy);
+            u8g2_DrawHLine(&s_u8g2, 61 - dy, 41 - dy, 6 + 2 * dy);
+        }
+        u8g2_DrawBox(&s_u8g2, 54, 29, 20, 6);
+        u8g2_SetDrawColor(&s_u8g2, 0);
+    } else {
+        u8g2_SetDrawColor(&s_u8g2, 1);
+        // 4 Lados planos de 6 px:
+        u8g2_DrawHLine(&s_u8g2, 61, 22, 6);
+        u8g2_DrawHLine(&s_u8g2, 61, 41, 6);
+        u8g2_DrawVLine(&s_u8g2, 54, 29, 6);
+        u8g2_DrawVLine(&s_u8g2, 73, 29, 6);
+        // 4 Chanfros diagonais 45°:
+        u8g2_DrawLine(&s_u8g2, 54, 29, 61, 22);
+        u8g2_DrawLine(&s_u8g2, 66, 22, 73, 29);
+        u8g2_DrawLine(&s_u8g2, 54, 34, 61, 41);
+        u8g2_DrawLine(&s_u8g2, 66, 41, 73, 34);
+    }
+
+    u8g2_SetFont(&s_u8g2, u8g2_font_5x8_tf);
+    const char *lbl = "USB";
+    int lw = u8g2_GetStrWidth(&s_u8g2, lbl);
+    u8g2_DrawStr(&s_u8g2, cx - lw / 2, cy + 3, lbl);
+}
+
+static void draw_bus_traces(int sel_dir)
+{
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // CIMA: Conecta Cápsula Topo (Y=16) ao Octógono (Y=22), X=62 e X=65
+    if (sel_dir == 1) {
+        u8g2_DrawBox(&s_u8g2, 61, 16, 6, 7);
+    } else {
+        u8g2_DrawVLine(&s_u8g2, 62, 16, 7);
+        u8g2_DrawVLine(&s_u8g2, 65, 16, 7);
+    }
+
+    // BAIXO: Conecta Octógono (Y=41) à Cápsula Baixo (Y=47), X=62 e X=65
+    if (sel_dir == 4) {
+        u8g2_DrawBox(&s_u8g2, 61, 41, 6, 7);
+    } else {
+        u8g2_DrawVLine(&s_u8g2, 62, 41, 7);
+        u8g2_DrawVLine(&s_u8g2, 65, 41, 7);
+    }
+
+    // ESQUERDA: Conecta Cápsula Esquerda (X=47) ao Octógono (X=54), Y=30 e Y=33
+    if (sel_dir == 3) {
+        u8g2_DrawBox(&s_u8g2, 47, 29, 8, 6);
+    } else {
+        u8g2_DrawHLine(&s_u8g2, 47, 30, 8);
+        u8g2_DrawHLine(&s_u8g2, 47, 33, 8);
+    }
+
+    // DIREITA: Conecta Octógono (X=73) à Cápsula Direita (X=80), Y=30 e Y=33
+    if (sel_dir == 2) {
+        u8g2_DrawBox(&s_u8g2, 73, 29, 8, 6);
+    } else {
+        u8g2_DrawHLine(&s_u8g2, 73, 30, 8);
+        u8g2_DrawHLine(&s_u8g2, 73, 33, 8);
+    }
+}
+
 void oled_display_show_usb_prompt(int cursor)
 {
     if (!s_ready) return;
     u8g2_ClearBuffer(&s_u8g2);
-    u8g2_SetDrawColor(&s_u8g2, 1);
-    u8g2_SetFont(&s_u8g2, u8g2_font_5x8_tf);
 
-    u8g2_DrawStr(&s_u8g2, 2, 9, "USB Conectado ao PC");
+    const int bw = 46;
+    const int bh = 15;
+    const int cx = 64;
+    const int cy = 32;
 
-    // Opcao 0: Armazenamento
-    if (cursor == 0) u8g2_DrawBox(&s_u8g2, 2, 21-7, 124, 9);
-    u8g2_SetDrawColor(&s_u8g2, cursor == 0 ? 0 : 1);
-    u8g2_DrawStr(&s_u8g2, 4, 21, "1. Armazenamento");
+    // 1. Barramentos condutores de dados
+    draw_bus_traces(cursor);
 
-    // Opcao 1: DAC USB
-    u8g2_SetDrawColor(&s_u8g2, 1);
-    if (cursor == 1) u8g2_DrawBox(&s_u8g2, 2, 33-7, 124, 9);
-    u8g2_SetDrawColor(&s_u8g2, cursor == 1 ? 0 : 1);
-    u8g2_DrawStr(&s_u8g2, 4, 33, "2. DAC USB (Audio)");
+    // 2. Nó central octogonal [ USB ] (cursor == 0 destaca o centro)
+    draw_hex_center(cx, cy, cursor == 0);
 
-    // Opcao 2: Gravar Firmware
-    u8g2_SetDrawColor(&s_u8g2, 1);
-    if (cursor == 2) u8g2_DrawBox(&s_u8g2, 2, 45-7, 124, 9);
-    u8g2_SetDrawColor(&s_u8g2, cursor == 2 ? 0 : 1);
-    u8g2_DrawStr(&s_u8g2, 4, 45, "3. Gravar Firmware (Flash)");
+    // 3. Quatro Cápsulas Colmeia rigorosamente idênticas (46 × 15 px):
+    // Cima (1): DAC
+    draw_colmeia_capsule(cx - bw / 2, 2, bw, bh, "DAC", 1, cursor == 1);
 
-    // Opcao 3: Nada a fazer
-    u8g2_SetDrawColor(&s_u8g2, 1);
-    if (cursor == 3) u8g2_DrawBox(&s_u8g2, 2, 57-7, 124, 9);
-    u8g2_SetDrawColor(&s_u8g2, cursor == 3 ? 0 : 1);
-    u8g2_DrawStr(&s_u8g2, 4, 57, "4. Nada a fazer");
+    // Baixo (4): SAIR
+    draw_colmeia_capsule(cx - bw / 2, 47, bw, bh, "SAIR", 4, cursor == 4);
+
+    // Esquerda (3): COM
+    draw_colmeia_capsule(2, cy - bh / 2, bw, bh, "COM", 3, cursor == 3);
+
+    // Direita (2): MSC
+    draw_colmeia_capsule(128 - bw - 2, cy - bh / 2, bw, bh, "MSC", 2, cursor == 2);
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_usb_msc(void)
@@ -1632,7 +2777,7 @@ void oled_display_show_usb_msc(void)
     u8g2_SetFont(&s_u8g2, u8g2_font_tom_thumb_4x6_t_all);
     u8g2_DrawStr(&s_u8g2, 10, 45, "Segure ESQUERDA para sair");
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 static const uint8_t image_SDQuestion_copy_1_bits[] = {
@@ -1682,7 +2827,7 @@ void oled_display_show_loading(void) {
     u8g2_DrawStr(&s_u8g2, 31, 56, "Carregando...");
     
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_sd_error(void) {
@@ -1692,9 +2837,9 @@ void oled_display_show_sd_error(void) {
     sd_anim_frame++;
     
     // Elipse vertical (focos empilhados no eixo Y): movimento mais forte no Y que no X
-    float t = sd_anim_frame * 0.15f;
-    int offset_y = (int)(4.0f * sinf(t)); // Amplitude maior no Y
-    int offset_x = (int)(1.0f * cosf(t)); // Amplitude menor no X
+    int deg = (sd_anim_frame * 9) % 360;
+    int offset_y = fast_scale_trig(4, fast_sin_q10(deg)); // Amplitude maior no Y
+    int offset_x = fast_scale_trig(1, fast_cos_q10(deg)); // Amplitude menor no X
     
     u8g2_ClearBuffer(&s_u8g2);
     
@@ -1719,7 +2864,7 @@ void oled_display_show_sd_error(void) {
     u8g2_DrawStr(&s_u8g2, excl_x, excl_y, "!");
     
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 extern uint32_t usb_manager_get_pkt_count(void);
@@ -1729,78 +2874,141 @@ void oled_display_show_usb_dac(void)
 {
     if (!s_ready) return;
     u8g2_ClearBuffer(&s_u8g2);
-
-    // 1. Cabecalho Superior: Badge [USB DAC] e Formato de Amostragem
     u8g2_SetDrawColor(&s_u8g2, 1);
-    u8g2_DrawRBox(&s_u8g2, 0, 0, 56, 12, 2);
-    u8g2_SetDrawColor(&s_u8g2, 0);
-    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
-    u8g2_DrawStr(&s_u8g2, 5, 10, "USB DAC");
 
-    // Taxa e resolucao a direita
-    u8g2_SetDrawColor(&s_u8g2, 1);
-    u8g2_SetFont(&s_u8g2, u8g2_font_5x8_tf);
-    uint32_t rate = i2s_output_get_rate();
-    if (rate == 0) rate = 48000;
-    char rate_str[24];
-    if (rate == 44100) {
-        snprintf(rate_str, sizeof(rate_str), "44.1k / 24b");
-    } else {
-        snprintf(rate_str, sizeof(rate_str), "%luk / 24b", (unsigned long)(rate / 1000));
-    }
-    int rate_w = u8g2_GetStrWidth(&s_u8g2, rate_str);
-    u8g2_DrawStr(&s_u8g2, 128 - rate_w, 10, rate_str);
-
-    // Linha divisoria superior
-    u8g2_DrawHLine(&s_u8g2, 0, 14, 128);
-
-    // 2. Status de Streaming (Linha 2, y=24)
     bool streaming = usb_manager_is_streaming();
-    u8g2_SetFont(&s_u8g2, u8g2_font_5x8_tf);
-    if (streaming) {
-        u8g2_DrawDisc(&s_u8g2, 3, 21, 2, U8G2_DRAW_ALL); // Indicador solido
-        u8g2_DrawStr(&s_u8g2, 9, 24, "STREAMING ATIVO");
-    } else {
-        u8g2_DrawCircle(&s_u8g2, 3, 21, 2, U8G2_DRAW_ALL); // Indicador vazado
-        u8g2_DrawStr(&s_u8g2, 9, 24, "AGUARDANDO USB...");
-    }
 
-    // 3. Preset de EQ e Volume (Linha 3, y=36)
-    player_eq_config_t eq_cfg;
-    audio_player_get_eq_config(&eq_cfg);
-    char eq_str[32];
-    if (eq_cfg.enabled) {
-        snprintf(eq_str, sizeof(eq_str), "EQ: %s", eq_cfg.presets[eq_cfg.active_preset_idx].name);
-    } else {
-        snprintf(eq_str, sizeof(eq_str), "EQ: Direto/Off");
-    }
-    u8g2_DrawStr(&s_u8g2, 0, 36, eq_str);
+    // 1. Topo: Ícone de streaming (Play/Pause), Título estilizado e Bateria com Raio
+    draw_play_pause_icon(streaming);
+    draw_battery_icon(1, battery_get_percent());
 
+    // Título central com brackets decorativos (mesmo padrão do artista na reprodução)
+    const char *title = "USB DAC";
+    u8g2_SetFont(&s_u8g2, u8g2_font_helvB08_tr);
+    int tw = u8g2_GetStrWidth(&s_u8g2, title);
+    int center_x = 64;
+    int br_left = center_x - tw / 2 - 3;
+    int br_right = center_x + tw / 2 + 3;
+    u8g2_DrawLine(&s_u8g2, br_left, 11, br_right, 11);
+    u8g2_DrawLine(&s_u8g2, br_left, 10, br_left, 0);
+    u8g2_DrawLine(&s_u8g2, br_right, 11, br_right, 0);
+    u8g2_DrawStr(&s_u8g2, center_x - tw / 2, 9, title);
+
+    // Divisória superior
+    u8g2_DrawHLine(&s_u8g2, 0, 13, 128);
+
+    // 2. Linha de Status e Volume (y = 15..20)
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
     int vol = audio_player_get_volume();
     char vol_str[16];
     snprintf(vol_str, sizeof(vol_str), "Vol: %d%%", vol);
-    int vol_w = u8g2_GetStrWidth(&s_u8g2, vol_str);
-    u8g2_DrawStr(&s_u8g2, 128 - vol_w, 36, vol_str);
+    u8g2_DrawStr(&s_u8g2, 0, 20, vol_str);
 
-    // 4. Mini barra de progresso do volume (y=41..45)
-    u8g2_DrawFrame(&s_u8g2, 0, 41, 128, 5);
-    int bar_fill = (vol * 124) / 100;
-    if (bar_fill > 124) bar_fill = 124;
-    if (bar_fill < 0) bar_fill = 0;
-    if (bar_fill > 0) {
-        u8g2_DrawBox(&s_u8g2, 2, 42, bar_fill, 3);
+    const char *status_str = streaming ? "STREAMING ATIVO" : "AGUARDANDO USB...";
+    int sw = u8g2_GetStrWidth(&s_u8g2, status_str);
+    u8g2_DrawStr(&s_u8g2, 128 - sw, 20, status_str);
+
+    // 3. Área Central: O Grande VU Meter Estéreo L / R (114 px de largura x 8 px de altura)
+    float peak_l = 0.0f, peak_r = 0.0f, hold_l = 0.0f, hold_r = 0.0f;
+    audio_meter_get_levels(&peak_l, &peak_r, &hold_l, &hold_r, NULL, NULL);
+
+    const int bar_x = 10;
+    const int bar_w = 117; // Frame de 117 px -> 115 px úteis de barra
+    const int bar_inner_w = 115;
+    const int bar_h = 8;
+    const int bar_inner_h = 6;
+
+    // --- Canal L ---
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    u8g2_DrawStr(&s_u8g2, 0, 28, "L");
+    u8g2_DrawFrame(&s_u8g2, bar_x, 22, bar_w, bar_h);
+    int fill_l = (int)(peak_l * (float)bar_inner_w + 0.5f);
+    if (fill_l > bar_inner_w) fill_l = bar_inner_w;
+    if (fill_l > 0) {
+        u8g2_DrawBox(&s_u8g2, bar_x + 1, 23, fill_l, bar_inner_h);
+    }
+    int hold_l_px = (int)(hold_l * (float)bar_inner_w + 0.5f);
+    if (hold_l_px > bar_inner_w - 2) hold_l_px = bar_inner_w - 2;
+    if (hold_l_px >= 2) {
+        u8g2_DrawBox(&s_u8g2, bar_x + 1 + hold_l_px, 23, 2, bar_inner_h);
     }
 
-    // Linha divisoria inferior
-    u8g2_DrawHLine(&s_u8g2, 0, 49, 128);
+    // --- Canal R ---
+    u8g2_DrawStr(&s_u8g2, 0, 39, "R");
+    u8g2_DrawFrame(&s_u8g2, bar_x, 33, bar_w, bar_h);
+    int fill_r = (int)(peak_r * (float)bar_inner_w + 0.5f);
+    if (fill_r > bar_inner_w) fill_r = bar_inner_w;
+    if (fill_r > 0) {
+        u8g2_DrawBox(&s_u8g2, bar_x + 1, 34, fill_r, bar_inner_h);
+    }
+    int hold_r_px = (int)(hold_r * (float)bar_inner_w + 0.5f);
+    if (hold_r_px > bar_inner_w - 2) hold_r_px = bar_inner_w - 2;
+    if (hold_r_px >= 2) {
+        u8g2_DrawBox(&s_u8g2, bar_x + 1 + hold_r_px, 34, 2, bar_inner_h);
+    }
 
-    // 5. Guia de navegacao no rodape (y=61)
+    // Régua de escala em dB (alinhada precisamente à escala de -40 dBFS a 0 dBFS)
     u8g2_SetFont(&s_u8g2, u8g2_font_tom_thumb_4x6_t_all);
-    u8g2_DrawStr(&s_u8g2, 1, 58, "> DIR: Equalizador (EQ)");
-    u8g2_DrawStr(&s_u8g2, 1, 64, "CIMA/BAIXO: Vol | < Segure ESQ: Sair");
+    u8g2_DrawStr(&s_u8g2, 10, 48, "-40");
+    u8g2_DrawStr(&s_u8g2, 51, 48, "-24");
+    u8g2_DrawStr(&s_u8g2, 85, 48, "-12");
+    u8g2_DrawStr(&s_u8g2, 104, 48, "-6");
+    u8g2_DrawStr(&s_u8g2, 120, 48, "0");
+
+    // Divisória inferior
+    u8g2_DrawHLine(&s_u8g2, 0, 50, 128);
+
+    // 4. Rodapé: Cards no estilo da Reprodução ([ 24b ], [ 48k ], [ Rock ]) + Navegação
+    uint32_t rate = i2s_output_get_rate();
+    if (rate == 0) rate = 48000;
+    char card_sr[16];
+    if (rate % 1000 == 0) {
+        snprintf(card_sr, sizeof(card_sr), "%uk", (unsigned)(rate / 1000));
+    } else {
+        snprintf(card_sr, sizeof(card_sr), "%.1fk", (float)rate / 1000.0f);
+    }
+
+    player_eq_config_t eq_cfg;
+    audio_player_get_eq_config(&eq_cfg);
+    char card_eq[16];
+    if (eq_cfg.enabled) {
+        snprintf(card_eq, sizeof(card_eq), "%.5s", eq_cfg.presets[eq_cfg.active_preset_idx].name);
+    } else {
+        snprintf(card_eq, sizeof(card_eq), "OFF");
+    }
+
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+
+    #define DRAW_DAC_BRACKET(bx, bw, ctext) do { \
+        u8g2_SetDrawColor(&s_u8g2, 1); \
+        u8g2_DrawLine(&s_u8g2, (bx), 63, (bx), 56); \
+        u8g2_DrawLine(&s_u8g2, (bx)+1, 56, (bx)+(bw)-1, 56); \
+        u8g2_DrawLine(&s_u8g2, (bx)+(bw)-1, 63, (bx)+(bw)-1, 56); \
+        u8g2_DrawStr(&s_u8g2, (bx) + 1 + ((bw) - 2 - u8g2_GetStrWidth(&s_u8g2, (ctext)))/2, 63, (ctext)); \
+    } while (0)
+
+    int pad = 3;
+    int bw_res = u8g2_GetStrWidth(&s_u8g2, "24b") + pad * 2;
+    int bw_sr  = u8g2_GetStrWidth(&s_u8g2, card_sr) + pad * 2;
+    int bw_eq  = u8g2_GetStrWidth(&s_u8g2, card_eq) + pad * 2;
+
+    int cur_x = 0;
+    DRAW_DAC_BRACKET(cur_x, bw_res, "24b");
+    cur_x += bw_res + 2;
+    DRAW_DAC_BRACKET(cur_x, bw_sr, card_sr);
+    cur_x += bw_sr + 2;
+    DRAW_DAC_BRACKET(cur_x, bw_eq, card_eq);
+
+    #undef DRAW_DAC_BRACKET
+
+    // Navegação alinhada à direita no rodapé
+    const char *nav_str = "< Sair | EQ >";
+    u8g2_SetFont(&s_u8g2, u8g2_font_tom_thumb_4x6_t_all);
+    int nw = u8g2_GetStrWidth(&s_u8g2, nav_str);
+    u8g2_DrawStr(&s_u8g2, 128 - nw, 63, nav_str);
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 
@@ -1849,7 +3057,7 @@ void oled_display_show_led(uint8_t r, uint8_t g, uint8_t b, int selected_channel
     u8g2_DrawStr(&s_u8g2, 2, 63, "UP/DN:Canal | L/R:Ajuste | MID:Power");
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_set_brightness(uint8_t level)
@@ -2006,15 +3214,16 @@ void oled_display_show_top_screen(int volume, const void *eq_cfg, int eq_focus, 
     u8g2_DrawStr(&s_u8g2, 93, 56, vol_str);
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_set_power_save(bool enable) {
     if (!s_ready) return;
     u8g2_SetPowerSave(&s_u8g2, enable ? 1 : 0);
+    s_fb_dirty_all = true;
     if (!enable) {
         apply_brightness_if_needed();
-        u8g2_SendBuffer(&s_u8g2);
+        oled_flush_buffer();
     }
 }
 
@@ -2065,7 +3274,7 @@ void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx, int
     if (cursor == 2) u8g2_DrawFrame(&s_u8g2, 2, 47, 123, 15);
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 void oled_display_show_unsupported(const char *filename)
 {
@@ -2099,7 +3308,7 @@ void oled_display_show_unsupported(const char *filename)
     u8g2_DrawStr(&s_u8g2, 21, 62, "Suportado!");
     
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 
@@ -2171,7 +3380,7 @@ void oled_display_show_eq_preset_list(int cursor, int active_preset, bool eq_ena
     u8g2_DrawStr(&s_u8g2, 2, 62, "> Bandas | Segure: Renomear");
     
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int grid_y, int page, bool is_confirming)
@@ -2194,9 +3403,11 @@ void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int gr
     // Draw cursor
     int cur_pos = cursor;
     if (cur_pos < 0) cur_pos = 0;
-    if (cur_pos > (int)strlen(buf)) cur_pos = (int)strlen(buf);
+    int blen = (int)strlen(buf);
+    if (cur_pos > blen) cur_pos = blen;
     char tmp[24];
-    strncpy(tmp, buf, cur_pos);
+    if (cur_pos >= (int)sizeof(tmp)) cur_pos = (int)sizeof(tmp) - 1;
+    memcpy(tmp, buf, cur_pos);
     tmp[cur_pos] = '\0';
     int cx = text_x + u8g2_GetStrWidth(&s_u8g2, tmp);
     u8g2_DrawLine(&s_u8g2, cx, 2, cx, 11);
@@ -2295,7 +3506,7 @@ void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int gr
     }
     
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_sort_mode(int mode)
@@ -2336,7 +3547,7 @@ void oled_display_show_sort_mode(int mode)
     u8g2_DrawStr(&s_u8g2, 8, 60, "JOY: Alternar | ESQ: Voltar");
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_deepsleep_cfg(int current_idx)
@@ -2388,7 +3599,7 @@ void oled_display_show_deepsleep_cfg(int current_idx)
     u8g2_DrawStr(&s_u8g2, 4, 60, "[>] Dormir Agora  |  [OK] Salvar");
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_ota_progress(int percent, const char *status_msg)
@@ -2442,7 +3653,7 @@ void oled_display_show_ota_progress(int percent, const char *status_msg)
     u8g2_DrawStr(&s_u8g2, (OLED_WIDTH - ww) / 2, 60, warn);
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 static marquee_t s_podcast_marquee;
@@ -2525,7 +3736,7 @@ void oled_display_show_podcast_sync(const char *program, const char *title,
     u8g2_DrawStr(&s_u8g2, OLED_WIDTH - u8g2_GetStrWidth(&s_u8g2, footer) - 4, 61, footer);
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_wifi_qr(const char *ssid, const char *pass,
@@ -2661,7 +3872,7 @@ void oled_display_show_wifi_qr(const char *ssid, const char *pass,
     u8g2_DrawStr(&s_u8g2, 66, 63, "mps3.local");
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
 }
 
 void oled_display_show_clock(const rtc_clock_info_t *info)
@@ -2682,7 +3893,7 @@ void oled_display_show_clock(const rtc_clock_info_t *info)
         u8g2_DrawStr(&s_u8g2, 22, 58, "[ESQ] Voltar ao Menu");
 
         apply_brightness_if_needed();
-        u8g2_SendBuffer(&s_u8g2);
+        oled_flush_buffer();
         return;
     }
 
@@ -2735,7 +3946,192 @@ void oled_display_show_clock(const rtc_clock_info_t *info)
     u8g2_DrawStr(&s_u8g2, 36, 63, "[ESQ] Voltar");
 
     apply_brightness_if_needed();
-    u8g2_SendBuffer(&s_u8g2);
+    oled_flush_buffer();
+}
+
+void oled_display_show_chrono(bool running, uint32_t elapsed_ms, const uint32_t *laps, int lap_count)
+{
+    if (!s_ready) return;
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetFontMode(&s_u8g2, 1);
+    u8g2_SetBitmapMode(&s_u8g2, 1);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // 1. Cabeçalho: "CRONOMETRO" e status [RODANDO] / [PAUSADO] / [ZERADO]
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont11_tr);
+    u8g2_DrawStr(&s_u8g2, 3, 10, "CRONOMETRO");
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    const char *status_str = running ? "[RODANDO]" : (elapsed_ms == 0 ? "[ZERADO]" : "[PAUSADO]");
+    int sw = u8g2_GetStrWidth(&s_u8g2, status_str);
+    u8g2_DrawStr(&s_u8g2, 126 - sw, 9, status_str);
+    u8g2_DrawHLine(&s_u8g2, 0, 12, 128);
+
+    // 2. Display Principal de Tempo: MM:SS.cc
+    uint32_t total_sec = elapsed_ms / 1000;
+    uint32_t mins = total_sec / 60;
+    uint32_t secs = total_sec % 60;
+    uint32_t cents = (elapsed_ms % 1000) / 10;
+    if (mins > 999) mins = 999;
+
+    char main_time[32];
+    snprintf(main_time, sizeof(main_time), "%02u:%02u.%02u", (unsigned)mins, (unsigned)secs, (unsigned)cents);
+    u8g2_SetFont(&s_u8g2, u8g2_font_logisoso16_tn);
+    int tw = u8g2_GetStrWidth(&s_u8g2, main_time);
+    int tx = (128 - tw) / 2;
+    u8g2_DrawStr(&s_u8g2, tx, 33, main_time);
+
+    // 3. Seção de Voltas (Laps)
+    u8g2_DrawHLine(&s_u8g2, 4, 37, 120);
+    u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tr);
+    if (lap_count > 0 && laps) {
+        char lap_buf[32];
+        int last_idx = lap_count - 1;
+        uint32_t l_sec = laps[last_idx] / 1000;
+        uint32_t l_m = l_sec / 60;
+        uint32_t l_s = l_sec % 60;
+        uint32_t l_c = (laps[last_idx] % 1000) / 10;
+        snprintf(lap_buf, sizeof(lap_buf), "V%d: %02u:%02u.%02u", last_idx + 1, (unsigned)l_m, (unsigned)l_s, (unsigned)l_c);
+        u8g2_DrawStr(&s_u8g2, 6, 47, lap_buf);
+
+        if (lap_count > 1) {
+            int prev_idx = lap_count - 2;
+            uint32_t p_sec = laps[prev_idx] / 1000;
+            uint32_t p_m = p_sec / 60;
+            uint32_t p_s = p_sec % 60;
+            uint32_t p_c = (laps[prev_idx] % 1000) / 10;
+            snprintf(lap_buf, sizeof(lap_buf), "V%d: %02u:%02u.%02u", prev_idx + 1, (unsigned)p_m, (unsigned)p_s, (unsigned)p_c);
+            u8g2_DrawStr(&s_u8g2, 70, 47, lap_buf);
+        }
+    } else {
+        u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+        u8g2_DrawStr(&s_u8g2, 24, 46, "NENHUMA VOLTA MARCADA");
+    }
+
+    // 4. Rodapé com Instruções de Controle
+    u8g2_DrawHLine(&s_u8g2, 0, 51, 128);
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    if (running) {
+        u8g2_DrawStr(&s_u8g2, 4, 61, "[C] Pausar  [DIR] Volta  [ESQ] Sair");
+    } else {
+        u8g2_DrawStr(&s_u8g2, 4, 61, "[C] Iniciar  [DIR] Zerar  [ESQ] Sair");
+    }
+
+    apply_brightness_if_needed();
+    oled_flush_buffer();
+}
+
+void oled_display_show_lock_clock(const rtc_clock_info_t *info, bool is_locked, const char *track_title, int battery_pct, bool battery_charging)
+{
+    if (!s_ready) return;
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetFontMode(&s_u8g2, 1);
+    u8g2_SetBitmapMode(&s_u8g2, 1);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // 1. Barra Superior: Ícone de Cadeado/Status à esquerda, Bateria à direita
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    if (is_locked) {
+        u8g2_DrawFrame(&s_u8g2, 4, 3, 6, 5); // corpo do cadeado
+        u8g2_DrawCircle(&s_u8g2, 6, 2, 2, U8G2_DRAW_UPPER_RIGHT | U8G2_DRAW_UPPER_LEFT); // alça
+        u8g2_DrawStr(&s_u8g2, 13, 8, "BLOQUEADO");
+    } else {
+        u8g2_DrawStr(&s_u8g2, 4, 8, "MPS3 REPOUSO");
+    }
+
+    if (battery_pct >= 0) {
+        char bat_buf[16];
+        snprintf(bat_buf, sizeof(bat_buf), "%d%%%s", battery_pct, battery_charging ? "+" : "");
+        int bw = u8g2_GetStrWidth(&s_u8g2, bat_buf);
+        u8g2_DrawStr(&s_u8g2, 115 - bw, 8, bat_buf);
+        draw_battery_badge(118, 2, battery_pct);
+    }
+    u8g2_DrawHLine(&s_u8g2, 0, 10, 128);
+
+    // 2. Horário Principal em destaque
+    char hms[16];
+    if (info && info->rtc_ok) {
+        snprintf(hms, sizeof(hms), "%02d:%02d:%02d", info->hour, info->min, info->sec);
+    } else {
+        snprintf(hms, sizeof(hms), "--:--:--");
+    }
+    u8g2_SetFont(&s_u8g2, u8g2_font_logisoso16_tn);
+    int hw = u8g2_GetStrWidth(&s_u8g2, hms);
+    u8g2_DrawStr(&s_u8g2, (128 - hw) / 2, 29, hms);
+
+    // 3. Data completa com Sakamoto: QUI, 15/10/2026
+    static const char *wdays[] = {"DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SAB"};
+    char date_buf[32];
+    if (info && info->rtc_ok) {
+        snprintf(date_buf, sizeof(date_buf), "%s, %02d/%02d/%04d",
+                 wdays[info->wday % 7], info->day, info->month, info->year);
+    } else {
+        snprintf(date_buf, sizeof(date_buf), "RTC INDISPONIVEL");
+    }
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    int dw = u8g2_GetStrWidth(&s_u8g2, date_buf);
+    u8g2_DrawStr(&s_u8g2, (128 - dw) / 2, 42, date_buf);
+
+    u8g2_DrawHLine(&s_u8g2, 0, 47, 128);
+
+    // 4. Rodapé: Título da música tocando ou instrução de desbloqueio
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    if (is_locked) {
+        u8g2_DrawStr(&s_u8g2, 16, 56, "[SEGURE C] DESBLOQUEAR");
+        if (track_title && track_title[0]) {
+            char title_short[32];
+            snprintf(title_short, sizeof(title_short), "▶ %s", track_title);
+            title_short[26] = '\0';
+            u8g2_DrawStr(&s_u8g2, 4, 63, title_short);
+        }
+    } else {
+        if (track_title && track_title[0]) {
+            char title_short[32];
+            snprintf(title_short, sizeof(title_short), "▶ %s", track_title);
+            title_short[26] = '\0';
+            u8g2_DrawStr(&s_u8g2, 4, 55, title_short);
+        } else {
+            u8g2_DrawStr(&s_u8g2, 24, 55, "ENTRANDO EM REPOUSO");
+        }
+        u8g2_DrawStr(&s_u8g2, 22, 63, "[TOQUE] CANCELAR SLEEP");
+    }
+
+    apply_brightness_if_needed();
+    oled_flush_buffer();
+}
+
+void oled_display_show_lock_clock_cfg(int opt_idx)
+{
+    if (!s_ready) return;
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetFontMode(&s_u8g2, 1);
+    u8g2_SetBitmapMode(&s_u8g2, 1);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Cabeçalho
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont11_tr);
+    u8g2_DrawStr(&s_u8g2, 8, 10, "RELOGIO DE BLOQUEIO");
+    u8g2_DrawHLine(&s_u8g2, 0, 12, 128);
+
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    u8g2_DrawStr(&s_u8g2, 12, 26, "Tempo de Exibicao:");
+
+    static const char *opts[] = {"Desativado", "3 segundos", "5 segundos", "8 segundos", "10 segundos", "15 segundos"};
+    int idx = opt_idx;
+    if (idx < 0) idx = 0;
+    if (idx >= 6) idx = 5;
+
+    u8g2_DrawFrame(&s_u8g2, 14, 32, 100, 16);
+    u8g2_SetFont(&s_u8g2, u8g2_font_7x13B_tr);
+    int ow = u8g2_GetStrWidth(&s_u8g2, opts[idx]);
+    u8g2_DrawStr(&s_u8g2, (128 - ow) / 2, 44, opts[idx]);
+
+    // Instruções no rodapé
+    u8g2_DrawHLine(&s_u8g2, 0, 52, 128);
+    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+    u8g2_DrawStr(&s_u8g2, 8, 60, "[CIMA/BAIXO] Ajustar  [C/ESQ] Salvar");
+
+    apply_brightness_if_needed();
+    oled_flush_buffer();
 }
 
 esp_err_t oled_display_capture_buffer(uint8_t *dest_buf)

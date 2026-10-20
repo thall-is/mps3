@@ -44,6 +44,99 @@ static const uint8_t BRIGHTNESS_CURVE[] = {1, 3, 7, 15, 30, 50, 80, 120, 180, 25
 #define DEEPSLEEP_OPTIONS_COUNT 7
 static const int DEEPSLEEP_MINS[DEEPSLEEP_OPTIONS_COUNT] = {0, 1, 3, 5, 10, 15, 30};
 static int s_deepsleep_idx = 3; // Padrao: 5 minutos
+static uint32_t s_last_interaction_ms = 0;
+
+#define LOCK_CLOCK_OPTIONS_COUNT 6
+static const int LOCK_CLOCK_SECS[LOCK_CLOCK_OPTIONS_COUNT] = {0, 3, 5, 8, 10, 15};
+static int s_lock_clock_timeout_idx = 2; // Padrao: 5 segundos (0 = desativado)
+static uint32_t s_lock_clock_until_ms = 0;
+
+// Estado do Cronometro (Stopwatch)
+static bool s_chrono_running = false;
+static int64_t s_chrono_start_us = 0;
+static int64_t s_chrono_accum_us = 0;
+static int s_chrono_lap_count = 0;
+static uint32_t s_chrono_laps[8] = {0};
+
+bool touch_input_chrono_is_running(void) { return s_chrono_running; }
+
+uint32_t touch_input_chrono_get_elapsed_ms(void)
+{
+    int64_t total = s_chrono_accum_us;
+    if (s_chrono_running) {
+        total += (esp_timer_get_time() - s_chrono_start_us);
+    }
+    return (uint32_t)(total / 1000);
+}
+
+int touch_input_chrono_get_laps(uint32_t *out_laps, int max_laps)
+{
+    if (!out_laps || max_laps <= 0) return 0;
+    int cnt = (s_chrono_lap_count > max_laps) ? max_laps : s_chrono_lap_count;
+    for (int i = 0; i < cnt; i++) out_laps[i] = s_chrono_laps[i];
+    return s_chrono_lap_count;
+}
+
+void touch_input_chrono_toggle(void)
+{
+    int64_t now_us = esp_timer_get_time();
+    if (s_chrono_running) {
+        s_chrono_accum_us += (now_us - s_chrono_start_us);
+        s_chrono_running = false;
+    } else {
+        s_chrono_start_us = now_us;
+        s_chrono_running = true;
+    }
+}
+
+void touch_input_chrono_lap_or_reset(void)
+{
+    if (s_chrono_running) {
+        if (s_chrono_lap_count < 8) {
+            uint32_t cur_ms = touch_input_chrono_get_elapsed_ms();
+            s_chrono_laps[s_chrono_lap_count++] = cur_ms;
+        }
+    } else {
+        s_chrono_accum_us = 0;
+        s_chrono_lap_count = 0;
+    }
+}
+
+int touch_input_get_lock_clock_timeout_idx(void) { return s_lock_clock_timeout_idx; }
+
+uint32_t touch_input_get_lock_clock_secs(void)
+{
+    if (s_lock_clock_timeout_idx <= 0 || s_lock_clock_timeout_idx >= LOCK_CLOCK_OPTIONS_COUNT) return 0;
+    return (uint32_t)LOCK_CLOCK_SECS[s_lock_clock_timeout_idx];
+}
+
+bool touch_input_is_lock_clock_visible(void)
+{
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    uint32_t lk_secs = touch_input_get_lock_clock_secs();
+    if (lk_secs == 0) return false;
+
+    // 1. Temporizador ativo (ao acordar do repouso ou bloquear manualmente)
+    if (s_lock_clock_until_ms > now) {
+        return true;
+    }
+
+    // 2. Pre-bloqueio por inatividade
+    int t_idx = s_timeout_idx;
+    if (t_idx > 0 && t_idx <= 5) {
+        static const int TIMEOUT_SECS[] = {0, 15, 30, 60, 120, 300};
+        uint32_t total_timeout_ms = (uint32_t)TIMEOUT_SECS[t_idx] * 1000UL;
+        uint32_t pre_lock_ms = lk_secs * 1000UL;
+        if (total_timeout_ms > pre_lock_ms) {
+            uint32_t pre_trigger_ms = total_timeout_ms - pre_lock_ms;
+            if (!s_is_sleeping && (now - s_last_interaction_ms) >= pre_trigger_ms &&
+                (now - s_last_interaction_ms) < total_timeout_ms) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 static void save_deepsleep_nvs(void)
 {
@@ -73,7 +166,9 @@ bool touch_input_is_in_player_browser(void) { return s_in_player_browser; }
 // clique curto de play/pause, sem deixar o bloqueio lento de usar.
 #define CENTER_LOCK_HOLD_MS 700
 
-#define POLL_INTERVAL_MS 25
+// Amostragem do joystick a ~28.5 Hz (35 ms): resposta tátil instantânea ao operador,
+// reduzindo as interrupções de CPU no Core 0 em 28%.
+#define POLL_INTERVAL_MS 35
 
 // Segurar JOY_LEFT por esse tempo, com um modo de tela cheia (USB/WiFi)
 // ativo, pede pra sair dele. Antes era "qualquer toque ou botao" - trocado
@@ -126,6 +221,7 @@ static int s_conf_cursor = 0;
 static int s_conf_audio_cursor = 0;
 static int s_conf_display_cursor = 0;
 static int s_conf_system_cursor = 0;
+static int s_games_cursor = 0;
 static volatile bool s_locked = false;
 static volatile bool s_game_active = false;
 static TaskHandle_t s_display_task_handle = NULL;
@@ -290,6 +386,17 @@ static void joy_move_cursor(int delta, bool is_edge)
 {
     if (s_mode != UI_MODE_LIST) return;
 
+    bool at_root = audio_player_browse_is_root();
+    bool in_player = s_in_player_browser;
+
+    if (at_root && !in_player) {
+        // Menu Principal: carrossel circular infinito usando quantidade real de itens registrados
+        int m_cnt = menu_count();
+        if (m_cnt <= 0) m_cnt = 7;
+        s_list_cursor = (s_list_cursor + delta + m_cnt) % m_cnt;
+        return;
+    }
+
     if (delta < 0 && s_list_cursor == 0 && is_edge) {
         // Ja' no topo da lista e apertou "subir" NESSE aperto (nao durante
         // repeticao automatica ao segurar) - pula pra' tela de reproducao,
@@ -447,7 +554,6 @@ static void touch_task(void *arg)
 
     bool joy_prev[NUM_JOY_BTNS] = {false};
     uint32_t joy_press_ms[NUM_JOY_BTNS] = {0};
-    static uint32_t last_interaction_ms = 0;
     uint32_t joy_last_repeat_ms[NUM_JOY_BTNS] = {0};
 
     // JOY_CENTER: curto = play/pause; longo = bloqueia/desbloqueia.
@@ -461,7 +567,7 @@ static void touch_task(void *arg)
 
     while (true) {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
-        if (last_interaction_ms == 0) last_interaction_ms = now;
+        if (s_last_interaction_ms == 0) s_last_interaction_ms = now;
 
         uint8_t vmask = debug_nav_get_vmask(now);
         bool joy_cur[NUM_JOY_BTNS];
@@ -477,13 +583,30 @@ static void touch_task(void *arg)
         }
         if (any_joy) {
             s_last_activity_ms = now;
-            last_interaction_ms = now;
+            s_last_interaction_ms = now;
+            uint32_t lk_secs = touch_input_get_lock_clock_secs();
             if (s_is_sleeping) {
                 s_is_sleeping = false;
+                if (lk_secs > 0) {
+                    s_lock_clock_until_ms = now + (lk_secs * 1000UL);
+                }
                 touch_input_wake_display();
                 for (int i = 0; i < NUM_JOY_BTNS; i++) joy_prev[i] = joy_cur[i];
                 vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
                 continue;
+            } else if (s_locked && !joy_cur[JOY_CENTER]) {
+                if (lk_secs > 0) {
+                    s_lock_clock_until_ms = now + (lk_secs * 1000UL);
+                }
+                touch_input_wake_display();
+                for (int i = 0; i < NUM_JOY_BTNS; i++) joy_prev[i] = joy_cur[i];
+                vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
+                continue;
+            } else if (s_locked && joy_cur[JOY_CENTER]) {
+                if (lk_secs > 0) {
+                    s_lock_clock_until_ms = now + (lk_secs * 1000UL);
+                }
+                touch_input_wake_display();
             }
         }
 
@@ -540,11 +663,29 @@ static void touch_task(void *arg)
                 s_eq_preset_cursor = s_top_eq_focus;
                 s_mode = UI_MODE_EQ_PRESETS;
                 ESP_LOGI(TAG, "Entrando na lista de presets a partir da Top Screen");
+            } else if (s_mode == UI_MODE_LOCK_CLOCK_CFG) {
+                s_mode = UI_MODE_CONF_DISPLAY;
+                s_conf_display_cursor = 1;
+                nvs_handle_t h;
+                if (nvs_open("mps3_settings", NVS_READWRITE, &h) == ESP_OK) {
+                    nvs_set_u8(h, "lock_clock", (uint8_t)s_lock_clock_timeout_idx);
+                    nvs_commit(h);
+                    nvs_close(h);
+                }
+                ESP_LOGI(TAG, "Saindo da tela LOCK CLOCK CFG via pressao longa");
+            } else if (s_mode == UI_MODE_CHRONO) {
+                s_mode = UI_MODE_LIST;
+                s_list_cursor = 6;
+                ESP_LOGI(TAG, "Saindo da tela CHRONO via pressao longa");
             } else {
                 s_locked = !s_locked;
                 reset_seek_progression();
                 ESP_LOGI(TAG, "Controles %s pelo botao central", s_locked ? "bloqueados" : "desbloqueados");
-                if (!s_locked) {
+                uint32_t lk_secs = touch_input_get_lock_clock_secs();
+                if (s_locked && lk_secs > 0) {
+                    s_lock_clock_until_ms = now + (lk_secs * 1000UL);
+                    touch_input_wake_display();
+                } else if (!s_locked) {
                     touch_input_wake_display();
                 }
             }
@@ -561,6 +702,16 @@ static void touch_task(void *arg)
                     // Nao fazemos a acao de clique curto
                 } else if (menu_any_active()) {
                     menu_request_action_active();
+                } else if (s_mode == UI_MODE_GAMES_MENU) {
+                    if (s_games_cursor == 0) {
+                        // Game of Life
+                        oled_display_reset_life();
+                        s_game_active = true;
+                    } else if (s_games_cursor == 1) {
+                        // Tetris (placeholder / aviso)
+                        oled_display_show_message("TETRIS", "EM BREVE!");
+                        vTaskDelay(pdMS_TO_TICKS(1000));
+                    }
                 } else if (s_mode == UI_MODE_CONF_MENU) {
                     if (s_conf_cursor == 0) {
                         s_mode = UI_MODE_CONF_AUDIO;
@@ -589,9 +740,24 @@ static void touch_task(void *arg)
                         s_mode = UI_MODE_TELA;
                         s_tela_cursor = 0;
                     } else if (s_conf_display_cursor == 1) {
+                        s_mode = UI_MODE_LOCK_CLOCK_CFG;
+                    } else if (s_conf_display_cursor == 2) {
                         s_mode = UI_MODE_LED;
                         s_led_channel = 0;
                     }
+                } else if (s_mode == UI_MODE_LOCK_CLOCK_CFG) {
+                    s_mode = UI_MODE_CONF_DISPLAY;
+                    s_conf_display_cursor = 1;
+                    nvs_handle_t h;
+                    if (nvs_open("mps3_settings", NVS_READWRITE, &h) == ESP_OK) {
+                        nvs_set_u8(h, "lock_clock", (uint8_t)s_lock_clock_timeout_idx);
+                        nvs_commit(h);
+                        nvs_close(h);
+                    }
+                    ESP_LOGI(TAG, "Saindo da tela LOCK CLOCK CFG (botao central)");
+                } else if (s_mode == UI_MODE_CHRONO) {
+                    touch_input_chrono_toggle();
+                    ESP_LOGI(TAG, "Cronometro alternado: %s", s_chrono_running ? "Iniciado" : "Pausado");
                 } else if (s_mode == UI_MODE_CONF_SYSTEM) {
                     if (s_conf_system_cursor == 0) {
                         s_mode = UI_MODE_RTC_CLOCK;
@@ -600,6 +766,8 @@ static void touch_task(void *arg)
                     } else if (s_conf_system_cursor == 2) {
                         s_wifi_net_cursor = 0;
                         s_mode = UI_MODE_WIFI_NETS;
+                    } else if (s_conf_system_cursor == 3) {
+                        podcast_sync_start_manual();
                     }
                 } else if (s_mode == UI_MODE_VOLUME || s_mode == UI_MODE_BALANCE) {
                     s_mode = UI_MODE_CONF_AUDIO;
@@ -686,20 +854,22 @@ static void touch_task(void *arg)
                         }
                     }
                 } else if (s_mode == UI_MODE_USB_PROMPT) {
-                    if (s_list_cursor == 0) {
-                        usb_manager_set_mode(USB_MODE_MSC);
-                        s_mode = UI_MODE_USB_MSC;
-                    } else if (s_list_cursor == 1) {
+                    if (s_list_cursor == 1) { // CIMA: DAC
                         usb_manager_set_mode(USB_MODE_DAC);
                         s_mode = UI_MODE_USB_DAC;
-                    } else if (s_list_cursor == 2) {
+                    } else if (s_list_cursor == 2) { // DIREITA: MSC
+                        usb_manager_set_mode(USB_MODE_MSC);
+                        s_mode = UI_MODE_USB_MSC;
+                    } else if (s_list_cursor == 3) { // ESQUERDA: COM (Flash)
                         oled_display_show_message("Entrando em modo", "FLASH / GRAVACAO");
                         vTaskDelay(pdMS_TO_TICKS(400));
                         usb_manager_enter_bootloader();
-                    } else if (s_list_cursor == 3) {
+                    } else if (s_list_cursor == 4) { // BAIXO: SAIR
                         touch_input_cancel_usb();
+                    } else { // 0 (Centro): Default para DAC
+                        usb_manager_set_mode(USB_MODE_DAC);
+                        s_mode = UI_MODE_USB_DAC;
                     }
-
                 } else if (s_mode == UI_MODE_SORT) {
                     track_sort_mode_t cur = audio_player_get_sort_mode();
                     audio_player_set_sort_mode(cur == SORT_MODE_NAME ? SORT_MODE_DATE : SORT_MODE_NAME);
@@ -726,8 +896,19 @@ static void touch_task(void *arg)
                 } else if (s_mode == UI_MODE_USB_DAC) {
                     usb_manager_send_hid(0); // 0 = Play/Pause
                 } else {
-                    audio_player_toggle_play_pause();
-                    reset_seek_progression();
+                    if (s_mode == UI_MODE_PLAYING && is_double_click) {
+                        // Reverte o toggle play/pause disparado no primeiro clique e cicla o modo de visualizacao
+                        audio_player_toggle_play_pause();
+                        oled_display_cycle_viz_mode();
+                        s_last_short_center_ms = 0; // Evita encadear 3º clique como duplo
+                        ESP_LOGI(TAG, "Duplo-clique no centro: alternando modo de visualizacao -> %d", (int)oled_display_get_viz_mode());
+                    } else {
+                        audio_player_toggle_play_pause();
+                        reset_seek_progression();
+                        if (s_mode == UI_MODE_PLAYING) {
+                            oled_display_trigger_viz_overlay();
+                        }
+                    }
                 }
             }
             center_press_start = 0;
@@ -786,13 +967,17 @@ static void touch_task(void *arg)
             }
 
             if (joy_cur[JOY_LEFT]) {
+                if (podcast_sync_is_busy() && !joy_prev[JOY_LEFT]) {
+                    ESP_LOGI(TAG, "JOY_LEFT pressionado - cancelando sincronizacao de podcasts");
+                    podcast_sync_request_cancel();
+                }
                 if (exit_active_hold_start == 0) exit_active_hold_start = now;
                 if (!exit_active_fired && (now - exit_active_hold_start) >= EXIT_ACTIVE_MODE_HOLD_MS) {
                     exit_active_fired = true;
                     ESP_LOGI(TAG, "JOY_LEFT segurado - saindo do modo ativo");
                     if (podcast_sync_is_busy()) {
                         ESP_LOGI(TAG, "Cancelando sincronizacao de podcasts a pedido do usuario");
-                        podcast_sync_cancel();
+                        podcast_sync_request_cancel();
                     } else if (menu_any_active()) {
                         menu_request_exit_active();
                     } else {
@@ -860,19 +1045,30 @@ static void touch_task(void *arg)
             }
             if (fire) {
                 joy_last_repeat_ms[i] = now;
-                last_interaction_ms = now;
+                s_last_interaction_ms = now;
                 switch (i) {
-                                        case JOY_UP:
+                    case JOY_UP:
                         if (s_mode == UI_MODE_USB_PROMPT) {
-                            s_list_cursor = (s_list_cursor == 0) ? 3 : (s_list_cursor - 1);
+                            if (s_list_cursor == 1 && pressed_edge) {
+                                usb_manager_set_mode(USB_MODE_DAC);
+                                s_mode = UI_MODE_USB_DAC;
+                            } else {
+                                s_list_cursor = 1; // Seleciona CIMA: DAC
+                            }
+                        } else if (s_mode == UI_MODE_GAMES_MENU) {
+                            s_games_cursor = (s_games_cursor == 0) ? 1 : 0;
                         } else if (s_mode == UI_MODE_CONF_MENU) {
                             s_conf_cursor = (s_conf_cursor == 0) ? 2 : (s_conf_cursor - 1);
                         } else if (s_mode == UI_MODE_CONF_AUDIO) {
                             s_conf_audio_cursor = (s_conf_audio_cursor == 0) ? 3 : (s_conf_audio_cursor - 1);
                         } else if (s_mode == UI_MODE_CONF_DISPLAY) {
-                            s_conf_display_cursor = (s_conf_display_cursor == 0) ? 1 : 0;
+                            s_conf_display_cursor = (s_conf_display_cursor == 0) ? 2 : (s_conf_display_cursor - 1);
+                        } else if (s_mode == UI_MODE_LOCK_CLOCK_CFG && pressed_edge) {
+                            if (s_lock_clock_timeout_idx > 0) s_lock_clock_timeout_idx--;
+                        } else if (s_mode == UI_MODE_CHRONO && pressed_edge) {
+                            touch_input_chrono_toggle();
                         } else if (s_mode == UI_MODE_CONF_SYSTEM) {
-                            s_conf_system_cursor = (s_conf_system_cursor == 0) ? 2 : (s_conf_system_cursor - 1);
+                            s_conf_system_cursor = (s_conf_system_cursor == 0) ? 3 : (s_conf_system_cursor - 1);
                         } else if (s_mode == UI_MODE_DEEP_SLEEP) {
                             if (s_deepsleep_idx > 0) s_deepsleep_idx--;
                             else s_deepsleep_idx = DEEPSLEEP_OPTIONS_COUNT - 1;
@@ -924,15 +1120,25 @@ static void touch_task(void *arg)
                         break;
                     case JOY_DOWN:
                         if (s_mode == UI_MODE_USB_PROMPT) {
-                            s_list_cursor = (s_list_cursor + 1) % 4;
+                            if (s_list_cursor == 4 && pressed_edge) {
+                                touch_input_cancel_usb();
+                            } else {
+                                s_list_cursor = 4; // Seleciona BAIXO: SAIR
+                            }
+                        } else if (s_mode == UI_MODE_GAMES_MENU) {
+                            s_games_cursor = (s_games_cursor + 1) % 2;
                         } else if (s_mode == UI_MODE_CONF_MENU) {
                             s_conf_cursor = (s_conf_cursor + 1) % 3;
                         } else if (s_mode == UI_MODE_CONF_AUDIO) {
                             s_conf_audio_cursor = (s_conf_audio_cursor + 1) % 4;
                         } else if (s_mode == UI_MODE_CONF_DISPLAY) {
-                            s_conf_display_cursor = (s_conf_display_cursor + 1) % 2;
+                            s_conf_display_cursor = (s_conf_display_cursor + 1) % 3;
+                        } else if (s_mode == UI_MODE_LOCK_CLOCK_CFG && pressed_edge) {
+                            if (s_lock_clock_timeout_idx < (LOCK_CLOCK_OPTIONS_COUNT - 1)) s_lock_clock_timeout_idx++;
+                        } else if (s_mode == UI_MODE_CHRONO && pressed_edge) {
+                            touch_input_chrono_lap_or_reset();
                         } else if (s_mode == UI_MODE_CONF_SYSTEM) {
-                            s_conf_system_cursor = (s_conf_system_cursor + 1) % 3;
+                            s_conf_system_cursor = (s_conf_system_cursor + 1) % 4;
                         } else if (s_mode == UI_MODE_DEEP_SLEEP) {
                             s_deepsleep_idx = (s_deepsleep_idx + 1) % DEEPSLEEP_OPTIONS_COUNT;
                         } else if (s_mode == UI_MODE_WIFI_NETS) {
@@ -990,7 +1196,16 @@ static void touch_task(void *arg)
                         break;
                     case JOY_LEFT:
                         if (s_mode == UI_MODE_USB_PROMPT && pressed_edge) {
-                            touch_input_cancel_usb();
+                            if (s_list_cursor == 3) {
+                                oled_display_show_message("Entrando em modo", "FLASH / GRAVACAO");
+                                vTaskDelay(pdMS_TO_TICKS(400));
+                                usb_manager_enter_bootloader();
+                            } else {
+                                s_list_cursor = 3; // Seleciona ESQUERDA: COM (Flash)
+                            }
+                        } else if (s_mode == UI_MODE_GAMES_MENU && pressed_edge) {
+                            s_mode = UI_MODE_LIST;
+                            s_list_cursor = 5; // Retorna para "Games" (indice 5) no menu principal
                         } else if (s_mode == UI_MODE_CONF_MENU && pressed_edge) {
                             s_mode = UI_MODE_LIST;
                             s_list_cursor = 3; // Retorna para "Conf" (indice 3) no menu principal
@@ -1000,6 +1215,18 @@ static void touch_task(void *arg)
                         } else if (s_mode == UI_MODE_CONF_DISPLAY && pressed_edge) {
                             s_mode = UI_MODE_CONF_MENU;
                             s_conf_cursor = 1;
+                        } else if (s_mode == UI_MODE_LOCK_CLOCK_CFG && pressed_edge) {
+                            s_mode = UI_MODE_CONF_DISPLAY;
+                            s_conf_display_cursor = 1;
+                            nvs_handle_t h;
+                            if (nvs_open("mps3_settings", NVS_READWRITE, &h) == ESP_OK) {
+                                nvs_set_u8(h, "lock_clock", (uint8_t)s_lock_clock_timeout_idx);
+                                nvs_commit(h);
+                                nvs_close(h);
+                            }
+                        } else if (s_mode == UI_MODE_CHRONO && pressed_edge) {
+                            s_mode = UI_MODE_LIST;
+                            s_list_cursor = 6; // Retorna para "Chrono" no menu principal
                         } else if (s_mode == UI_MODE_CONF_SYSTEM && pressed_edge) {
                             s_mode = UI_MODE_CONF_MENU;
                             s_conf_cursor = 2;
@@ -1062,16 +1289,42 @@ static void touch_task(void *arg)
                                 if (s_eq_band < 0) s_eq_band = 10; // 10 bandas + 1 geral = 11 posicoes (0 a 10)
                             }
                         } else if (s_mode == UI_MODE_PLAYING) {
+                            oled_display_trigger_viz_overlay();
                             joy_seek_hold_pulse(-1, now, now - joy_press_ms[i], pressed_edge);
                         } else if (s_mode == UI_MODE_USB_DAC && pressed_edge) {
                             usb_manager_send_hid(2); // Prev
                         } else if (s_mode == UI_MODE_LIST && pressed_edge) {
-                            ESP_LOGI(TAG, "JOY_LEFT pressionado");
-                            joy_back();
+                            bool at_root = audio_player_browse_is_root();
+                            bool in_player = s_in_player_browser;
+                            if (at_root && !in_player) {
+                                // No Menu Principal, JOY_LEFT abre Now Playing
+                                s_mode = UI_MODE_PLAYING;
+                                ESP_LOGI(TAG, "Menu principal: JOY_LEFT -> UI_MODE_PLAYING");
+                            } else {
+                                ESP_LOGI(TAG, "JOY_LEFT pressionado");
+                                joy_back();
+                            }
                         }
                         break;
                     case JOY_RIGHT:
-                        if (s_mode == UI_MODE_CONF_MENU && pressed_edge) {
+                        if (s_mode == UI_MODE_USB_PROMPT && pressed_edge) {
+                            if (s_list_cursor == 2) {
+                                usb_manager_set_mode(USB_MODE_MSC);
+                                s_mode = UI_MODE_USB_MSC;
+                            } else {
+                                s_list_cursor = 2; // Seleciona DIREITA: MSC (Pendrive)
+                            }
+                        } else if (s_mode == UI_MODE_GAMES_MENU && pressed_edge) {
+                            if (s_games_cursor == 0) {
+                                // Game of Life
+                                oled_display_reset_life();
+                                s_game_active = true;
+                            } else if (s_games_cursor == 1) {
+                                // Tetris (placeholder / aviso)
+                                oled_display_show_message("TETRIS", "EM BREVE!");
+                                vTaskDelay(pdMS_TO_TICKS(1000));
+                            }
+                        } else if (s_mode == UI_MODE_CONF_MENU && pressed_edge) {
                             if (s_conf_cursor == 0) {
                                 s_mode = UI_MODE_CONF_AUDIO;
                                 s_conf_audio_cursor = 0;
@@ -1099,9 +1352,15 @@ static void touch_task(void *arg)
                                 s_mode = UI_MODE_TELA;
                                 s_tela_cursor = 0;
                             } else if (s_conf_display_cursor == 1) {
+                                s_mode = UI_MODE_LOCK_CLOCK_CFG;
+                            } else if (s_conf_display_cursor == 2) {
                                 s_mode = UI_MODE_LED;
                                 s_led_channel = 0;
                             }
+                        } else if (s_mode == UI_MODE_LOCK_CLOCK_CFG && pressed_edge) {
+                            if (s_lock_clock_timeout_idx < (LOCK_CLOCK_OPTIONS_COUNT - 1)) s_lock_clock_timeout_idx++;
+                        } else if (s_mode == UI_MODE_CHRONO && pressed_edge) {
+                            touch_input_chrono_lap_or_reset();
                         } else if (s_mode == UI_MODE_CONF_SYSTEM && pressed_edge) {
                             if (s_conf_system_cursor == 0) {
                                 s_mode = UI_MODE_RTC_CLOCK;
@@ -1110,6 +1369,8 @@ static void touch_task(void *arg)
                             } else if (s_conf_system_cursor == 2) {
                                 s_wifi_net_cursor = 0;
                                 s_mode = UI_MODE_WIFI_NETS;
+                            } else if (s_conf_system_cursor == 3) {
+                                podcast_sync_start_manual();
                             }
                         } else if (s_mode == UI_MODE_DEEP_SLEEP && pressed_edge) {
                             ESP_LOGI(TAG, "JOY_RIGHT: Forcando Deep Sleep imediato como teste de bancada...");
@@ -1171,6 +1432,7 @@ static void touch_task(void *arg)
                                 if (s_eq_band > 10) s_eq_band = 0;
                             }
                         } else if (s_mode == UI_MODE_PLAYING) {
+                            oled_display_trigger_viz_overlay();
                             joy_seek_hold_pulse(+1, now, now - joy_press_ms[i], pressed_edge);
                         } else if (s_mode == UI_MODE_USB_DAC && pressed_edge) {
                             s_prev_mode_before_eq = UI_MODE_USB_DAC;
@@ -1198,10 +1460,10 @@ static void touch_task(void *arg)
         int timeout = TIMEOUT_SECS[t_idx];
         // Se estiver em modo USB ou WiFi ativo, mantem o display ativo (reseta timer de inatividade)
         if (s_mode == UI_MODE_USB_MSC || s_mode == UI_MODE_USB_DAC || s_mode == UI_MODE_USB_PROMPT ||
-            menu_any_active()) {
-            last_interaction_ms = now;
+            menu_any_active() || podcast_sync_is_busy()) {
+            s_last_interaction_ms = now;
         }
-        if (!s_is_sleeping && timeout > 0 && (now - last_interaction_ms) > (uint32_t)(timeout * 1000)) {
+        if (!s_is_sleeping && timeout > 0 && (now - s_last_interaction_ms) > (uint32_t)(timeout * 1000)) {
             s_is_sleeping = true;
         }
         vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
@@ -1223,13 +1485,16 @@ static void player_menu_on_select(void)
 
 static void conf_menu_on_select(void) { s_mode = UI_MODE_CONF_MENU; s_conf_cursor = 0; }
 
-// O Game of Life deixa de ser a tela de bloqueio e passa a ser uma atividade
-// independente do menu. LEFT segurado por 1s usa o fluxo generico de saida
-// de modos ativos e volta ao menu principal.
+int touch_input_get_games_cursor(void)
+{
+    return s_games_cursor;
+}
+
+// Menu "Games": selecionado no carrossel principal, abre a lista de jogos (UI_MODE_GAMES_MENU)
 static void game_menu_on_select(void)
 {
-    oled_display_reset_life();
-    s_game_active = true;
+    s_mode = UI_MODE_GAMES_MENU;
+    s_games_cursor = 0;
 }
 
 static bool game_menu_is_active(void) { return s_game_active; }
@@ -1258,12 +1523,28 @@ void touch_input_register_usb_entry(void)
 void touch_input_register_game_entry(void)
 {
     static const menu_item_t item = {
-        .name = "Game",
+        .name = "Games",
         .on_select = game_menu_on_select,
         .is_active = game_menu_is_active,
         .poll = game_menu_poll,
         .draw_status = game_menu_draw_status,
         .request_exit = game_menu_request_exit,
+    };
+    menu_register(&item);
+}
+
+static void chrono_menu_on_select(void)
+{
+    s_mode = UI_MODE_CHRONO;
+    s_is_sleeping = false;
+    touch_input_wake_display();
+}
+
+void touch_input_register_chrono_entry(void)
+{
+    static const menu_item_t item = {
+        .name = "Chrono",
+        .on_select = chrono_menu_on_select,
     };
     menu_register(&item);
 }
@@ -1289,6 +1570,9 @@ esp_err_t touch_input_start(void)
         if (nvs_get_u8(h, "deepsleep", &val) == ESP_OK) {
             if (val < DEEPSLEEP_OPTIONS_COUNT) s_deepsleep_idx = val;
         }
+        if (nvs_get_u8(h, "lock_clock", &val) == ESP_OK) {
+            if (val < LOCK_CLOCK_OPTIONS_COUNT) s_lock_clock_timeout_idx = val;
+        }
         nvs_close(h);
     }
 
@@ -1304,7 +1588,9 @@ esp_err_t touch_input_start(void)
     s_in_player_browser = (s_mode == UI_MODE_PLAYING); // se já está tocando, considera que veio do Player
     s_last_activity_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
-    BaseType_t ok = xTaskCreatePinnedToCore(touch_task, "touch_task", 8192, NULL, 5, NULL, 0);
+    // Prioridade 4 no Core 0: cede passagem imediata para a audio_dsp_task (prioridade 5),
+    // garantindo que eventos de UI não causem preempção sobre o envio de blocos DMA ao I2S.
+    BaseType_t ok = xTaskCreatePinnedToCore(touch_task, "touch_task", 8192, NULL, 4, NULL, 0);
     return ok == pdPASS ? ESP_OK : ESP_FAIL;
 }
 
@@ -1328,6 +1614,16 @@ void touch_input_cancel_usb(void) {
     }
 }
 
+void touch_input_enter_usb_msc(void) {
+    usb_manager_set_mode(USB_MODE_MSC);
+    s_mode = UI_MODE_USB_MSC;
+}
+
+void touch_input_enter_usb_dac(void) {
+    usb_manager_set_mode(USB_MODE_DAC);
+    s_mode = UI_MODE_USB_DAC;
+}
+
 void touch_input_reset_to_main_menu(void) {
     while (!audio_player_browse_is_root()) {
         audio_player_select_entry(0);
@@ -1335,6 +1631,19 @@ void touch_input_reset_to_main_menu(void) {
     s_mode = UI_MODE_LIST;
     s_in_player_browser = false;
     s_list_cursor = 0;
+    s_is_sleeping = false;
+    touch_input_wake_display();
+}
+
+void touch_input_set_menu_cursor(int c) {
+    while (!audio_player_browse_is_root()) {
+        audio_player_select_entry(0);
+    }
+    s_mode = UI_MODE_LIST;
+    s_in_player_browser = false;
+    if (c >= 0 && c <= 6) {
+        s_list_cursor = c;
+    }
     s_is_sleeping = false;
     touch_input_wake_display();
 }

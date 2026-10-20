@@ -1,16 +1,19 @@
 [Unit]
-Description=MPS3 Podcast Sync Server
-After=network.target local-fs.target
+Description=MPS3 Podcast Sync v2.0 (Push Sync Daemon + HTTP Server)
+After=network-online.target local-fs.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/mnt/USBT/Podcasts
+Environment="PYTHONPATH=/opt/mps3-sync:/mnt/USBT/Podcasts/mps3_sync"
 ExecStart=/usr/bin/python3 /opt/mps3-sync/mps3_podcast_server.py --dir /mnt/USBT/Podcasts --port 8088 --host 0.0.0.0
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
+
 

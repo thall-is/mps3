@@ -12,6 +12,7 @@
 #include "sd_card.h"
 #include "audio_player.h"
 #include "eq.h"
+#include "audio_meter.h"
 #include "class/audio/audio_device.h"
 #include "class/hid/hid_device.h"
 #include "soc/rtc_cntl_reg.h"
@@ -222,7 +223,14 @@ static void usb_audio_task(void *arg)
                 // 3. Aplicar Equalizador de 10 bandas
                 eq_process(i2s_buf, num_samples);
 
-                // 4. Escrever diretamente nos descritores DMA do I2S
+                // 4. Alimentar medidor de intensidade sonora (VU Meter)
+                if (audio_meter_get_mode() == AUDIO_METER_MODE_PRE_VOLUME) {
+                    audio_meter_feed(src32, num_samples, s_sample_rate);
+                } else {
+                    audio_meter_feed(i2s_buf, num_samples, s_sample_rate);
+                }
+
+                // 5. Escrever diretamente nos descritores DMA do I2S
                 size_t written = 0;
                 i2s_output_write(i2s_buf, num_samples, &written);
             }
@@ -383,9 +391,13 @@ void usb_manager_set_mode(usb_mode_t mode)
         };
         tinyusb_descriptors_set(TINYUSB_PORT_FULL_SPEED_0, &msc_desc_cfg);
 
-        // 3. Entrega o storage exclusivamente para o host USB com buffer de 32 KB
+        // 3. Entrega o storage exclusivamente para o host USB com clock SDMMC a 40 MHz (Wi-Fi desligado)
         sdmmc_card_t *card = sd_card_get_handle();
         if (card && !s_msc_handle) {
+            sd_card_set_frequency(SDMMC_FREQ_HIGHSPEED);
+            size_t dma_free = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+            ESP_LOGI(TAG, "Registrando SDMMC no MSC (Maior bloco DMA livre: %u B, Buffer MSC: %d B)...",
+                     (unsigned)dma_free, (int)CONFIG_TINYUSB_MSC_BUFSIZE);
             const tinyusb_msc_storage_config_t storage_cfg = {
                 .medium = {
                     .card = card,

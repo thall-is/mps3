@@ -36,8 +36,8 @@ esp_err_t i2s_output_init(void)
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     // Buffer DMA calibrado para o limite de hardware do GDMA (max 4092 B por descritor).
     // 256 frames stereo de 32 bits = 2048 bytes (alinhamento perfeito de 2 descritores por bloco DSP de 512 frames).
-    // 32 descritores x 256 frames = 8.192 frames (64 KB / 43 ms a 192 kHz), evitando fragmentação e underruns.
-    chan_cfg.dma_desc_num = 32;
+    // 48 descritores x 256 frames = 12.288 frames (96 KB / 64 ms a 192 kHz), evitando fragmentação e underruns.
+    chan_cfg.dma_desc_num = 48;
     chan_cfg.dma_frame_num = 256;
     chan_cfg.auto_clear = true;
     chan_cfg.auto_clear_after_cb = true;

@@ -23,6 +23,17 @@ static inline uint8_t dec_to_bcd(uint8_t val)
     return (uint8_t)(((val / 10) << 4) | (val % 10));
 }
 
+// Algoritmo de Sakamoto para calculo exato do dia da semana (0=Domingo, 1=Segunda, ..., 6=Sabado)
+static inline int rtc_calc_wday(int year, int month, int day)
+{
+    static const int t[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+    if (month < 1 || month > 12 || day < 1 || day > 31) return 0;
+    if (month < 3) year -= 1;
+    int w = (year + year/4 - year/100 + year/400 + t[month-1] + day) % 7;
+    if (w < 0) w += 7;
+    return w;
+}
+
 bool rtc_ds3231_detect(i2c_master_bus_handle_t bus_handle)
 {
     if (!bus_handle) {
@@ -130,9 +141,6 @@ esp_err_t rtc_ds3231_get_time(struct tm *timeinfo)
         timeinfo->tm_hour = bcd_to_dec(raw[2] & 0x3F);
     }
 
-    timeinfo->tm_wday = (raw[3] & 0x07) - 1; // 1-7 convertido para 0-6
-    if (timeinfo->tm_wday < 0) timeinfo->tm_wday = 0;
-
     timeinfo->tm_mday = bcd_to_dec(raw[4] & 0x3F);
 
     // Mes (1-12) -> tm_mon (0-11)
@@ -144,6 +152,16 @@ esp_err_t rtc_ds3231_get_time(struct tm *timeinfo)
     bool century = (raw[5] & 0x80) != 0;
     int full_year = 2000 + year_2digit + (century ? 100 : 0);
     timeinfo->tm_year = full_year - 1900; // Anos desde 1900
+
+    // Calcula dia da semana exato matematicamente (0=DOM .. 6=SAB)
+    timeinfo->tm_wday = rtc_calc_wday(full_year, month, timeinfo->tm_mday);
+
+    // Se o registrador de hardware no DS3231 estiver dessincronizado, corrige no chip
+    uint8_t expected_hw_wday = (uint8_t)(timeinfo->tm_wday + 1);
+    if ((raw[3] & 0x07) != expected_hw_wday) {
+        uint8_t fix_wday[2] = {0x03, expected_hw_wday};
+        i2c_master_transmit(s_rtc_dev, fix_wday, 2, 50);
+    }
 
     return ESP_OK;
 }
@@ -161,7 +179,7 @@ esp_err_t rtc_ds3231_set_time(const struct tm *timeinfo)
     bool century = (full_year >= 2100);
     uint8_t year_2digit = (uint8_t)(full_year % 100);
     uint8_t month = (uint8_t)(timeinfo->tm_mon + 1);
-    uint8_t wday = (uint8_t)(timeinfo->tm_wday + 1); // 1-7
+    uint8_t wday = (uint8_t)(rtc_calc_wday(full_year, month, timeinfo->tm_mday) + 1); // 1-7 (1=DOM .. 7=SAB)
 
     uint8_t tx[8];
     tx[0] = 0x00; // Registrador inicial
@@ -270,13 +288,19 @@ esp_err_t rtc_ds3231_get_clock_info(rtc_clock_info_t *info)
         hour = bcd_to_dec(raw[2] & 0x3F);
     }
 
-    int wday = (raw[3] & 0x07) - 1;
-    if (wday < 0) wday = 0;
     int day = bcd_to_dec(raw[4] & 0x3F);
     int month = bcd_to_dec(raw[5] & 0x1F);
     int year_2digit = bcd_to_dec(raw[6]);
     bool century = (raw[5] & 0x80) != 0;
     int year = 2000 + year_2digit + (century ? 100 : 0);
+
+    // Calcula dia da semana exato (0=DOM .. 6=SAB)
+    int wday = rtc_calc_wday(year, month, day);
+    uint8_t exp_hw_wday = (uint8_t)(wday + 1);
+    if ((raw[3] & 0x07) != exp_hw_wday) {
+        uint8_t fix_wday[2] = {0x03, exp_hw_wday};
+        i2c_master_transmit(s_rtc_dev, fix_wday, 2, 50);
+    }
 
     int64_t now_us = esp_timer_get_time();
     if (sec != s_last_sec) {

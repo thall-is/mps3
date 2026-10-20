@@ -31,11 +31,23 @@ extern "C" {
 esp_err_t oled_display_init(void);
 
 /**
- * @brief Desenha o menu principal em carrossel horizontal com ícones animados.
+ * @brief Desenha o menu principal no layout sci-fi HUD com Rosa dos Ventos,
+ * barra superior de reprodução e carrossel circular com tag chanfrada.
  *
- * @param[in] cursor Índice do ícone selecionado (Player, WiFi, Conf, USB, Game).
+ * @param[in] cursor Índice do item selecionado (Play, Wifi, BT, Conf, USB, Life).
+ * @param[in] now_playing Ponteiro para o estado atual de reprodução (ou NULL se ocioso).
  */
-void oled_display_show_main_menu(int cursor);
+void oled_display_show_main_menu(int cursor, const playback_state_t *now_playing);
+
+/**
+ * @brief Verifica se as transições animadas do menu estão ativadas.
+ */
+bool oled_display_is_anim_enabled(void);
+
+/**
+ * @brief Ativa ou desativa as transições animadas do menu.
+ */
+void oled_display_set_anim_enabled(bool en);
 
 /**
  * @brief Atualiza contadores de frames e transições de animação gráfica.
@@ -53,6 +65,19 @@ void oled_display_update_animations(void);
  *
  * @param[in] state Ponteiro para o estado atual de reprodução (`playback_state_t`).
  */
+typedef enum {
+    VIZ_MODE_CLASSIC  = 0,  /**< Metadados classicos completos com badges tecnicas. */
+    VIZ_MODE_HYBRID   = 1,  /**< Hibrido: Metadados com mini VU estereo L/R na base. */
+    VIZ_MODE_SPECTRUM = 2,  /**< Espectro Hi-Fi / RTA em tela cheia com overlay dinamico. */
+    VIZ_MODE_ANALOG   = 3,  /**< Medidores Analogicos Vintage McIntosh/Technics duplos. */
+    VIZ_MODE_COUNT    = 4
+} oled_display_viz_mode_t;
+
+void oled_display_set_viz_mode(oled_display_viz_mode_t mode);
+oled_display_viz_mode_t oled_display_get_viz_mode(void);
+void oled_display_cycle_viz_mode(void);
+void oled_display_trigger_viz_overlay(void);
+
 void oled_display_show_now_playing(const playback_state_t *state);
 
 /**
@@ -362,6 +387,21 @@ void oled_display_show_wifi_qr(const char *ssid, const char *pass,
  * @param[in] info Ponteiro para a estrutura de telemetria do RTC (`rtc_clock_info_t`).
  */
 void oled_display_show_clock(const rtc_clock_info_t *info);
+
+/**
+ * @brief Exibe a tela do Cronômetro com tempo decorrido e histórico de voltas (laps).
+ */
+void oled_display_show_chrono(bool running, uint32_t elapsed_ms, const uint32_t *laps, int lap_count);
+
+/**
+ * @brief Exibe o Relógio Lockscreen no pré-bloqueio de tela e ao acordar com tela travada.
+ */
+void oled_display_show_lock_clock(const rtc_clock_info_t *info, bool is_locked, const char *track_title, int battery_pct, bool battery_charging);
+
+/**
+ * @brief Exibe a tela de configuração de tempo de exibição do relógio de bloqueio.
+ */
+void oled_display_show_lock_clock_cfg(int opt_idx);
 
 /**
  * @brief Copia o buffer de vídeo atual do OLED (1024 bytes) para a memória informada.

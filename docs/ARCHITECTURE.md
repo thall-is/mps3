@@ -165,6 +165,13 @@ Para atingir vazão sustentada de **1,30 a 1,46 MB/s** na escrita em cartão mic
    - Consome fatias de **16 KB (32 setores)** para um *bounce buffer* persistente alinhado em SRAM DMA interna (`s_bounce_persist`, `MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA`), executando comandos SDMMC `CMD25` (*Write Multiple Block*) diretos sem realocação por setor.
 3. **Isolamento de Pilha dos Handlers HTTP (`http_scratch_alloc`)**:
    - Todos os buffers temporários de caminhos UTF-8, serialização JSON e leitura de diretórios (`list_scratch_t`, `upload_scratch_t`, `dl_scratch_t`, `del_scratch_t`) são alocados dinamicamente na PSRAM via `http_scratch_alloc()`, garantindo consumo de pilha `< 128 bytes` na task `httpd` mesmo sob rajadas concorrentes de requisições do navegador.
+4. **Sincronização Push de Podcasts v2.0 (`podcast_sync` + `mps3_sync`) e Dupla Verificação SHA-256**:
+   - O MPS3 opera como servidor passivo (`podcast_sync.c` refatorado em máquina de estados não-bloqueante executada pela `display_task`, com **0 bytes** de alocação extra de pilha em DRAM interna), anunciando `_mps3._tcp` via mDNS (`mac`, `ver`, `proto=2`) quando ativado pelo menu ("Sincronizar Podcasts"), comando UART `sync`, ou automaticamente ao conectar o carregador TP4056 (respeitando *cooldown* de 6h em NVS).
+   - O cliente multiplataforma (`tools/mps3_sync/`) descobre o MPS3 na LAN, consulta `GET /api/sync/manifest` (episódios presentes no SD + histórico `played_history` + espaço livre + bateria), reconcilia o livro-razão (`state.json`) e aplica a política determinística de retenção (**3 mais recentes de cada programa + todos os não ouvidos**).
+   - **Commit Atômico em 3 Etapas com Duplo SHA-256 (`mps3_sha256_ctx_t` Zero-Alloc)**:
+     1. `PUT /api/upload?path=/Podcasts/.staging/<Show>/<ep>` com cabeçalho `X-Expected-SHA256`: calcula o SHA-256 em tempo real na `upload_writer_task` (Core 0) sem alocação dinâmica nem contenção de DMA; em caso de divergência, remove o arquivo parcial e retorna `HTTP 422 Unprocessable Entity`.
+     2. `POST /api/sync/verify`: relê o arquivo gravado fisicamente no cartão microSD (usando `s_bounce_persist` em SRAM DMA) e recalcula o SHA-256 antes do commit.
+     3. `POST /api/rename`: move atomicamente de `/Podcasts/.staging/<Show>/<ep>` para `/Podcasts/<Show>/<ep>`, garantindo que o player nunca veja arquivos parciais (pastas iniciadas por `.` são ignoradas pelo `audio_player`).
 
 ---
 
@@ -184,9 +191,10 @@ mps3/
 │   ├── mps3_nav.py          # Automação HIL de navegação e captura de tela OLED via UART
 │   ├── testbench_monitor.py # Monitor serial de telemetria de bancada
 │   ├── upload_album.py      # Utilitário CLI para envio de álbuns via HTTP PUT
+│   ├── mps3_sync/           # Pacote multiplataforma de sincronização Push de Podcasts v2.0 (CLI, daemon, PyInstaller)
 │   ├── mobile_relay/        # Relay para sincronização via Hotspot Android/Termux
-│   └── podcast_server/      # Servidor e scraper automatizado de podcasts
-├── tests/               # Suítes de testes automatizados (Web API, OTA MAC Discovery, Play/Pause, USB MSC, Navegação)
+│   └── podcast_server/      # Servidor e scraper automatizado de podcasts (integrado ao mps3_sync)
+├── tests/               # Suítes de testes automatizados (Web API, OTA MAC Discovery, Play/Pause, USB MSC, Navegação, Sync Push)
 └── versionamento/       # Automação de build, versionamento de binários e deploy OTA/Serial (mps3_version.ps1/.sh, ota_upload.py)
 ```
 

@@ -60,45 +60,82 @@ typedef struct {
 esp_err_t podcast_sync_init(void);
 
 /**
- * @brief Dispara a tarefa de sincronização em segundo plano (`podcast_sync_task`).
+ * @brief Dispara manualmente a sessao de sincronizacao Push (Wi-Fi STA + mDNS + aguarda servidor).
  *
- * Conecta ao Wi-Fi se necessário, consulta o catálogo do servidor e baixa novos episódios.
- *
- * @return ESP_OK se a tarefa foi disparada; ESP_ERR_INVALID_STATE se já ocupada.
+ * @return ESP_OK se a tarefa foi disparada; ESP_ERR_INVALID_STATE se ja ocupada.
+ */
+esp_err_t podcast_sync_start_manual(void);
+
+/**
+ * @brief Alias para podcast_sync_start_manual().
  */
 esp_err_t podcast_sync_start(void);
 
 /**
- * @brief Solicita o cancelamento imediato da sincronização ativa.
+ * @brief Verifica pre-condicoes (cooldown de 6h na NVS, bateria >= 15% ou carregando,
+ * player parado, rede Wi-Fi conhecida) e dispara a sincronizacao automatica se elegivel.
+ *
+ * @return ESP_OK se disparada; ESP_ERR_INVALID_STATE caso contrario.
+ */
+esp_err_t podcast_sync_check_auto(void);
+
+/**
+ * @brief Solicita o cancelamento imediato da sincronizacao ativa.
+ */
+void podcast_sync_request_cancel(void);
+
+/**
+ * @brief Alias para podcast_sync_request_cancel().
  */
 void podcast_sync_cancel(void);
 
 /**
- * @brief Informa se o subsistema de podcasts está ativamente ocupado no momento.
+ * @brief Informa se o subsistema de podcasts esta ativamente ocupado no momento.
  *
- * @return true se a sincronização estiver em execução; false se ociosa.
+ * @return true se a sincronizacao estiver em execucao; false se ociosa.
  */
 bool podcast_sync_is_busy(void);
 
 /**
- * @brief Obtém o estado atual e as métricas de progresso para exibição na tela OLED.
+ * @brief Informa se a sessao de sincronizacao atual foi iniciada em modo automatico.
+ */
+bool podcast_sync_is_auto_mode(void);
+
+/**
+ * @brief Notifica atividade HTTP de sincronizacao (/api/sync/... ou /api/upload) para renovar o watchdog de inatividade.
+ */
+void podcast_sync_notify_activity(void);
+
+/**
+ * @brief Chamado por POST /api/sync/begin quando o servidor inicia o envio de episodios.
+ */
+void podcast_sync_on_begin(int total_files, uint64_t total_bytes);
+
+/**
+ * @brief Chamado por POST /api/sync/done quando o servidor conclui a sincronizacao.
+ * Persiste last_sync_epoch na NVS e sinaliza encerramento limpo.
+ */
+void podcast_sync_mark_completed(void);
+
+/**
+ * @brief Obtem o estado atual e as metricas de progresso para exibicao na tela OLED.
  *
  * @param[out] out Ponteiro para a estrutura `podcast_sync_progress_t`.
  */
 void podcast_sync_get_progress(podcast_sync_progress_t *out);
 
 /**
- * @brief Configura e persiste na NVS o endereço URL base do servidor de podcasts.
+ * @brief Configura e persiste na NVS o endereco URL base do servidor de podcasts (legado).
  *
  * @param[in] url URL do servidor (ex: "http://192.168.1.100:8088").
  */
 void podcast_sync_set_server_url(const char *url);
 
 /**
- * @brief Obtém o endereço URL do servidor de podcasts atualmente configurado.
+ * @brief Obtem o endereco URL do servidor de podcasts atualmente configurado.
  *
  * @param[out] out_url Buffer de destino para a string.
- * @param[in]  max_len Tamanho máximo do buffer de saída.
+ * @param[in]  max_len Tamanho maximo do buffer de saida.
  */
 void podcast_sync_get_server_url(char *out_url, size_t max_len);
 

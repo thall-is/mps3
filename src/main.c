@@ -37,6 +37,9 @@
 #include "bt_link.h"
 #include "menu.h"
 #include "podcast_sync.h"
+#include "podcast_history.h"
+#include "user_metrics.h"
+#include "audio_meter.h"
 #include "pwr_governor.h"
 #include "debug_nav.h"
 
@@ -85,7 +88,8 @@ static void display_task(void *arg)
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
         uint32_t frame_start_ms = now;
 
-        bool should_sleep = touch_input_is_sleeping() || touch_input_is_powered_off() || touch_input_is_locked();
+        bool lock_clock_active = touch_input_is_lock_clock_visible();
+        bool should_sleep = (touch_input_is_sleeping() || touch_input_is_powered_off() || touch_input_is_locked()) && !podcast_sync_is_busy() && !lock_clock_active;
         if (should_sleep) {
             if (!s_was_sleeping) {
                 ESP_LOGI(TAG, "Tela em repouso/bloqueio. Desligando OLED e suspendendo display_task...");
@@ -101,9 +105,10 @@ static void display_task(void *arg)
             bool wifi_active = wifi_transfer_is_active() || podcast_sync_is_busy();
 
             if (is_usb_mode) {
-                // Em modos USB (DAC, Mass Storage ou Prompt), a CPU deve permanecer ativa e em 160 MHz
-                // para manter TinyUSB, descritores DMA e I2S operando sem jitter ou perda de pacotes.
-                pwr_governor_set_cpu_freq(PWR_FREQ_160MHZ);
+                // Em modos USB, a CPU deve permanecer ativa:
+                // No MSC (Pendrive), 240 MHz garante throughput maximo de interrupcoes USB DWC2.
+                // No DAC/Prompt, 160 MHz mantem sincronismo sem jitter.
+                pwr_governor_set_cpu_freq(cur_ui_mode == UI_MODE_USB_MSC ? PWR_FREQ_240MHZ : PWR_FREQ_160MHZ);
             } else {
                 pwr_governor_update(false, wifi_active, audio_player_is_seeking(), state.playing, state.sample_rate);
             }
@@ -144,7 +149,11 @@ static void display_task(void *arg)
 
         // Atualizacao dinamica de clock com tela acordada
         bool wifi_active = wifi_transfer_is_active() || podcast_sync_is_busy();
-        pwr_governor_update(true, wifi_active, audio_player_is_seeking(), state.playing, state.sample_rate);
+        if (cur_ui_mode == UI_MODE_USB_MSC) {
+            pwr_governor_set_cpu_freq(PWR_FREQ_240MHZ);
+        } else {
+            pwr_governor_update(true, wifi_active, audio_player_is_seeking(), state.playing, state.sample_rate);
+        }
 
         // Checagem universal de inatividade para Deep Sleep (pausado e sem uso, mesmo com tela ligada)
         uint32_t ds_timeout_ms = touch_input_get_deepsleep_ms();
@@ -162,10 +171,12 @@ static void display_task(void *arg)
         static bool s_last_chrg_active = false;
         bool is_charging = (battery_get_status() == BATTERY_CHARGING);
         if (is_charging && !s_last_chrg_active) {
-            s_last_chrg_active = true;
-            if (!podcast_sync_is_busy() && !state.playing) {
-                ESP_LOGI(TAG, "Carregador plugado! Disparando sincronizacao automatica de podcasts...");
-                podcast_sync_start();
+            if (now > 3000) {
+                s_last_chrg_active = true;
+                if (!wifi_transfer_is_active() && !podcast_sync_is_busy() && !state.playing) {
+                    ESP_LOGI(TAG, "Carregador plugado! Checando sincronizacao automatica de podcasts...");
+                    podcast_sync_check_auto();
+                }
             }
         } else if (!is_charging) {
             s_last_chrg_active = false;
@@ -177,7 +188,15 @@ static void display_task(void *arg)
             volume_show_until_ms = now + VOLUME_DISPLAY_MS;
         }
 
-        if (podcast_sync_is_busy()) {
+        if (lock_clock_active) {
+            rtc_clock_info_t clk_info;
+            rtc_ds3231_get_clock_info(&clk_info);
+            int mv = 0, pct = -1, time_left = -1;
+            battery_get_info(&mv, &pct, &time_left);
+            bool is_chrg = battery_is_charging();
+            const char *title = state.playing ? state.filename : NULL;
+            oled_display_show_lock_clock(&clk_info, touch_input_is_locked(), title, pct, is_chrg);
+        } else if (podcast_sync_is_busy()) {
             podcast_sync_progress_t p;
             podcast_sync_get_progress(&p);
             oled_display_show_podcast_sync(p.current_program, p.current_title,
@@ -206,8 +225,8 @@ static void display_task(void *arg)
             bool in_player = touch_input_is_in_player_browser();
 
             if (at_root && !in_player) {
-                // Menu principal com Ã­cones (Player, WiFi, Conf, USB)
-                oled_display_show_main_menu(touch_input_get_list_cursor());
+                // Menu principal HUD com Rosa dos Ventos e Topbar Now Playing
+                oled_display_show_main_menu(touch_input_get_list_cursor(), &state);
             } else {
                 // Dentro de uma pasta: comporta-se como antes, porÃ©m sem o item ".."
                 int real_count = audio_player_get_browse_entry_count();
@@ -232,18 +251,29 @@ static void display_task(void *arg)
                     }
                 oled_display_show_list(names, count, touch_input_get_list_cursor(), &state);
             }
-                } else if (touch_input_get_mode() == UI_MODE_CONF_MENU) {
+                } else if (touch_input_get_mode() == UI_MODE_GAMES_MENU) {
+            const char* games_items[] = {"Game of Life", "Tetris"};
+            oled_display_show_list(games_items, 2, touch_input_get_games_cursor(), &state);
+        } else if (touch_input_get_mode() == UI_MODE_CONF_MENU) {
             const char* conf_items[] = {"Config. de Audio", "Display e LED", "Sistema e Energia"};
             oled_display_show_list(conf_items, 3, touch_input_get_list_cursor(), &state);
         } else if (touch_input_get_mode() == UI_MODE_CONF_AUDIO) {
             const char* audio_items[] = {"Volume", "Balanco L/R", "Equalizador", "Ordenar Faixas"};
             oled_display_show_list(audio_items, 4, touch_input_get_list_cursor(), &state);
         } else if (touch_input_get_mode() == UI_MODE_CONF_DISPLAY) {
-            const char* disp_items[] = {"Brilho e Tela", "LED RGB"};
-            oled_display_show_list(disp_items, 2, touch_input_get_list_cursor(), &state);
+            const char* disp_items[] = {"Brilho e Tela", "Relogio Bloqueio", "LED RGB"};
+            oled_display_show_list(disp_items, 3, touch_input_get_list_cursor(), &state);
+        } else if (touch_input_get_mode() == UI_MODE_LOCK_CLOCK_CFG) {
+            oled_display_show_lock_clock_cfg(touch_input_get_lock_clock_timeout_idx());
+        } else if (touch_input_get_mode() == UI_MODE_CHRONO) {
+            uint32_t laps[8];
+            int lap_count = touch_input_chrono_get_laps(laps, 8);
+            oled_display_show_chrono(touch_input_chrono_is_running(),
+                                     touch_input_chrono_get_elapsed_ms(),
+                                     laps, lap_count);
         } else if (touch_input_get_mode() == UI_MODE_CONF_SYSTEM) {
-            const char* sys_items[] = {"Relogio RTC", "Deep Sleep", "Redes Wi-Fi"};
-            oled_display_show_list(sys_items, 3, touch_input_get_list_cursor(), &state);
+            const char* sys_items[] = {"Relogio RTC", "Deep Sleep", "Redes Wi-Fi", "Sincronizar Podcasts"};
+            oled_display_show_list(sys_items, 4, touch_input_get_list_cursor(), &state);
         } else if (touch_input_get_mode() == UI_MODE_RTC_CLOCK) {
             rtc_clock_info_t clk_info;
             rtc_ds3231_get_clock_info(&clk_info);
@@ -334,20 +364,25 @@ static void display_task(void *arg)
             player_eq_config_t eq_cfg;
             audio_player_get_eq_config(&eq_cfg);
 
-            if (s_dac_state != 1 || cur_vol != s_last_dac_vol || cur_bal != s_last_dac_bal || 
-                cur_rate != s_last_dac_rate || eq_cfg.active_preset_idx != s_last_dac_eq_preset ||
-                eq_cfg.enabled != s_last_dac_eq_en ||
-                cur_streaming != s_last_dac_streaming) {
-                s_last_dac_vol = cur_vol;
-                s_last_dac_bal = cur_bal;
-                s_last_dac_rate = cur_rate;
-                s_last_dac_streaming = cur_streaming;
-                s_last_dac_eq_preset = eq_cfg.active_preset_idx;
-                s_last_dac_eq_en = eq_cfg.enabled;
-                s_dac_state = 1;
+            bool state_changed = (s_dac_state != 1 || cur_vol != s_last_dac_vol || cur_bal != s_last_dac_bal || 
+                                  cur_rate != s_last_dac_rate || eq_cfg.active_preset_idx != s_last_dac_eq_preset ||
+                                  eq_cfg.enabled != s_last_dac_eq_en ||
+                                  cur_streaming != s_last_dac_streaming);
+
+            s_last_dac_vol = cur_vol;
+            s_last_dac_bal = cur_bal;
+            s_last_dac_rate = cur_rate;
+            s_last_dac_streaming = cur_streaming;
+            s_last_dac_eq_preset = eq_cfg.active_preset_idx;
+            s_last_dac_eq_en = eq_cfg.enabled;
+            s_dac_state = 1;
+
+            // Com streaming ativo, roda na taxa maxima de FPS do barramento I2C (delay minimo de 1 ms).
+            // Quando inativo/pausado, repousa a 5 FPS (200 ms).
+            if (cur_streaming || state_changed) {
                 oled_display_show_usb_dac();
             }
-            vTaskDelay(pdMS_TO_TICKS(100));
+            vTaskDelay(pdMS_TO_TICKS(cur_streaming ? 1 : 200));
             continue;
         } else {
             if (!s_sd_ok) {
@@ -367,13 +402,13 @@ static void display_task(void *arg)
             }
         }
 
-        // Controle de taxa de atualizacao (pacing dinamico para 25 FPS / 40 ms).
+        // Controle de taxa de atualizacao (pacing dinamico para ~60 FPS / 16 ms).
         // Roda no Core 0 com prioridade 3: nunca disputa CPU com player_task (Core 1)
         // e cede CPU instantaneamente para audio_dsp_task (Core 0, prioridade 5)
-        // e touch_task (Core 0, prioridade 5).
+        // e touch_task (Core 0, prioridade 4).
         uint32_t frame_elapsed_ms = (uint32_t)(esp_timer_get_time() / 1000ULL) - frame_start_ms;
-        bool is_transferring = (wifi_transfer_is_active() && wifi_transfer_is_transferring()) || podcast_sync_is_busy();
-        const uint32_t target_frame_ms = is_transferring ? 100 : 40; // 10 FPS durante transferencias (suave e fluido, 34ms I2C + 66ms folga) / 25 FPS normal
+        bool is_wifi_mode = wifi_transfer_is_active() || podcast_sync_is_busy() || menu_any_active();
+        const uint32_t target_frame_ms = is_wifi_mode ? 100 : 16; // ~62.5 FPS maximo (16 ms) no player / 10 FPS (100 ms) em modo WiFi e menus para priorizar 95%+ da CPU no Core 0
         if (frame_elapsed_ms < target_frame_ms) {
             uint32_t sleep_ms = target_frame_ms - frame_elapsed_ms;
             vTaskDelay(pdMS_TO_TICKS(sleep_ms < 2 ? 2 : sleep_ms));
@@ -496,6 +531,25 @@ static void uart_cmd_task(void *arg)
                     } else if (strcmp(line_buf, "play") == 0 || strcmp(line_buf, "p") == 0) {
                         ESP_LOGI("UART_CMD", "Comando recebido: toggle play/pause");
                         audio_player_toggle_play_pause();
+                    } else if (strcmp(line_buf, "msc") == 0) {
+                        ESP_LOGI("UART_CMD", "Comando recebido: entrar no modo USB MSC (Pendrive)");
+                        touch_input_enter_usb_msc();
+                    } else if (strcmp(line_buf, "dac") == 0) {
+                        ESP_LOGI("UART_CMD", "Comando recebido: entrar no modo USB DAC");
+                        touch_input_enter_usb_dac();
+                    } else if (strcmp(line_buf, "prompt") == 0 || strcmp(line_buf, "usb") == 0) {
+                        ESP_LOGI("UART_CMD", "Comando recebido: abrir prompt USB");
+                        touch_input_set_usb_prompt();
+                    } else if (strcmp(line_buf, "usb-exit") == 0) {
+                        ESP_LOGI("UART_CMD", "Comando recebido: sair do modo USB");
+                        touch_input_cancel_usb();
+                    } else if (strncmp(line_buf, "menu", 4) == 0) {
+                        int c = 0;
+                        if (strlen(line_buf) >= 6 && line_buf[5] >= '0' && line_buf[5] <= '5') {
+                            c = line_buf[5] - '0';
+                        }
+                        ESP_LOGI("UART_CMD", "Comando recebido: navegar para menu principal cursor=%d", c);
+                        touch_input_set_menu_cursor(c);
                     } else if (strncmp(line_buf, "sd-freq ", 8) == 0) {
                         uint32_t f = (uint32_t)strtoul(line_buf + 8, NULL, 10);
                         if (f < 1000) f *= 1000;
@@ -641,6 +695,28 @@ static void uart_cmd_task(void *arg)
                         debug_nav_request_screenshot();
                     } else if (strcmp(line_buf, "nav reset") == 0) {
                         debug_nav_reset_home();
+                    } else if (strncmp(line_buf, "viz", 3) == 0) {
+                        const char *p = line_buf + 3;
+                        while (*p == ' ') p++;
+                        if (*p >= '0' && *p <= '3') {
+                            oled_display_set_viz_mode((oled_display_viz_mode_t)(*p - '0'));
+                        } else {
+                            oled_display_cycle_viz_mode();
+                        }
+                        printf("@OK viz %d\n", (int)oled_display_get_viz_mode());
+                    } else if (strncmp(line_buf, "sdclk", 5) == 0) {
+                        const char *p = line_buf + 5;
+                        while (*p == ' ') p++;
+                        int freq = atoi(p);
+                        if (freq == 40) {
+                            sd_card_set_frequency(SDMMC_FREQ_HIGHSPEED);
+                            printf("@OK sdclk 40MHz\n");
+                        } else if (freq == 20) {
+                            sd_card_set_frequency(SDMMC_FREQ_DEFAULT);
+                            printf("@OK sdclk 20MHz\n");
+                        } else {
+                            printf("@ERR sdclk invalid (use 20 or 40)\n");
+                        }
                     }
                     line_len = 0;
                 }
@@ -758,6 +834,7 @@ void app_main(void)
         return;
     }
 
+    audio_meter_init();
     bt_link_init();
 
     // --- Registro do menu principal --------------------------------------
@@ -770,6 +847,7 @@ void app_main(void)
     touch_input_register_conf_entry();    // indice 3
     touch_input_register_usb_entry();     // indice 4
     touch_input_register_game_entry();    // indice 5
+    touch_input_register_chrono_entry();  // indice 6
 
     ESP_LOGI(TAG, "Iniciando touch_input...");
     ret = touch_input_start();
@@ -792,12 +870,37 @@ void app_main(void)
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Falha ao iniciar a task de reproducao.");
         }
+        podcast_history_init();
+        user_metrics_init();
     }
 
     podcast_sync_init();
 
     // Configura wakeup por hardware ao plugar o carregador (GPIO 11 em nivel alto)
     esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BATTERY_CHRG, 1);
+
+    // --- Autovalidacao de firmware e cancelamento de rollback OTA ---
+    const esp_partition_t *running_part = esp_ota_get_running_partition();
+    esp_ota_img_states_t ota_state;
+    if (esp_ota_get_state_partition(running_part, &ota_state) == ESP_OK) {
+        if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+            ESP_LOGI("OTA", "Novo firmware em verificacao. Validando e cancelando rollback...");
+            esp_ota_mark_app_valid_cancel_rollback();
+        }
+    }
+
+    // Se reiniciou apos uma atualizacao OTA, religa o Wi-Fi ANTES da display_task para confirmacao remota imediata
+    nvs_handle_t nvs_h;
+    uint8_t ota_reboot = 0;
+    if (nvs_open("system", NVS_READWRITE, &nvs_h) == ESP_OK) {
+        if (nvs_get_u8(nvs_h, "ota_reboot", &ota_reboot) == ESP_OK && ota_reboot == 1) {
+            nvs_erase_key(nvs_h, "ota_reboot");
+            nvs_commit(nvs_h);
+            ESP_LOGI("OTA", "Reboot pos-OTA detectado. Ativando Wi-Fi para reconexao...");
+            wifi_transfer_enter_auto();
+        }
+        nvs_close(nvs_h);
+    }
 
     // display_task no Core 0 com prioridade 3:
     // Nao disputa com o decodificador/IO do player_task (Core 1),
@@ -810,29 +913,6 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Criando uart_cmd_task no Core 0...");
     xTaskCreatePinnedToCore(uart_cmd_task, "uart_cmd", 8192, NULL, 1, NULL, 0);
-
-    // --- Autovalidacao de firmware e cancelamento de rollback OTA ---
-    const esp_partition_t *running_part = esp_ota_get_running_partition();
-    esp_ota_img_states_t ota_state;
-    if (esp_ota_get_state_partition(running_part, &ota_state) == ESP_OK) {
-        if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
-            ESP_LOGI("OTA", "Novo firmware em verificacao. Validando e cancelando rollback...");
-            esp_ota_mark_app_valid_cancel_rollback();
-        }
-    }
-
-    // Se reiniciou apos uma atualizacao OTA, religa o Wi-Fi para confirmacao remota imediata
-    nvs_handle_t nvs_h;
-    uint8_t ota_reboot = 0;
-    if (nvs_open("system", NVS_READWRITE, &nvs_h) == ESP_OK) {
-        if (nvs_get_u8(nvs_h, "ota_reboot", &ota_reboot) == ESP_OK && ota_reboot == 1) {
-            nvs_erase_key(nvs_h, "ota_reboot");
-            nvs_commit(nvs_h);
-            ESP_LOGI("OTA", "Reboot pos-OTA detectado. Ativando Wi-Fi para reconexao...");
-            wifi_transfer_enter_auto();
-        }
-        nvs_close(nvs_h);
-    }
 
     ESP_LOGI(TAG, "mps3 rodando.");
 }

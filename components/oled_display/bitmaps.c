@@ -1,5 +1,5 @@
 #include "bitmaps.h"
-#include "wrench_64_64_28f.h"
+#include "menu_conf_frames.h"
 #include "game_of_life_64_64_28f.h"
 
 #include "wifi_search_64_64_28f.h"
@@ -200,7 +200,7 @@ void bitmap_animations_init(void) {
         menu_wifi_frames[i] = wifi_search_64_64_28f_frames[i];
     }
     for (int i = 0; i < MENU_CONF_FRAMES; i++) {
-        menu_conf_frames[i] = wrench_64_64_28f_frames[i];
+        menu_conf_frames[i] = menu_conf_frames_data[i];
     }
     for (int i = 0; i < MENU_GAME_FRAMES; i++) {
         menu_game_frames[i] = game_of_life_64_64_28f_frames[i];

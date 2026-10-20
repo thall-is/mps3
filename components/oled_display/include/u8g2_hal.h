@@ -79,6 +79,15 @@ uint8_t u8g2_hal_byte_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_p
  */
 uint8_t u8g2_hal_gpio_and_delay_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr);
 
+/**
+ * @brief Callback CAD I2C de alta performance (Burst de página inteira de 128B sem fragmentação de 24B).
+ *
+ * Substitui o `u8x8_cad_ssd13xx_fast_i2c` padrão do U8g2 (que fragmenta cada página de 128 bytes
+ * em 6 transações de 24 bytes por limitação legada do Arduino ATmega32u4), reduzindo de 72
+ * transações I2C por quadro para apenas 2 transações por página suja (1 comando composto + 1 bloco de 128B).
+ */
+uint8_t u8x8_cad_mps3_fast_i2c(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr);
+
 #ifdef __cplusplus
 }
 #endif

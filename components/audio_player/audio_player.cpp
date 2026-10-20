@@ -8,6 +8,8 @@
 #include "esp_audio_dec_default.h"
 #include "esp_audio_simple_dec_default.h"
 #include "eq.h"
+#include "audio_meter.h"
+#include "user_metrics.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,9 +33,9 @@ static const char *TAG = "audio_player";
 // Buffer de entrada (dados comprimidos lidos do SD). So' precisa caber
 // um frame de audio de cada vez - metadados (ID3v2, capa de album, tags
 // FLAC) sao pulados ANTES do loop comecar (skip_leading_metadata()), sem
-// precisar caber no buffer. 64KB da' bastante margem sobre o maior
-// max_frame ja' visto na pratica (~17KB, FLAC 24 bits/96kHz).
-#define INBUF_SIZE (64 * 1024)
+// precisar caber no buffer. 128KB alocado em PSRAM garante margem folgada
+// para leituras em bloco no SD Card a 40 MHz e previne starvation de decodificador.
+#define INBUF_SIZE (128 * 1024)
 
 // Duracao do fade-in aplicado no inicio de cada faixa e logo apos um
 // avanco rapido terminar - suaviza estalos audiveis nessas transicoes.
@@ -200,10 +202,16 @@ void audio_player_toggle_play_pause(void)
 }
 
 static audio_volume_change_cb_t s_volume_change_cb = NULL;
+static audio_track_completed_cb_t s_track_completed_cb = NULL;
 
 void audio_player_set_volume_change_cb(audio_volume_change_cb_t cb)
 {
     s_volume_change_cb = cb;
+}
+
+void audio_player_register_track_completed_cb(audio_track_completed_cb_t cb)
+{
+    s_track_completed_cb = cb;
 }
 
 int audio_player_get_volume(void) { return s_volume_percent; }
@@ -278,7 +286,7 @@ static float volume_to_gain(int percent)
 // =============================================================================
 #define DSP_BLOCK_FRAMES  512 // 512 quadros stereo = 1024 amostras int32_t (4096 bytes)
 #define DSP_BLOCK_SAMPLES (DSP_BLOCK_FRAMES * 2)
-#define DSP_NUM_BLOCKS    16  // 16 blocos individuais (64 KB total) em SRAM interna
+#define DSP_NUM_BLOCKS    48  // 48 blocos (196 KB total em PSRAM; ~128 ms a 192 kHz e ~550 ms a 44.1 kHz) previnem underruns de I2S DMA
 
 typedef struct {
     int32_t samples[DSP_BLOCK_SAMPLES];
@@ -459,7 +467,12 @@ static void audio_dsp_task(void *arg)
             int32_t final_L = s_cached_final_L;
             int32_t final_R = s_cached_final_R;
 
-            // Fade-in suave de transição
+            const bool meter_pre_vol = (audio_meter_get_mode() == AUDIO_METER_MODE_PRE_VOLUME);
+            if (meter_pre_vol) {
+                audio_meter_feed(to_write, samples_to_write, s_state.sample_rate);
+            }
+
+            // Fade-in suave de transição ou passe único fundido (Volume + Balanço + Equalizador SVF)
             if (s_dsp_fade_in_remaining > 0) {
                 for (size_t i = 0; i < samples_to_write; i += 2) {
                     float fade = (s_dsp_fade_in_total > 0)
@@ -476,17 +489,27 @@ static void audio_dsp_task(void *arg)
                     }
                     if (s_dsp_fade_in_remaining > 0) s_dsp_fade_in_remaining--;
                 }
-            } else if (final_L < 32768 || final_R < 32768) {
-                for (size_t i = 0; i < samples_to_write; i += 2) {
-                    to_write[i]     = (int32_t)(((int64_t)to_write[i]     * final_L) >> 15);
-                    if (i + 1 < samples_to_write) {
-                        to_write[i + 1] = (int32_t)(((int64_t)to_write[i + 1] * final_R) >> 15);
+                eq_process(to_write, samples_to_write);
+            } else {
+                const float gain_l = (float)final_L * (1.0f / 32768.0f);
+                const float gain_r = (float)final_R * (1.0f / 32768.0f);
+                // Se o EQ estiver ativo, eq_process_with_gain ja aplica gain_l/gain_r sem custo extra
+                if (!eq_process_with_gain(to_write, samples_to_write, gain_l, gain_r)) {
+                    if (final_L < 32768 || final_R < 32768) {
+                        for (size_t i = 0; i < samples_to_write; i += 2) {
+                            to_write[i]     = (int32_t)(((int64_t)to_write[i]     * final_L) >> 15);
+                            if (i + 1 < samples_to_write) {
+                                to_write[i + 1] = (int32_t)(((int64_t)to_write[i + 1] * final_R) >> 15);
+                            }
+                        }
                     }
                 }
             }
 
-            // Equalizador gráfico de 10 bandas executado inteiramente no Core 0
-            eq_process(to_write, samples_to_write);
+            // Alimentação do medidor de intensidade sonora (VU Meter pós-volume/EQ)
+            if (!meter_pre_vol) {
+                audio_meter_feed(to_write, samples_to_write, s_state.sample_rate);
+            }
 
             // Transmissão direta aos descritores DMA do I2S
             size_t written = 0;
@@ -494,7 +517,6 @@ static void audio_dsp_task(void *arg)
         }
 
         xQueueSend(s_dsp_free_queue, &blk, portMAX_DELAY);
-        taskYIELD();
     }
 }
 
@@ -855,13 +877,13 @@ static void split_relative_path(const char *relative, char *dir_out, size_t dir_
     const char *last_slash = strrchr(relative, '/');
     if (!last_slash) {
         dir_out[0] = '\0';
-        snprintf(file_out, file_out_len, "%s", relative);
+        strlcpy(file_out, relative, file_out_len);
     } else {
         size_t dir_len = (size_t)(last_slash - relative);
         if (dir_len >= dir_out_len) dir_len = dir_out_len - 1;
         memcpy(dir_out, relative, dir_len);
         dir_out[dir_len] = '\0';
-        snprintf(file_out, file_out_len, "%s", last_slash + 1);
+        strlcpy(file_out, last_slash + 1, file_out_len);
     }
 }
 
@@ -2027,8 +2049,7 @@ static void prefetch_next_file(int next_index)
     char path[MAX_PATH_LEN];
     char dir_snapshot[DIR_LEN];
     snprintf(path, sizeof(path), "%s/%s", s_playback_dir, s_playback_scan.audio_files[next_index]);
-    strncpy(dir_snapshot, s_playback_dir, sizeof(dir_snapshot) - 1);
-    dir_snapshot[sizeof(dir_snapshot) - 1] = '\0';
+    strlcpy(dir_snapshot, s_playback_dir, sizeof(dir_snapshot));
     scan_unlock();
 
     if (s_prefetch.fp) {
@@ -2544,6 +2565,10 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
     s_last_elapsed_sec = resume_elapsed_sec;
     eq_reset_state();
 
+    char metrics_rel_path[PATH_LEN];
+    build_relative_path(s_playback_dir, display_name, metrics_rel_path, sizeof(metrics_rel_path));
+    user_metrics_on_track_begin(metrics_rel_path);
+
     bool prebuffer_done = false;
     size_t prebuffered_frames = 0;
     size_t prebuffer_target_frames = 0;
@@ -2555,6 +2580,8 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
     }
 
     uint32_t last_saved_elapsed = 0;
+    bool marked_completed = false;
+    bool reached_eof = false;
 
     int stuck_at_eof_count = 0; // ver checagem "at_true_eof" mais abaixo
 
@@ -2646,6 +2673,9 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
 
         size_t valid = valid_end - data_start;
         if (valid == 0) {
+            if (at_true_eof) {
+                reached_eof = true;
+            }
             break;
         }
 
@@ -2680,6 +2710,7 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
             stuck_at_eof_count++;
             if (stuck_at_eof_count >= 4) {
                 ESP_LOGW(TAG, "Fim do arquivo alcancado sem conseguir decodificar mais nada; abortando faixa.");
+                reached_eof = true;
                 break;
             }
         } else {
@@ -2813,6 +2844,7 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
                 // Envia para o Core 0 (audio_dsp_task) para processar Volume/Balanço/EQ e gravar no I2S DMA
                 if (samples_to_write > 0) {
                     audio_dsp_send_pcm(to_write, samples_to_write, sample_rate);
+                    user_metrics_add_listened_frames((uint32_t)(samples_to_write / 2), sample_rate, s_volume_percent);
                 }
 
                 if (!prebuffer_done) {
@@ -2840,6 +2872,15 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
                     s_state.elapsed_sec = elapsed_sec;
                     state_unlock();
                     s_last_elapsed_sec = elapsed_sec;
+
+                    if (!marked_completed && meta.total_sec > 0 && elapsed_sec >= (meta.total_sec * 90) / 100) {
+                        marked_completed = true;
+                        if (s_track_completed_cb) {
+                            char rel[PATH_LEN];
+                            build_relative_path(s_playback_dir, display_name, rel, sizeof(rel));
+                            s_track_completed_cb(rel, elapsed_sec, meta.total_sec);
+                        }
+                    }
 
                     if (elapsed_sec >= last_saved_elapsed + 30) {
                         last_saved_elapsed = elapsed_sec;
@@ -2875,6 +2916,7 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
                 break;
 
             case mps3::DecodeStatus::EndOfStream:
+                reached_eof = true;
                 done = true;
                 break;
 
@@ -2885,7 +2927,47 @@ static void play_track(int index, const char *display_name, uint32_t resume_elap
         }
     }
 
+    bool threshold_reached = (meta.total_sec > 0 && s_last_elapsed_sec >= (meta.total_sec * 90) / 100);
+    if (!marked_completed && (reached_eof || threshold_reached) && s_last_elapsed_sec > 0) {
+        marked_completed = true;
+        if (s_track_completed_cb) {
+            char rel[PATH_LEN];
+            build_relative_path(s_playback_dir, display_name, rel, sizeof(rel));
+            s_track_completed_cb(rel, s_last_elapsed_sec, meta.total_sec);
+        }
+    }
+
     audio_dsp_drain();
+
+    {
+        bool is_seek_restart = (s_pending_cmd == PLAYER_CMD_RESTART && s_forced_restart_pending);
+        const char *end_reason = "stop";
+        if (reached_eof) {
+            end_reason = "eof";
+        } else if (s_pending_cmd == PLAYER_CMD_NEXT) {
+            end_reason = "skip_next";
+        } else if (s_pending_cmd == PLAYER_CMD_PREV) {
+            end_reason = "skip_prev";
+        } else if (s_pending_cmd == PLAYER_CMD_PLAY_INDEX) {
+            end_reason = "select";
+        } else if (s_pending_cmd == PLAYER_CMD_RESTART) {
+            end_reason = "repeat";
+        }
+
+        user_metrics_end_info_t end_info = {};
+        end_info.rel_path          = metrics_rel_path;
+        end_info.title             = s_state.title;
+        end_info.artist            = s_state.artist;
+        end_info.album             = s_state.album;
+        end_info.codec             = s_state.format_name;
+        end_info.sample_rate       = s_state.sample_rate;
+        end_info.bits_per_sample   = s_state.bits_per_sample;
+        end_info.bitrate_bps       = s_state.bitrate;
+        end_info.duration_sec      = meta.total_sec;
+        end_info.final_elapsed_sec = s_last_elapsed_sec;
+        end_info.end_reason        = end_reason;
+        user_metrics_on_track_end(&end_info, is_seek_restart);
+    }
 
     if (output_buf) heap_caps_free(output_buf);
     if (pending_m4a_prefix) free(pending_m4a_prefix);

@@ -13,4 +13,6 @@ idf_component_register(
         esp_driver_i2c
         esp_timer
         driver
+        audio_meter
+        nvs_flash
 )

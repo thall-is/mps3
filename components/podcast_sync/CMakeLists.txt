@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "podcast_sync.c"
+        "podcast_history.c"
     INCLUDE_DIRS
         "include"
     REQUIRES

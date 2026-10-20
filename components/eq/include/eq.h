@@ -70,9 +70,9 @@ void eq_update_config(const eq_config_t *config);
 /**
  * @brief Processa um bloco de amostras PCM de áudio estéreo em 32 bits (*in-place*).
  *
- * Aplica os 10 filtros biquad em cascata nos canais esquerdo e direito.
- * Para taxas acima de 48 kHz, o processamento entra automaticamente em modo Bit-Perfect
- * direto sem alteração de amostras para economizar ciclos de CPU.
+ * Aplica os 10 filtros SVF (State Variable Filter trapezoidal linear) em cascata
+ * nos canais esquerdo e direito, suportando taxas desde 8 kHz até 192 kHz / 384 kHz
+ * sem perda de precisão nos graves.
  *
  * @param[in,out] buffer  Ponteiro para as amostras estéreo intercaladas (L, R).
  * @param[in]     samples Número total de amostras escalares (frames * 2).
@@ -80,6 +80,22 @@ void eq_update_config(const eq_config_t *config);
  * @note Executa no Core 0 dentro de `audio_dsp_task`.
  */
 void eq_process(int32_t *buffer, size_t samples);
+
+/**
+ * @brief Processa o equalizador de 10 bandas fundindo o ganho de volume/balanço L/R em um único passe.
+ *
+ * Se o equalizador estiver ativo e não-flat, aplica `gain_l` e `gain_r` na conversão de entrada
+ * Q31 -> float (custo zero extra de CPU e metade do tráfego de barramento PSRAM) e retorna `true`.
+ * Caso o equalizador esteja desativado ou totalmente flat (0 dB), retorna `false` sem modificar
+ * o buffer para que o chamador aplique apenas o controle de volume inteiro rápido.
+ *
+ * @param[in,out] buffer  Ponteiro para as amostras estéreo intercaladas (L, R).
+ * @param[in]     samples Número total de amostras escalares (frames * 2).
+ * @param[in]     gain_l  Multiplicador linear de volume/balanço do canal esquerdo [0.0 .. 1.0].
+ * @param[in]     gain_r  Multiplicador linear de volume/balanço do canal direito [0.0 .. 1.0].
+ * @return `true` se o buffer foi processado (incluindo ganho L/R), `false` se em bypass.
+ */
+bool eq_process_with_gain(int32_t *buffer, size_t samples, float gain_l, float gain_r);
 
 /**
  * @brief Obtém uma cópia da configuração atual do equalizador.
@@ -94,7 +110,7 @@ void eq_get_config(eq_config_t *config);
 void eq_reset_to_defaults(void);
 
 /**
- * @brief Zera os registradores de atraso histórico (z1, z2) dos filtros biquad.
+ * @brief Zera os registradores de estado integrador (ic1, ic2) dos filtros SVF.
  *
  * Evita transientes e ruídos residuais (*pops*) ao alternar de faixa ou após saltos de busca (seek).
  */

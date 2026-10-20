@@ -139,6 +139,22 @@ typedef void (*audio_volume_change_cb_t)(int volume);
 void audio_player_set_volume_change_cb(audio_volume_change_cb_t cb);
 
 /**
+ * @brief Tipo de função de callback para notificações de conclusão de faixa (>= 90% ou EOF).
+ *
+ * @param[in] rel_path    Caminho relativo ao ponto de montagem SD (ex: "Podcasts/Show/ep.mp3").
+ * @param[in] elapsed_sec Segundos reproduzidos da faixa.
+ * @param[in] total_sec   Duração total estimada/real da faixa em segundos.
+ */
+typedef void (*audio_track_completed_cb_t)(const char *rel_path, uint32_t elapsed_sec, uint32_t total_sec);
+
+/**
+ * @brief Registra um callback invocado quando uma faixa atinge >= 90% de reprodução ou chega ao fim.
+ *
+ * @param[in] cb Ponteiro para a função de callback.
+ */
+void audio_player_register_track_completed_cb(audio_track_completed_cb_t cb);
+
+/**
  * @brief Obtém o valor do balanço estéreo atual.
  *
  * @return Valor do balanço de -100 (canal esquerdo isolado) a +100 (canal direito isolado).

@@ -61,8 +61,9 @@ esp_err_t sd_card_init(void)
 
     sdmmc_card_print_info(stdout, s_card);
 
-    // Ajusta frequencia padrao inicial para 20 MHz (livre de interferencia com Wi-Fi)
-    sd_card_set_frequency(SDMMC_FREQ_DEFAULT);
+    // Ajusta frequencia padrao inicial para 40 MHz (High-Speed) para maxima largura de banda em audio Hi-Res.
+    // Em modo Wi-Fi, o subsistema wifi_transfer comuta dinamicamente para 20 MHz para evitar interferencia de RF.
+    sd_card_set_frequency(SDMMC_FREQ_HIGHSPEED);
 
     uint64_t total_bytes = 0, free_bytes = 0;
     if (esp_vfs_fat_info(SD_MOUNT_POINT, &total_bytes, &free_bytes) == ESP_OK) {

@@ -249,15 +249,67 @@ class PodcastSyncHandler(BaseHTTPRequestHandler):
             pass  # Cliente desconectou normalmente ou abortou download
 
 
-def run_server(host=DEFAULT_HOST, port=DEFAULT_PORT, directory=DEFAULT_DIR):
+def _ensure_mps3_sync_importable(base_dir: Path) -> bool:
+    """Adiciona possiveis diretorios do pacote mps3_sync ao sys.path."""
+    candidates = [
+        Path("/opt/mps3-sync"),
+        base_dir / "mps3_sync",
+        Path(__file__).resolve().parent.parent / "mps3_sync",
+    ]
+    for cand in candidates:
+        if (cand / "mps3_sync" / "__init__.py").is_file():
+            cand_str = str(cand)
+            if cand_str not in sys.path:
+                sys.path.insert(0, cand_str)
+    try:
+        import mps3_sync  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _push_sync_worker(base_dir: Path, interval_sec: int = 120):
+    """Loop em background que descobre o MPS3 na LAN e executa Push Sync v2.0."""
+    if not _ensure_mps3_sync_importable(base_dir):
+        print("[!] Pacote mps3_sync nao encontrado; Push Sync automatico desativado.")
+        return
+
+    from mps3_sync.config import SyncConfig
+    from mps3_sync.cli import run_single_cycle
+
+    state_file = base_dir / ".mps3_sync_state.json"
+    print(f"[+] Daemon Push Sync v2.0 ativo (intervalo={interval_sec}s, ledger={state_file})")
+    while True:
+        try:
+            cfg = SyncConfig.load(
+                podcasts_dir=str(base_dir),
+                state_file=str(state_file),
+            )
+            run_single_cycle(cfg)
+        except Exception as exc:
+            sys.stderr.write(f"[PushSync] Erro no ciclo de sincronizacao: {exc}\n")
+        time.sleep(max(15, interval_sec))
+
+
+def run_server(host=DEFAULT_HOST, port=DEFAULT_PORT, directory=DEFAULT_DIR, sync_interval=120):
+    import threading
     dir_path = Path(directory)
     if not dir_path.exists():
         print(f"[!] AVISO: Diretorio {dir_path} nao existe atualmente. O servidor aguardara sua criacao.")
 
+    if sync_interval > 0:
+        t = threading.Thread(
+            target=_push_sync_worker,
+            args=(dir_path, sync_interval),
+            daemon=True,
+            name="mps3-push-sync",
+        )
+        t.start()
+
     PodcastSyncHandler.podcast_dir = dir_path
     server = ThreadingHTTPServer((host, port), PodcastSyncHandler)
     print("=" * 60)
-    print("  MPS3 PODCAST SYNC SERVER INICIADO")
+    print("  MPS3 PODCAST SYNC SERVER v2.0 INICIADO")
     print(f"  Diretorio: {dir_path}")
     print(f"  Porta:     {port}")
     print(f"  Endpoints: http://{host}:{port}/api/status")
@@ -277,7 +329,9 @@ if __name__ == "__main__":
     parser.add_argument("--dir", default=DEFAULT_DIR, help="Diretorio raiz dos podcasts")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Porta TCP do servidor (padrao: 8088)")
     parser.add_argument("--host", default=DEFAULT_HOST, help="Host IP para bind (padrao: 0.0.0.0)")
+    parser.add_argument("--sync-interval", type=int, default=120, help="Intervalo em segundos do Push Sync automatico (0=desativar)")
     args = parser.parse_args()
 
-    run_server(args.host, args.port, args.dir)
+    run_server(args.host, args.port, args.dir, args.sync_interval)
+
 

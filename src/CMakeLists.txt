@@ -27,4 +27,5 @@ idf_component_register(
         app_update
         esp_partition
         podcast_sync
+        audio_meter
 )

@@ -178,7 +178,11 @@ void podcast_history_mark_played(const char *rel_path, uint32_t duration_sec)
         s_entry_count++;
     }
 
-    // Persiste no arquivo no SD
+    // Persiste no arquivo no SD (garante que o diretorio Podcasts exista)
+    struct stat st_dir;
+    if (stat(SD_MOUNT_POINT "/Podcasts", &st_dir) != 0) {
+        mkdir(SD_MOUNT_POINT "/Podcasts", 0777);
+    }
     FILE *f = fopen(HISTORY_FILE_PATH, "a");
     if (f) {
         fprintf(f, "%s|%lu|%lu\n", norm, (unsigned long)now_ts, (unsigned long)duration_sec);
@@ -193,7 +197,12 @@ void podcast_history_mark_played(const char *rel_path, uint32_t duration_sec)
 
 void podcast_history_remove_entry(const char *rel_path)
 {
-    if (!rel_path || rel_path[0] == '\0' || !s_hist_mutex) return;
+    if (!rel_path || rel_path[0] == '\0') return;
+
+    if (!s_initialized) {
+        podcast_history_init();
+    }
+    if (!s_hist_mutex) return;
 
     char norm[PATH_ITEM_LEN];
     normalize_path(rel_path, norm, sizeof(norm));
@@ -230,13 +239,68 @@ void podcast_history_remove_entry(const char *rel_path)
     xSemaphoreGive(s_hist_mutex);
 }
 
+esp_err_t podcast_history_unmark_played(const char *rel_path)
+{
+    if (!rel_path || rel_path[0] == '\0') return ESP_ERR_INVALID_ARG;
+    podcast_history_remove_entry(rel_path);
+    return ESP_OK;
+}
+
+int podcast_history_get_count(void)
+{
+    if (!s_initialized) {
+        podcast_history_init();
+    }
+    int cnt = 0;
+    if (s_hist_mutex && xSemaphoreTake(s_hist_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+        cnt = s_entry_count;
+        xSemaphoreGive(s_hist_mutex);
+    }
+    return cnt;
+}
+
+bool podcast_history_get_entry(int idx, char *out_rel_path, size_t max_len, uint32_t *out_ts, uint32_t *out_dur)
+{
+    if (!s_initialized) {
+        podcast_history_init();
+    }
+    if (!s_hist_mutex || idx < 0) return false;
+
+    bool ok = false;
+    if (xSemaphoreTake(s_hist_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+        if (idx < s_entry_count && s_entries) {
+            if (out_rel_path && max_len > 0) {
+                strncpy(out_rel_path, s_entries[idx].rel_path, max_len - 1);
+                out_rel_path[max_len - 1] = '\0';
+            }
+            if (out_ts) *out_ts = s_entries[idx].timestamp;
+            if (out_dur) *out_dur = s_entries[idx].duration_sec;
+            ok = true;
+        }
+        xSemaphoreGive(s_hist_mutex);
+    }
+    return ok;
+}
+
+static bool is_inside_podcasts_dir(const char *path)
+{
+    if (!path) return false;
+    const char *p = path;
+    while (*p == '/' || *p == '\\') p++;
+    if (strncasecmp(p, "sdcard/", 7) == 0) {
+        p += 7;
+        while (*p == '/' || *p == '\\') p++;
+    }
+    return (strncasecmp(p, "Podcasts/", 9) == 0 || strncasecmp(p, "Podcasts\\", 9) == 0);
+}
+
 void podcast_history_audio_player_cb(const char *rel_path, uint32_t elapsed_sec, uint32_t total_sec)
 {
     if (!rel_path) return;
 
-    // Apenas monitora faixas que pertencem ao diretorio de Podcasts
-    if (strcasestr(rel_path, "podcast") != NULL || strcasestr(rel_path, "Podcasts") != NULL) {
-        ESP_LOGI(TAG, "Audio player concluiu podcast: %s (%lu / %lu s)", rel_path,
+    // Apenas monitora faixas que pertencem ao diretorio /sdcard/Podcasts/
+    if (is_inside_podcasts_dir(rel_path)) {
+        ESP_LOGI(TAG, "Audio player concluiu podcast (>=90%% ou EOF): %s (%lu / %lu s)", rel_path,
                  (unsigned long)elapsed_sec, (unsigned long)total_sec);
         podcast_history_mark_played(rel_path, total_sec);
     }

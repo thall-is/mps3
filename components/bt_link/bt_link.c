@@ -120,13 +120,12 @@ static void on_uart_frame(uart_ctrl_cmd_t cmd, const uint8_t *payload, size_t le
                 if (found_idx >= 0) {
                     s_devs[found_idx].rssi = r.rssi;
                     if (r.name[0] != '\0' && strncmp(s_devs[found_idx].name, "BT-", 3) == 0) {
-                        strncpy(s_devs[found_idx].name, r.name, sizeof(s_devs[found_idx].name) - 1);
+                        strlcpy(s_devs[found_idx].name, r.name, sizeof(s_devs[found_idx].name));
                     }
                 } else if (s_dev_count < BT_MAX_DEVICES) {
                     memcpy(s_devs[s_dev_count].bda, r.bda, 6);
                     s_devs[s_dev_count].rssi = r.rssi;
-                    strncpy(s_devs[s_dev_count].name, r.name, sizeof(s_devs[s_dev_count].name) - 1);
-                    s_devs[s_dev_count].name[sizeof(s_devs[s_dev_count].name) - 1] = '\0';
+                    strlcpy(s_devs[s_dev_count].name, r.name, sizeof(s_devs[s_dev_count].name));
                     s_dev_count++;
                 }
                 xSemaphoreGive(s_status_mutex);
