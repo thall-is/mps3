@@ -1,10 +1,10 @@
 # MPS3 — Mapeamento e Controle de Documentação de Funções do Projeto
 
-[![Total de Funções](https://img.shields.io/badge/Funções_Catalogadas-224-blue.svg)](#) 
+[![Total de Funções](https://img.shields.io/badge/Funções_Catalogadas-375-blue.svg)](#) 
 [![Status](https://img.shields.io/badge/Status-100%25_Documentado-brightgreen.svg)](#) 
 [![Padrão](https://img.shields.io/badge/Padrão-Doxygen%20%2F%20ESP--IDF-orange.svg)](#)
 
-Este documento contém o inventário exaustivo de **todas as 224 funções do projeto mps3**, organizadas por componente e subsistema arquitetural. Cada função possui uma caixa de seleção (checkbox `- [x]`) indicando seu status de revisão e documentação técnica detalhada, incluindo papel no pipeline de áudio/sistema, parâmetros, retorno, restrições de concorrência (FreeRTOS) e periféricos de hardware envolvidos.
+Este documento contém o inventário exaustivo de **todas as 375 funções do projeto mps3**, organizadas por componente e subsistema arquitetural. Cada função possui uma caixa de seleção (checkbox `- [x]`) indicando seu status de revisão e documentação técnica detalhada, incluindo papel no pipeline de áudio/sistema, parâmetros, retorno, restrições de concorrência (FreeRTOS) e periféricos de hardware envolvidos.
 
 ## 📊 Sumário Executivo por Subsistema
 
@@ -15,7 +15,7 @@ Este documento contém o inventário exaustivo de **todas as 224 funções do pr
 | 3 | **Audio Player - Navegador de Arquivos (FatFS)** | [`fs_browser.h`](components/audio_player/include/fs_browser.h) | [`fs_browser.cpp`](components/audio_player/fs_browser.cpp) | 6 | 100% (todos marcados) |
 | 4 | **Audio Player - Extrator de Metadados Hi-Res** | [`metadata_extract.h`](components/audio_player/metadata_extract.h) | [`metadata_extract.c`](components/audio_player/metadata_extract.c) | 1 | 100% (todos marcados) |
 | 5 | **Board I/O - Monitor de Bateria & Carga** | [`battery.h`](components/board_io/include/battery.h) | [`battery.c`](components/board_io/battery.c) | 6 | 100% (todos marcados) |
-| 6 | **Board I/O - Saída I2S Master & PCM5102A** | [`i2s_output.h`](components/board_io/include/i2s_output.h) | [`i2s_output.c`](components/board_io/i2s_output.c) | 8 | 100% (todos marcados) |
+| 6 | **Board I/O - Saída I2S Master & PCM5102A** | [`i2s_output.h`](components/board_io/include/i2s_output.h) | [`i2s_output.c`](components/board_io/i2s_output.c) | 10 | 100% (todos marcados) |
 | 7 | **Board I/O - Governador de Energia & Frequência (DFS)** | [`pwr_governor.h`](components/board_io/include/pwr_governor.h) | [`pwr_governor.c`](components/board_io/pwr_governor.c) | 9 | 100% (todos marcados) |
 | 8 | **Board I/O - LED RGB WS2812** | [`rgb_led.h`](components/board_io/include/rgb_led.h) | [`rgb_led.c`](components/board_io/rgb_led.c) | 6 | 100% (todos marcados) |
 | 9 | **Board I/O - Relógio de Tempo Real RTC DS3231** | [`rtc_ds3231.h`](components/board_io/include/rtc_ds3231.h) | [`rtc_ds3231.c`](components/board_io/rtc_ds3231.c) | 7 | 100% (todos marcados) |
@@ -110,7 +110,52 @@ bool audio_player_should_start_in_playing_mode(void);
 
 ---
 
-### - [x] `audio_player_toggle_play_pause()`
+### - [x] `audio_player_clear_resume_state()`
+
+```c
+void audio_player_clear_resume_state(void);
+```
+
+**Descrição Técnica:**  
+@brief Limpa o registro da última faixa reproduzida na NVS para recuperação de boot ou falha. Remove as chaves `last_path` e `last_elapsed` da partição NVS, impedindo loops de boot causados por arquivos incompatíveis ou corrompidos.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- *Nenhum (void)*.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Pode ser chamado no Core 0 (`uart_cmd_task` ou `wifi_transfer_task`) ou Core 1 (`player_task`). Thread-safe via API NVS do ESP-IDF.
+- **Hardware Envolvido:** Memória Flash SPI / Partição NVS (offset 0x9000, 24 KB).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_set_last_error()`
+
+```c
+void audio_player_set_last_error(const char *filename, const char *error_msg);
+```
+
+**Descrição Técnica:**  
+@brief Define ou limpa mensagem de erro da reprodução para exibição na interface visual do display OLED SSD1306. Atualiza thread-safely sob mutex `state_lock()` o nome do arquivo e a string de erro (desencadeando a renderização da tela SEELE quando o erro indica formato não suportado ou limite excedido).
+
+**Parâmetros:**  
+- `const char *filename`: Nome do arquivo com erro (ou NULL para manter o atual).
+- `const char *error_msg`: Mensagem de erro descritiva (ou NULL para limpar e desarmar o erro).
+
+**Retorno:**  
+- *Nenhum (void)*.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Pode ser chamado no Core 0 (`uart_cmd_task` ou `touch_task`) ou Core 1 (`player_task`). Thread-safe com `state_lock()` / `state_unlock()`.
+- **Hardware Envolvido:** Estrutura de estado de reprodução em SRAM/DRAM e sincronia com `display_task` no Core 0.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
 
 ```c
 void audio_player_toggle_play_pause(void);
@@ -572,6 +617,52 @@ bool audio_player_browse_is_root(void);
 
 ---
 
+### - [x] `audio_player_browse_is_playback_dir()`
+
+```c
+bool audio_player_browse_is_playback_dir(void);
+```
+
+**Descrição Técnica:**  
+@brief Verifica se a pasta atualmente navegada no menu e a mesma que esta tocando. @return true se s_browse_dir for identico a s_playback_dir; false caso contrario.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `bool`: `true` se s_browse_dir for idêntico a s_playback_dir; `false` caso contrário.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Sincronizado internamente com `scan_lock()` / `scan_unlock()`.
+- **Hardware Envolvido:** Memória interna e ponteiros de diretório do player.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_get_current_track_browse_index()`
+
+```c
+int audio_player_get_current_track_browse_index(void);
+```
+
+**Descrição Técnica:**  
+@brief Retorna o indice da faixa que esta tocando no navegador de pastas atual. @return Indice relativo a lista visivel (excluindo '..'), ou -1 se nao estiver na pasta de reproducao.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `int`: Índice da música em reprodução relativo à lista visível (com offset de subpastas), ou `-1` se a pasta em navegação não for a pasta de reprodução.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Sincronizado internamente com `scan_lock()` / `scan_unlock()`.
+- **Hardware Envolvido:** Memória interna e listas de varredura de diretório.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
 ### - [x] `audio_player_get_browse_entry_count()`
 
 ```c
@@ -827,6 +918,190 @@ void audio_player_set_sort_mode(track_sort_mode_t mode);
 
 ---
 
+### - [x] `audio_player_get_loop_mode()`
+
+```c
+audio_player_loop_mode_t audio_player_get_loop_mode(void);
+```
+
+**Descrição Técnica:**  
+@brief Obtém o modo de repetição (loop) configurado no momento no reprodutor de áudio (AUDIO_LOOP_NONE, AUDIO_LOOP_ALL, AUDIO_LOOP_TRACK).
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `audio_player_loop_mode_t`: Modo de repetição ativo (0=NONE, 1=ALL, 2=TRACK).
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Thread-safe, leitura atômica de variável estática de estado no Core 1 ou Core 0.
+- **Hardware Envolvido:** NVS Flash (persistência).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_set_loop_mode()`
+
+```c
+void audio_player_set_loop_mode(audio_player_loop_mode_t mode);
+```
+
+**Descrição Técnica:**  
+@brief Define o modo de repetição (loop), sincroniza com a struct `playback_state_t` sob `state_lock()` e persiste na NVS sob a chave `"loop_mode"`.
+
+**Parâmetros:**  
+- `mode` (`audio_player_loop_mode_t`): Novo modo de repetição desejado.
+
+**Retorno:**  
+- *Nenhum (void)*.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executada a partir de `touch_task` (Core 0) ou serial, com lock em `s_state_mutex` e gravação em NVS.
+- **Hardware Envolvido:** NVS Flash.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_cycle_loop_mode()`
+
+```c
+audio_player_loop_mode_t audio_player_cycle_loop_mode(void);
+```
+
+**Descrição Técnica:**  
+@brief Alterna ciclicamente o modo de repetição de áudio na sequência NONE -> ALL -> TRACK -> NONE, persistindo na NVS e retornando o novo estado.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `audio_player_loop_mode_t`: Novo modo ativo após a transição.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Invocada via `touch_task` em resposta a gestos no Menu Bolha ou gavetas.
+- **Hardware Envolvido:** NVS Flash.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_prev_loop_mode()`
+
+```c
+audio_player_loop_mode_t audio_player_prev_loop_mode(void);
+```
+
+**Descrição Técnica:**  
+@brief Alterna no sentido inverso o modo de repetição de áudio na sequência NONE -> TRACK -> ALL -> NONE, persistindo na NVS e retornando o novo estado.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `audio_player_loop_mode_t`: Novo modo ativo após a transição.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Invocada via `touch_task` em resposta a navegação horizontal (LEFT) na gaveta de modos.
+- **Hardware Envolvido:** NVS Flash.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_get_shuffle_mode()`
+
+```c
+audio_player_shuffle_mode_t audio_player_get_shuffle_mode(void);
+```
+
+**Descrição Técnica:**  
+@brief Obtém o modo de reprodução aleatória (shuffle) ativo (AUDIO_SHUFFLE_OFF, AUDIO_SHUFFLE_FOLDER, AUDIO_SHUFFLE_ALL).
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `audio_player_shuffle_mode_t`: Modo aleatório ativo (0=OFF, 1=FOLDER, 2=ALL).
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Thread-safe, leitura atômica no Core 1 ou Core 0.
+- **Hardware Envolvido:** NVS Flash.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_set_shuffle_mode()`
+
+```c
+void audio_player_set_shuffle_mode(audio_player_shuffle_mode_t mode);
+```
+
+**Descrição Técnica:**  
+@brief Define o modo de reprodução aleatória, regera a permutação Fisher-Yates em PSRAM (`MALLOC_CAP_SPIRAM`) se configurado para FOLDER, sincroniza com `playback_state_t` e persiste na NVS (`"shuf_mode"`).
+
+**Parâmetros:**  
+- `mode` (`audio_player_shuffle_mode_t`): Novo modo aleatório desejado.
+
+**Retorno:**  
+- *Nenhum (void)*.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executada por `touch_task`, aloca buffers Fisher-Yates exclusivamente em PSRAM Octal para proteger a DRAM interna.
+- **Hardware Envolvido:** PSRAM Octal e NVS Flash.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_cycle_shuffle_mode()`
+
+```c
+audio_player_cycle_shuffle_mode_t audio_player_cycle_shuffle_mode(void);
+```
+
+**Descrição Técnica:**  
+@brief Alterna ciclicamente o modo de reprodução aleatória na sequência OFF -> FOLDER -> ALL -> OFF, persistindo na NVS e retornando o novo estado.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `audio_player_shuffle_mode_t`: Novo modo ativo após a transição.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Invocada por `touch_task` no acionamento do Menu Bolha ou gaveta de modos.
+- **Hardware Envolvido:** PSRAM Octal e NVS Flash.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_prev_shuffle_mode()`
+
+```c
+audio_player_shuffle_mode_t audio_player_prev_shuffle_mode(void);
+```
+
+**Descrição Técnica:**  
+@brief Alterna no sentido inverso o modo aleatório (OFF -> ALL -> FOLDER -> OFF), persistindo na NVS e retornando o novo estado.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `audio_player_shuffle_mode_t`: Novo modo aleatório ativo.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Invocada via `touch_task` em resposta a navegação horizontal (LEFT) na gaveta de modos.
+- **Hardware Envolvido:** PSRAM Octal, SDMMC, NVS Flash.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
 ### - [x] `audio_player_get_sort_mode()`
 
 ```c
@@ -845,6 +1120,75 @@ track_sort_mode_t audio_player_get_sort_mode(void);
 **Concorrência e Hardware:**  
 - **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5) com sincronização via `s_state_mutex` e filas FreeRTOS (`s_dsp_ready_queue`, `s_dsp_free_queue`).
 - **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (CLK: GPIO 5, CMD: GPIO 6, D0..D3: GPIOs 4, 17, 16, 7) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_is_current_favorite()`
+
+```c
+bool audio_player_is_current_favorite(void);
+```
+
+**Descrição Técnica:**  
+@brief Consulta em streaming no arquivo .m3u se a faixa atual em reprodução já consta na playlist alvo ativa.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `bool`: true se a faixa já estiver na playlist alvo ativa, false caso contrário.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_input_task` / UI) protegido por `scan_lock()`.
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_is_browse_item_favorite()`
+
+```c
+bool audio_player_is_browse_item_favorite(int browse_idx);
+```
+
+**Descrição Técnica:**  
+@brief Consulta em streaming no arquivo .m3u se o item focado no navegador de arquivos já consta na playlist alvo ativa.
+
+**Parâmetros:**  
+- `int browse_idx`: Índice do item no navegador.
+
+**Retorno:**  
+- `bool`: true se o item já constar na playlist alvo ativa, false caso contrário.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_input_task` / UI) protegido por `scan_lock()`.
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_delete_playlist()`
+
+```c
+bool audio_player_delete_playlist(const char *name_or_filename);
+```
+
+**Descrição Técnica:**  
+@brief Exclui permanentemente um arquivo de playlist (.m3u/.m3u8) em /sdcard/Playlists. Se a playlist apagada for a playlist alvo atual, o sistema automaticamente redefine a lista alvo para "Favoritos.m3u8" e atualiza a NVS. Arquivos da lista padrão de Favoritos são protegidos contra exclusão.
+
+**Parâmetros:**  
+- `const char *name_or_filename`: Nome ou caminho do arquivo da playlist a ser apagada.
+
+**Retorno:**  
+- `bool`: true se a playlist foi excluída com sucesso, false em caso de erro ou se protegida.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_input_task` / UI) protegido por `scan_lock()`.
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo.
 
 - [x] *Função catalogada, documentada e verificada.*
 
@@ -1367,7 +1711,7 @@ battery_status_t battery_get_status(void);
 
 - **Cabeçalho:** [`components/board_io/include/i2s_output.h`](components/board_io/include/i2s_output.h)
 - **Implementação:** [`components/board_io/i2s_output.c`](components/board_io/i2s_output.c)
-- **Total de Funções Catalogadas:** 8
+- **Total de Funções Catalogadas:** 10
 
 ### - [x] `i2s_output_init()`
 
@@ -1551,6 +1895,52 @@ void i2s_output_play_test_tone(uint32_t freq_hz, uint32_t duration_ms);
 **Concorrência e Hardware:**  
 - **Núcleo / Tarefa:** Core 0 (`audio_dsp_task`, prioridade 5). Protegido pelo mutex `s_i2s_mutex`.
 - **Hardware Envolvido:** Transmissor I2S Master (BCLK GPIO 48, DOUT GPIO 47, LRCK GPIO 21, MCLK GPIO 8) conectado ao DAC PCM5102A em modo 4 fios.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `i2s_output_deinit()`
+
+```c
+esp_err_t i2s_output_deinit(void);
+```
+
+**Descrição Técnica:**  
+@brief Desinicializa o canal transmissor I2S e desaloca todos os buffers e descritores DMA. Utilizado durante os modos de transferência Wi-Fi de alta velocidade e SDMMC para devolver ~96 KB de memória DRAM interna DMA ao heap do sistema, permitindo que o pipeline de transferência aloque bounce buffers contíguos de até 64 KB.
+
+**Parâmetros:**  
+- Nenhum.
+
+**Retorno:**  
+- `esp_err_t`: `ESP_OK` se o canal foi desalocado ou já estava inativo; `ESP_FAIL` em falha do driver.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Qualquer núcleo. Protegido pelo mutex `s_i2s_mutex`.
+- **Hardware Envolvido:** GDMA e transmissor I2S Master PCM5102A.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `i2s_output_is_initialized()`
+
+```c
+bool i2s_output_is_initialized(void);
+```
+
+**Descrição Técnica:**  
+@brief Consulta se o driver de saída I2S está atualmente inicializado com canal DMA ativo.
+
+**Parâmetros:**  
+- Nenhum.
+
+**Retorno:**  
+- `bool`: `true` se o canal estiver ativo e pronto; `false` se foi desinicializado.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Qualquer núcleo. Protegido pelo mutex `s_i2s_mutex`.
+- **Hardware Envolvido:** Canal GDMA I2S Master.
 
 - [x] *Função catalogada, documentada e verificada.*
 
@@ -3052,6 +3442,32 @@ void oled_display_show_wifi_connected(const char *ip, const char *mdns_host, int
 
 ---
 
+### - [x] `oled_display_show_wifi_streaming()`
+
+```c
+void oled_display_show_wifi_streaming(const char *filename, int buffer_pct, float kbps, int rssi);
+```
+
+**Descrição Técnica:**  
+@brief Exibe status de streaming de áudio em tempo real para a Central Web no display OLED SSD1306 com histerese de 3s.
+
+**Parâmetros:**  
+- `const char *filename`: Nome da faixa em reprodução no Web Player.
+- `int buffer_pct`: Porcentagem acumulada do buffer da faixa carregada no navegador (0-100%).
+- `float kbps`: Taxa instantânea de transferência em KB/s.
+- `int rssi`: Nível de sinal Wi-Fi em dBm (-1 se indisponível).
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 (`display_task`, prioridade 3). Sincronizado com mutex de barramento I2C.
+- **Hardware Envolvido:** Barramento I2C Mestre operando a 800 kHz conectado ao display SSD1306 (128x64 pixels).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
 ### - [x] `oled_display_show_wifi_transfer()`
 
 ```c
@@ -3450,6 +3866,32 @@ void oled_display_show_unsupported(const char *filename);
 
 ---
 
+---
+
+### - [x] `oled_display_show_unsupported_ex()`
+
+```c
+void oled_display_show_unsupported_ex(const char *filename, const char *reason);
+```
+
+**Descrição Técnica:**  
+@brief Exibe notificação de arquivo com formato não suportado ou limite físico de decodificação excedido, renderizando o monólito SEELE 01 (82x64) à direita e as especificações de limites ou formato à esquerda. @param[in] filename Nome do arquivo incompatível. @param[in] reason Motivo ou detalhe do erro (ex: "FLAC max 24b/192k", "WAV max 32b/384k", "Formato nao suportado").
+
+**Parâmetros:**  
+- `const char *filename`: Nome do arquivo cuja reprodução foi rejeitada.
+- `const char *reason`: String descritiva do motivo de rejeição (limites físicos ou codec).
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 (`display_task`, prioridade 3). Sincronizado com mutex de barramento I2C.
+- **Hardware Envolvido:** Barramento I2C Mestre (SDA GPIO 10, SCL GPIO 9) operando a 400 kHz conectado ao display SSD1306 (128x64 pixels).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
 ### - [x] `oled_display_show_sort_mode()`
 
 ```c
@@ -3596,6 +4038,120 @@ void oled_display_show_clock(const rtc_clock_info_t *info);
 - **Hardware Envolvido:** Barramento I2C Mestre (SDA GPIO 10, SCL GPIO 9) operando a 400 kHz conectado ao display SSD1306 (128x64 pixels).
 
 - [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_trigger_bubble_expand_toast()`
+
+```c
+void oled_display_trigger_bubble_expand_toast(int cx, int cy, const char *line1, const char *line2, const uint8_t *icon_16x16);
+```
+
+**Descrição:**  
+Dispara a animação de onda expansiva a partir de uma bolha de comando ($cx, cy$), crescendo de $r=28$ até $r=135\text{ px}$ em 130 ms para cobrir 100% da tela em preto sólido, exibindo em seguida o ícone 16x16 e textos de confirmação centralizados de alto contraste por ~750 ms antes de restaurar suavemente a tela anterior.
+
+**Parâmetros:**  
+- `int cx`: Coordenada X do centro da bolha de origem (ex: 64 para UP/DOWN, 0 para LEFT, 127 para RIGHT).
+- `int cy`: Coordenada Y do centro da bolha de origem (ex: 0 para UP, 63 para DOWN, 31 para LEFT/RIGHT).
+- `const char *line1`: Texto da linha principal (ex: "FAVORITADO", "OPCOES", "PLAYLIST ALVO").
+- `const char *line2`: Texto secundário complementar (ex: nome da playlist ou ação).
+- `const uint8_t *icon_16x16`: Bitmap XBM 16x16 opcional (ou NULL).
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Invocada em qualquer tarefa (ex: `touch_task` no Core 0), renderizada de forma atômica pela `display_task` (Core 0) via `oled_display_render_overlays()`.
+- **Hardware Envolvido:** Display OLED SSD1306 (128x64) via barramento I2C Mestre a 400 kHz.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_browse_to_playlists()`
+
+```c
+void audio_player_browse_to_playlists(void);
+```
+
+**Descrição:**  
+Navega diretamente o explorador de arquivos para o diretório `/sdcard/Playlists`, permitindo acesso imediato a todas as listas de reprodução .m3u e .m3u8.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+---
+
+### - [x] `audio_player_get_playlists_count()`
+
+```c
+int audio_player_get_playlists_count(void);
+```
+
+**Descrição:**  
+Retorna a quantidade total de arquivos de playlist (.m3u e .m3u8) disponíveis em `/sdcard/Playlists`.
+
+**Retorno:**  
+- `int`: Total de playlists encontradas (no mínimo 1 garantindo a lista Favoritos).
+
+---
+
+### - [x] `audio_player_get_playlist_by_index()`
+
+```c
+bool audio_player_get_playlist_by_index(int index, char *out_name, size_t out_len, bool *out_is_active);
+```
+
+**Descrição:**  
+Obtém o nome e o status ativo de uma playlist pelo seu índice ordenado (índice 0 é sempre a lista de Favoritos, padrão estilo Spotify).
+
+**Parâmetros:**  
+- `int index`: Índice da playlist (0 .. count-1).
+- `char *out_name`: Buffer de saída para o nome do arquivo.
+- `size_t out_len`: Tamanho do buffer.
+- `bool *out_is_active`: Recebe true se esta for a playlist alvo selecionada no momento.
+
+**Retorno:**  
+- `bool`: true se obteve os dados com sucesso.
+
+---
+
+### - [x] `audio_player_set_target_playlist_by_index()`
+
+```c
+bool audio_player_set_target_playlist_by_index(int index);
+```
+
+**Descrição:**  
+Define a playlist alvo ativa através do seu índice na lista de `/sdcard/Playlists` e persiste a preferência na memória NVS.
+
+**Parâmetros:**  
+- `int index`: Índice selecionado.
+
+**Retorno:**  
+- `bool`: true se a playlist foi definida e salva com sucesso.
+
+---
+
+### - [x] `oled_display_set_chord_drawer()`
+
+```c
+void oled_display_set_chord_drawer(chord_drawer_mode_t mode, uint8_t expand_pct, const char **items, int item_count, int cursor_idx, int active_idx);
+```
+
+**Descrição:**  
+Configura o estado e os dados da Semi Aba (Drawer) ativa dentro da bolha semi expandida (Esquerda para Playlists ou Direita para Presets de Equalizador).
+
+**Parâmetros:**  
+- `chord_drawer_mode_t mode`: Tipo da semi aba (NONE, PLAYLISTS ou EQUALIZER).
+- `uint8_t expand_pct`: Porcentagem de expansão do raio da bolha (0 a 100%).
+- `const char **items`: Vetor com os nomes dos itens a serem exibidos dentro da bolha.
+- `int item_count`: Quantidade de itens disponíveis.
+- `int cursor_idx`: Índice do item em foco navegável com o joystick.
+- `int active_idx`: Índice do item atualmente ativo em áudio.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
 
 ---
 
@@ -4737,6 +5293,30 @@ void touch_input_get_keyboard_state(char *text, int *cursor, int *grid_x, int *g
 
 ---
 
+### - [x] `touch_input_get_action_items()`
+
+```c
+int touch_input_get_action_items(const char *items[], int max_items);
+```
+
+**Descrição Técnica:**  
+@brief Preenche o vetor de strings com os rótulos contextuais do Menu de Ações (UI_MODE_ACTIONS_MENU), alternando dinamicamente entre opções de Playlist e de Arquivos/Pastas comuns.
+
+**Parâmetros:**  
+- `const char *items[]`: Array de ponteiros para receber os rótulos de ações.
+- `int max_items`: Quantidade máxima de itens suportada no buffer.
+
+**Retorno:**  
+- `int`: Quantidade efetiva de itens preenchidos no menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 (`display_task` / `touch_task`).
+- **Hardware Envolvido:** Display OLED SSD1306 e Joystick.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
 ## 📁 Comunicação - Protocolo Binário UART Inter-MCU
 
 - **Cabeçalho:** [`components/uart_ctrl/include/uart_ctrl.h`](components/uart_ctrl/include/uart_ctrl.h)
@@ -5458,3 +6038,6891 @@ void wifi_transfer_register_menu_entry(void);
 - [x] *Função catalogada, documentada e verificada.*
 
 ---
+
+### - [x] `wifi_transfer_save_network()`
+
+```c
+void wifi_transfer_save_network(const char *ssid, const char *pass);
+```
+
+**Descrição Técnica:**  
+@brief Salva ou atualiza as credenciais de uma rede Wi-Fi conhecida na memória não-volátil (NVS) para reconexão automática no modo STA.
+
+**Parâmetros:**  
+- `const char *ssid`: Nome da rede Wi-Fi (SSID).
+- `const char *pass`: Senha WPA2/WPA3 da rede.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 executando a pilha Wi-Fi do ESP-IDF e servidor HTTPD na porta 80.
+- **Hardware Envolvido:** Partição NVS na memória Flash SPI de 16MB.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_delete_network()`
+
+```c
+bool wifi_transfer_delete_network(const char *ssid);
+```
+
+**Descrição Técnica:**  
+@brief Exclui uma rede conhecida salva na memória não-volátil (NVS) pelo SSID e reordena os índices.
+
+**Parâmetros:**  
+- `const char *ssid`: Nome da rede Wi-Fi a ser removida.
+
+**Retorno:**  
+- `bool`: `true` se a rede existia e foi removida, `false` caso contrário.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 executando a UI do menu ou servidor HTTPD.
+- **Hardware Envolvido:** Partição NVS na memória Flash SPI.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_promote_network()`
+
+```c
+bool wifi_transfer_promote_network(const char *ssid);
+```
+
+**Descrição Técnica:**  
+@brief Move uma rede salva para o topo da lista de prioridades na NVS (posição 0).
+
+**Parâmetros:**  
+- `const char *ssid`: Nome da rede Wi-Fi a ser promovida.
+
+**Retorno:**  
+- `bool`: `true` se a rede foi localizada e promovida com sucesso.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 / UI do Menu.
+- **Hardware Envolvido:** Partição NVS na memória Flash SPI.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_scan_start()`
+
+```c
+esp_err_t wifi_transfer_scan_start(void);
+```
+
+**Descrição Técnica:**  
+@brief Dispara uma varredura ativa não-bloqueante nos canais de 2.4 GHz para localizar SSIDs no ar.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `esp_err_t`: `ESP_OK` se o scan foi aceito pelo driver Wi-Fi.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 / Wi-Fi driver task.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz do ESP32-S3.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_scan_get_results()`
+
+```c
+esp_err_t wifi_transfer_scan_get_results(void *out_aps, int max_aps, int *out_count);
+```
+
+**Descrição Técnica:**  
+@brief Recupera a lista de redes (AP records) encontradas no último scan concluído.
+
+**Parâmetros:**  
+- `void *out_aps`: Buffer receptor para os registros de APs.
+- `int max_aps`: Capacidade máxima do buffer.
+- `int *out_count`: Ponteiro para receber a quantidade de redes encontradas.
+
+**Retorno:**  
+- `esp_err_t`: `ESP_OK` se os resultados foram copiados com sucesso.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_get_substate_name()`
+
+```c
+const char* wifi_transfer_get_substate_name(void);
+```
+
+**Descrição Técnica:**  
+@brief Retorna o identificador textual do sub-estado ativo do menu ou modo Wi-Fi (ex: "SUBMENU", "AP_ACTIVE", "STA_ACTIVE", "SCAN_LIST", "KEYBOARD", "MANAGE_SAVED", "OFF"). Usado para telemetria automatizada no protocolo `@UI`.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `const char*`: String literal indicando o sub-estado atual.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Qualquer core / Thread-safe.
+- **Hardware Envolvido:** Estruturas de controle de UI e estado do subsistema Wi-Fi.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_get_submenu_cursor()`
+
+```c
+int wifi_transfer_get_submenu_cursor(void);
+```
+
+**Descrição Técnica:**  
+@brief Retorna o índice de seleção atual (0 a 3) do cursor visual no submenu de Wi-Fi exibido no display OLED.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `int`: Posição do cursor (0: Hotspot AP, 1: Conectar STA, 2: Scan, 3: Redes Salvas).
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 / UI display_task.
+- **Hardware Envolvido:** Display OLED SSD1306 e estado do menu.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_is_menu_open()`
+
+```c
+bool wifi_transfer_is_menu_open(void);
+```
+
+**Descrição Técnica:**  
+@brief Informa se a interface visual de navegação do menu Wi-Fi está ativa na tela no momento.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `bool`: `true` se o submenu de Wi-Fi estiver aberto na tela; `false` caso contrário.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Qualquer core / Thread-safe.
+- **Hardware Envolvido:** Subsistema de menu e OLED.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_is_boost_active()`
+
+`c
+bool wifi_transfer_is_boost_active(void);
+`
+
+**Descrição Técnica:**  
+@brief Informa se o Transfer Boost Mode está ativo no momento (transferência ativa de arquivo ou dentro da janela de amortecimento pós-transferência de 1,5s), permitindo suspender renderização de display OLED e reduzir polling de touch.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- ool: 	rue se o boost de transferência estiver ativo; alse caso contrário.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Qualquer core / Operação atômica seq_cst.
+- **Hardware Envolvido:** Coordenação global entre Wi-Fi, I2C (Display SSD1306) e ADC/Touch.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_set_sd_clock_mode()`
+
+`c
+void wifi_transfer_set_sd_clock_mode(int mode);
+`
+
+**Descrição Técnica:**  
+@brief Configura dinamicamente a política de clock do barramento SDMMC 4-bit (Mode 0: 20MHz fixo, Mode 1: Híbrido 20MHz RX -> 40MHz Drain, Mode 2: 40MHz contínuo, Mode 3: Auto-Channel).
+
+**Parâmetros:**  
+- mode (int): Identificador do modo (0 a 3).
+
+**Retorno:**  
+- *Nenhum (void)*.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 (HTTPD) / Thread-safe.
+- **Hardware Envolvido:** Slot SDMMC host / Barramento SDMMC 4-bit do ESP32-S3.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_get_sd_clock_mode()`
+
+```c
+int wifi_transfer_get_sd_clock_mode(void);
+```
+
+**Descrição Técnica:**  
+@brief Consulta o modo atual de política de clock do barramento SDMMC 4-bit em execução no firmware.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- int: Identificador do modo atual (0 a 3).
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Qualquer core / Leitura de inteiro atômico.
+- **Hardware Envolvido:** Controlador SDMMC e subsistema Wi-Fi.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_is_overlay_active()`
+
+```c
+bool wifi_transfer_is_overlay_active(void);
+```
+
+**Descrição Técnica:**  
+@brief Informa se o display deve renderizar o overlay universal de progresso ou conclusão de transferência (WIFI_UI_TRANSFERRING, WIFI_UI_DONE, OTA).
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- bool: true se o overlay deve sobrepor a tela atual; false caso contrário.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 (`display_task`).
+- **Hardware Envolvido:** Display OLED SSD1306 e subsistema Wi-Fi.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_draw_overlay()`
+
+```c
+void wifi_transfer_draw_overlay(void);
+```
+
+**Descrição Técnica:**  
+@brief Renderiza diretamente no display OLED a tela gráfica de status/progresso em tempo real da transferência atual.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- *Nenhum (void)*.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 (`display_task`).
+- **Hardware Envolvido:** Barramento I2C a 800 kHz e display OLED SSD1306.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_set_display_fps()`
+
+```c
+void wifi_transfer_set_display_fps(int fps);
+```
+
+**Descrição Técnica:**  
+@brief Configura dinamicamente a taxa de quadros (FPS) da tela de transferência Wi-Fi (0 = display suspenso, 1 a 60 FPS).
+
+**Parâmetros:**  
+- fps (int): Taxa de quadros desejada.
+
+**Retorno:**  
+- *Nenhum (void)*.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 (`httpd` / `display_task`).
+- **Hardware Envolvido:** Display OLED SSD1306 e controlador I2C.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_get_display_fps()`
+
+```c
+int wifi_transfer_get_display_fps(void);
+```
+
+**Descrição Técnica:**  
+@brief Retorna a taxa atual de atualização (FPS) configurada para a tela de transferência Wi-Fi.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- int: Taxa em FPS (0 a 60).
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Qualquer core.
+- **Hardware Envolvido:** Variável de controle do subsistema Wi-Fi.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `wifi_transfer_get_display_interval_ms()`
+
+```c
+uint32_t wifi_transfer_get_display_interval_ms(void);
+```
+
+**Descrição Técnica:**  
+@brief Retorna o intervalo em milissegundos correspondente à taxa de quadros (FPS) configurada para a tela de transferência.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- uint32_t: Intervalo em milissegundos (ex: 250 ms para 4 FPS).
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 (`display_task`).
+- **Hardware Envolvido:** Temporização da tarefa de display no FreeRTOS.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+## 📁 Audio Player - Telemetria de Escuta & Estatísticas (`MPS3 Wrapped`)
+
+- **Cabeçalho:** [`components/audio_player/include/user_metrics.h`](components/audio_player/include/user_metrics.h)
+- **Implementação:** [`components/audio_player/user_metrics.c`](components/audio_player/user_metrics.c)
+- **Total de Funções Catalogadas:** 4
+
+### - [x] `user_metrics_init()`
+
+```c
+void user_metrics_init(void);
+```
+
+**Descrição Técnica:**  
+@brief Inicializa o coletor passivo de estatísticas de escuta alocando a tabela agregada `s_summary` (até 256 faixas) em PSRAM Octal (`MALLOC_CAP_SPIRAM`) e recarregando `/sdcard/.mps3_analytics/tracks_summary.json` no boot (`load_summary_from_sd`) para preservar contadores de plays, tempo total ouvido e conclusão entre reinicializações.
+
+**Parâmetros:**  
+- *Nenhum (void)*.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Inicializado no boot antes do loop de reprodução da `player_task` (Core 1).
+- **Hardware Envolvido:** PSRAM Octal (8 MB) e barramento SDMMC 4-Bit (leitura única no boot).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `user_metrics_on_track_begin()`
+
+```c
+void user_metrics_on_track_begin(const char *rel_path);
+```
+
+**Descrição Técnica:**  
+@brief Registra em RAM o início de uma sessão de reprodução para `rel_path`, capturando o timestamp Unix atual do RTC DS3231 e zerando contadores de frames e seeks sem realizar I/O de disco durante a abertura do decoder.
+
+**Parâmetros:**  
+- `const char *rel_path`: Caminho relativo da faixa iniciada a partir de `/sdcard`.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 1 (`player_task`), zero bloqueio de I/O no cartão SD.
+- **Hardware Envolvido:** Relógio de tempo real em RAM sincronizado com RTC DS3231.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `user_metrics_add_listened_frames()`
+
+```c
+void user_metrics_add_listened_frames(uint32_t frames, uint32_t sample_rate, int volume_pct);
+```
+
+**Descrição Técnica:**  
+@brief Acumula em variáveis inteiras de 64 bits em RAM os frames PCM efetivamente decodificados e enviados ao pipeline DSP, além da média ponderada do volume de escuta (0–100%), com custo computacional desprezível e zero acesso ao cartão SD durante a reprodução.
+
+**Parâmetros:**  
+- `uint32_t frames`: Quantidade de frames estéreo entregues ao pipeline de áudio.
+- `uint32_t sample_rate`: Taxa de amostragem vigente em Hz.
+- `int volume_pct`: Nível percentual atual do controle de volume.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 1 (`player_task`, loop quente de decodificação em tempo real).
+- **Hardware Envolvido:** Apenas registradores/RAM (zero I/O).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `user_metrics_on_track_end()`
+
+```c
+void user_metrics_on_track_end(const user_metrics_end_info_t *info, bool is_seek_restart);
+```
+
+**Descrição Técnica:**  
+@brief Encerra a sessão de escuta da faixa atual (ou incrementa apenas o contador de seeks caso `is_seek_restart == true`). Na transição real entre faixas (com `listened_ms >= 3000`), persiste uma linha JSONL em `/sdcard/.mps3_analytics/events_YYYY.jsonl` e atualiza `/sdcard/.mps3_analytics/tracks_summary.json` para consumo pelo dashboard web **MPS3 Wrapped**.
+
+**Parâmetros:**  
+- `const user_metrics_end_info_t *info`: Estrutura contendo metadados Hi-Res, duração e motivo do término (`eof`, `skip_next`, `skip_prev`, `select`, `stop`).
+- `bool is_seek_restart`: Indica se a saída temporária do decoder ocorreu apenas por um comando de seek na mesma faixa.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 1 (`player_task`), executado exclusivamente no intervalo silencioso entre faixas.
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit (FatFS) e PSRAM Octal.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+
+### - [x] `is_playlist_extension()`
+
+```c
+bool is_playlist_extension(const char *name);
+```
+
+**Descrição Técnica:**  
+@brief Verifica se o nome de arquivo ou caminho completo corresponde a uma playlist `.m3u` ou `.m3u8` (case-insensitive), permitindo que o navegador `fs_browser` trate playlists como pastas virtuais navegáveis.
+
+**Parâmetros:**  
+- `const char *name`: Nome ou caminho do arquivo.
+
+**Retorno:**  
+- `bool`: `true` se terminar em `.m3u` ou `.m3u8`; `false` caso contrário.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 (`touch_task`) ou Core 1 (`player_task`).
+- **Hardware Envolvido:** Apenas CPU/RAM.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_set_gapless_enabled()`
+
+```c
+void audio_player_set_gapless_enabled(bool enabled);
+```
+
+**Descrição Técnica:**  
+@brief Ativa ou desativa a reprodução Gapless Real (transição contínua sem `audio_dsp_drain()` nem `audio_dsp_flush()` entre faixas consecutivas de mesma taxa de amostragem) e persiste a preferência na NVS (`mps3/gapless`).
+
+**Parâmetros:**  
+- `bool enabled`: `true` para ativar Gapless; `false` para desativar.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_get_gapless_enabled()`
+
+```c
+bool audio_player_get_gapless_enabled(void);
+```
+
+**Descrição Técnica:**  
+@brief Retorna se a reprodução Gapless Real está habilitada.
+
+**Retorno:**  
+- `bool`: Estado atual da opção Gapless.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_set_soft_fade_enabled()`
+
+```c
+void audio_player_set_soft_fade_enabled(bool enabled);
+```
+
+**Descrição Técnica:**  
+@brief Ativa ou desativa a rampa suave anti-click digital de 10–15 ms (Fade-In/Fade-Out) ao pausar, retomar, buscar ou trocar faixas manualmente, salvando na NVS (`mps3/soft_fade`).
+
+**Parâmetros:**  
+- `bool enabled`: `true` para ativar; `false` para desativar.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_get_soft_fade_enabled()`
+
+```c
+bool audio_player_get_soft_fade_enabled(void);
+```
+
+**Descrição Técnica:**  
+@brief Retorna se o Fade-In/Fade-Out suave anti-click está habilitado.
+
+**Retorno:**  
+- `bool`: Estado atual da opção Fade Suave.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_set_replaygain_mode()`
+
+```c
+void audio_player_set_replaygain_mode(replaygain_mode_t mode);
+```
+
+**Descrição Técnica:**  
+@brief Define o modo de normalização ReplayGain (`RG_MODE_OFF`, `RG_MODE_TRACK` ou `RG_MODE_ALBUM`), recalcula imediatamente o multiplicador linear $10^{\text{dB}/20}$ para a faixa em execução no `audio_dsp_task` e persiste na NVS (`mps3/rg_mode`).
+
+**Parâmetros:**  
+- `replaygain_mode_t mode`: Modo desejado de ReplayGain.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_get_replaygain_mode()`
+
+```c
+replaygain_mode_t audio_player_get_replaygain_mode(void);
+```
+
+**Descrição Técnica:**  
+@brief Retorna o modo de ReplayGain atualmente ativo.
+
+**Retorno:**  
+- `replaygain_mode_t`: Modo configurado (`RG_MODE_OFF`, `RG_MODE_TRACK` ou `RG_MODE_ALBUM`).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_set_bookmark_mode()`
+
+```c
+void audio_player_set_bookmark_mode(bookmark_mode_t mode);
+```
+
+**Descrição Técnica:**  
+@brief Define a política de salvamento de múltiplos Bookmarks individuais em `/sdcard/.mps3_bookmarks.dat` (`BOOKMARK_MODE_OFF`, `BOOKMARK_MODE_AUTO` para podcasts/audiolivros/faixas $\ge 15\text{ min}$, ou `BOOKMARK_MODE_ALL`) e persiste na NVS (`mps3/bm_mode`).
+
+**Parâmetros:**  
+- `bookmark_mode_t mode`: Modo de Bookmark desejado.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_get_bookmark_mode()`
+
+```c
+bookmark_mode_t audio_player_get_bookmark_mode(void);
+```
+
+**Descrição Técnica:**  
+@brief Retorna a política atual de múltiplos Bookmarks.
+
+**Retorno:**  
+- `bookmark_mode_t`: Modo configurado (`BOOKMARK_MODE_OFF`, `BOOKMARK_MODE_AUTO` ou `BOOKMARK_MODE_ALL`).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_set_az_jump_enabled()`
+
+```c
+void audio_player_set_az_jump_enabled(bool enabled);
+```
+
+**Descrição Técnica:**  
+@brief Ativa ou desativa o Salto Alfabético Rápido (`A–Z Jump`) ao segurar CIMA/BAIXO em pastas longas, salvando na NVS (`mps3/az_jump`).
+
+**Parâmetros:**  
+- `bool enabled`: `true` para ativar; `false` para desativar.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_get_az_jump_enabled()`
+
+```c
+bool audio_player_get_az_jump_enabled(void);
+```
+
+**Descrição Técnica:**  
+@brief Retorna se o Salto Alfabético Rápido (`A–Z Jump`) está habilitado.
+
+**Retorno:**  
+- `bool`: Estado atual da opção Salto A-Z.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_jump_browse_letter()`
+
+```c
+int audio_player_jump_browse_letter(int cur_cursor, int dir_step, char *out_letter);
+```
+
+**Descrição Técnica:**  
+@brief Avança ou retrocede na lista de navegação atual (`s_browse_scan`) até o primeiro item cuja letra inicial alfanumérica seja diferente da letra atual, retornando o novo índice e preenchendo `out_letter` para exibição do HUD `[ A-Z: X ]`.
+
+**Parâmetros:**  
+- `int cur_cursor`: Índice atual na lista.
+- `int dir_step`: Direção do salto (`+1` ou `-1`).
+- `char *out_letter`: Ponteiro que recebe o caractere inicial atingido (`'A'..'Z'` ou `'#'`).
+
+**Retorno:**  
+- `int`: Novo índice do cursor.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_toggle_favorite_current()`
+
+```c
+bool audio_player_toggle_favorite_current(bool *out_added);
+```
+
+**Descrição Técnica:**  
+@brief Adiciona ou remove o caminho absoluto da faixa atualmente em reprodução na playlist on-the-go `/sdcard/Favoritos.m3u8` usando buffer temporário em PSRAM Octal.
+
+**Parâmetros:**  
+- `bool *out_added`: Recebe `true` se a faixa foi adicionada ou `false` se foi removida.
+
+**Retorno:**  
+- `bool`: `true` em caso de sucesso na gravação em `/sdcard/Favoritos.m3u8`.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_trigger_az_hud()`
+
+```c
+void oled_display_trigger_az_hud(char letter);
+```
+
+**Descrição Técnica:**  
+@brief Aciona a sobreposição temporária (1,1 s) do badge modal 1-bit `[ A-Z: X ]` centralizado sobre a lista de arquivos do display OLED SSD1306 durante o salto alfabético rápido.
+
+**Parâmetros:**  
+- `char letter`: Caractere inicial alcançado pelo salto.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `set_cors_pna_headers()`
+
+```c
+static inline void set_cors_pna_headers(httpd_req_t *req);
+```
+
+**Descrição Técnica:**  
+@brief Injeta os cabeçalhos W3C Private Network Access (`Access-Control-Allow-Private-Network: true`) e CORS (`Access-Control-Allow-Origin: *`, `Access-Control-Expose-Headers: X-Content-SHA256, Content-Range, Content-Length`) nas respostas HTTP da API `/api/*`.
+
+**Parâmetros:**  
+- `httpd_req_t *req`: Ponteiro da requisição HTTP do `esp_http_server`.
+
+**Retorno:**  
+- `void`: Nenhum valor retornado.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `api_options_preflight_handler()`
+
+```c
+static esp_err_t api_options_preflight_handler(httpd_req_t *req);
+```
+
+**Descrição Técnica:**  
+@brief Responde requisições `HTTP_OPTIONS` curinga (`/api/*`) com `204 No Content` e cabeçalhos de preflight CORS/PNA (`Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS`, `Access-Control-Allow-Headers: Content-Type, Range, X-Requested-With, X-Expected-SHA256`).
+
+**Parâmetros:**  
+- `httpd_req_t *req`: Ponteiro da requisição HTTP.
+
+**Retorno:**  
+- `esp_err_t`: `ESP_OK`.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `api_yt_innertube_post_handler()`
+
+```c
+static esp_err_t api_yt_innertube_post_handler(httpd_req_t *req);
+```
+
+**Descrição Técnica:**  
+@brief Relay HTTPS Zero-CORS nativo para a API YouTube InnerTube (`navigation/resolve_url`, `browse`, `player` com filtragem `fields`) e proxy de fallback `GET` para feeds RSS que bloqueiam CORS no navegador. Executa `esp_http_client` com `esp_crt_bundle_attach` em uma tarefa dedicada (`yt_innertube_worker_task`) com stack de 24 KB na PSRAM Octal.
+
+**Parâmetros:**  
+- `httpd_req_t *req`: Ponteiro da requisição HTTP contendo JSON `{"endpoint":..., "fields":..., "body":..., "visitor_data":..., "client_name":..., "client_version":..., "ua":...}` ou `{"url":..., "method":"GET"}`.
+
+**Retorno:**  
+- `esp_err_t`: `ESP_OK` em caso de sucesso ou `ESP_FAIL` em erro HTTP/memória.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `api_sync_pull_direct_post_handler()`
+
+```c
+static esp_err_t api_sync_pull_direct_post_handler(httpd_req_t *req);
+```
+
+**Descrição Técnica:**  
+@brief Motor de download direto de áudio de CDNs sem CORS (`cloudfront.net`, `anchor.fm`, `googlevideo.com` com suporte a fragmentos `&range=` via `append: 1`) diretamente do roteador Wi-Fi para o cartão SD (`/sdcard/Podcasts/.staging/<arquivo>`), enviando telemetria em tempo real via stream NDJSON (`{"rx":...,"total":...,"speed_kbs":...}\n`) para a Central Web e atualizando o display OLED SSD1306.
+
+**Parâmetros:**  
+- `httpd_req_t *req`: Ponteiro da requisição HTTP contendo JSON `{"url":..., "path":..., "ua":..., "append":..., "idx":..., "count":..., "total_bytes":..., "offset_bytes":...}`.
+
+**Retorno:**  
+- `esp_err_t`: `ESP_OK` em caso de sucesso ou `ESP_FAIL` em erro de argumento/alocação.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_meter_init()
+
+`c
+esp_err_t audio_meter_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_meter declarada em [components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_meter.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_meter ([components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_meter_feed()
+
+`c
+void audio_meter_feed(const int32_t *samples, size_t sample_count, uint32_t sample_rate);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_meter declarada em [components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_meter.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_meter ([components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_meter_get_levels()
+
+`c
+void audio_meter_get_levels(float *out_peak_l, float *out_peak_r, float *out_hold_l, float *out_hold_r, float *out_db_l, float *out_db_r);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_meter declarada em [components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_meter.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_meter ([components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_meter_set_mode()
+
+`c
+void audio_meter_set_mode(audio_meter_mode_t mode, bool save_nvs);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_meter declarada em [components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_meter.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_meter ([components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_meter_get_mode()
+
+`c
+audio_meter_mode_t audio_meter_get_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_meter declarada em [components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_meter.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_meter ([components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_meter_is_active()
+
+`c
+bool audio_meter_is_active(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_meter declarada em [components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_meter.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_meter ([components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_meter_get_spectrum_bands()
+
+`c
+void audio_meter_get_spectrum_bands(float out_bands[AUDIO_METER_SPECTRUM_BANDS], float out_peaks[AUDIO_METER_SPECTRUM_BANDS]);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_meter declarada em [components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_meter.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_meter ([components/audio_meter/include/audio_meter.h](components/audio_meter/include/audio_meter.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_start()
+
+`c
+esp_err_t audio_player_start(const char *music_dir);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_state()
+
+`c
+void audio_player_get_state(playback_state_t *out_state);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_should_start_in_playing_mode()
+
+`c
+bool audio_player_should_start_in_playing_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_toggle_play_pause()
+
+`c
+void audio_player_toggle_play_pause(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_volume()
+
+`c
+int audio_player_get_volume(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_adjust_volume()
+
+`c
+void audio_player_adjust_volume(int delta);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_volume()
+
+`c
+void audio_player_set_volume(int volume);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_volume_change_cb()
+
+`c
+void audio_player_set_volume_change_cb(audio_volume_change_cb_t cb);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_register_track_completed_cb()
+
+`c
+void audio_player_register_track_completed_cb(audio_track_completed_cb_t cb);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_balance()
+
+`c
+int audio_player_get_balance(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_balance()
+
+`c
+void audio_player_set_balance(int balance);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_adjust_balance()
+
+`c
+void audio_player_adjust_balance(int delta);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_play_url()
+
+`c
+esp_err_t audio_player_play_url(const char *url);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_stop_url()
+
+`c
+void audio_player_stop_url(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_next()
+
+`c
+void audio_player_next(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_previous()
+
+`c
+void audio_player_previous(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_restart()
+
+`c
+void audio_player_restart(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_seek_forward()
+
+`c
+void audio_player_seek_forward(uint32_t seconds);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_seek_backward()
+
+`c
+void audio_player_seek_backward(uint32_t seconds);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_is_seeking()
+
+`c
+bool audio_player_is_seeking(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_file_count()
+
+`c
+int audio_player_get_file_count(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_file_name()
+
+`c
+void audio_player_get_file_name(int index, char *out, size_t out_len);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_current_index()
+
+`c
+int audio_player_get_current_index(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_browse_is_root()
+
+`c
+bool audio_player_browse_is_root(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_browse_is_playback_dir()
+
+`c
+bool audio_player_browse_is_playback_dir(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_current_track_browse_index()
+
+`c
+int audio_player_get_current_track_browse_index(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_browse_entry_count()
+
+`c
+int audio_player_get_browse_entry_count(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_browse_entry_name()
+
+`c
+void audio_player_get_browse_entry_name(int index, char *out, size_t out_len);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_browse_entry_is_dir()
+
+`c
+bool audio_player_browse_entry_is_dir(int index);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_select_entry()
+
+`c
+void audio_player_select_entry(int index);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_release_sd_for_usb()
+
+`c
+void audio_player_release_sd_for_usb(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_reacquire_sd_after_usb()
+
+`c
+void audio_player_reacquire_sd_after_usb(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_suspend()
+
+`c
+void audio_player_suspend(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_resume()
+
+`c
+void audio_player_resume(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_eq_config()
+
+`c
+void audio_player_get_eq_config(player_eq_config_t *out);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_eq_config()
+
+`c
+void audio_player_set_eq_config(const player_eq_config_t *config);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_sort_mode()
+
+`c
+void audio_player_set_sort_mode(track_sort_mode_t mode);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_sort_mode()
+
+`c
+track_sort_mode_t audio_player_get_sort_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_gapless_enabled()
+
+`c
+void audio_player_set_gapless_enabled(bool enabled);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_gapless_enabled()
+
+`c
+bool audio_player_get_gapless_enabled(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_soft_fade_enabled()
+
+`c
+void audio_player_set_soft_fade_enabled(bool enabled);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_soft_fade_enabled()
+
+`c
+bool audio_player_get_soft_fade_enabled(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_replaygain_mode()
+
+`c
+void audio_player_set_replaygain_mode(replaygain_mode_t mode);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_replaygain_mode()
+
+`c
+replaygain_mode_t audio_player_get_replaygain_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_bookmark_mode()
+
+`c
+void audio_player_set_bookmark_mode(bookmark_mode_t mode);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_bookmark_mode()
+
+`c
+bookmark_mode_t audio_player_get_bookmark_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_az_jump_enabled()
+
+`c
+void audio_player_set_az_jump_enabled(bool enabled);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_az_jump_enabled()
+
+`c
+bool audio_player_get_az_jump_enabled(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_loop_mode()
+
+`c
+audio_player_loop_mode_t audio_player_get_loop_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_loop_mode()
+
+`c
+void audio_player_set_loop_mode(audio_player_loop_mode_t mode);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_cycle_loop_mode()
+
+`c
+audio_player_loop_mode_t audio_player_cycle_loop_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_prev_loop_mode()
+
+`c
+audio_player_loop_mode_t audio_player_prev_loop_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_shuffle_mode()
+
+`c
+audio_player_shuffle_mode_t audio_player_get_shuffle_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_shuffle_mode()
+
+`c
+void audio_player_set_shuffle_mode(audio_player_shuffle_mode_t mode);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_cycle_shuffle_mode()
+
+`c
+audio_player_shuffle_mode_t audio_player_cycle_shuffle_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_prev_shuffle_mode()
+
+`c
+audio_player_shuffle_mode_t audio_player_prev_shuffle_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_jump_browse_letter()
+
+`c
+int audio_player_jump_browse_letter(int cur_cursor, int dir_step, char *out_letter);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_toggle_favorite_current()
+
+`c
+bool audio_player_toggle_favorite_current(bool *out_added);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_playlists_count()
+
+`c
+int audio_player_get_playlists_count(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_playlist_by_index()
+
+`c
+bool audio_player_get_playlist_by_index(int index, char *out_name, size_t out_len, bool *out_is_active);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_set_target_playlist_by_index()
+
+`c
+bool audio_player_set_target_playlist_by_index(int index);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_browse_to_playlists()
+
+`c
+void audio_player_browse_to_playlists(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_ensure_playlists_migrated()
+
+`c
+void audio_player_ensure_playlists_migrated(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_target_playlist()
+
+`c
+const char *audio_player_get_target_playlist(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_cycle_target_playlist()
+
+`c
+void audio_player_cycle_target_playlist(int delta);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_create_playlist()
+
+`c
+bool audio_player_create_playlist(const char *name, char *out_filename, size_t out_len);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_delete_playlist()
+
+`c
+bool audio_player_delete_playlist(const char *name_or_filename);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_add_current_folder_to_target_playlist()
+
+`c
+bool audio_player_add_current_folder_to_target_playlist(int *out_added_count);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_toggle_browse_item_in_target_playlist()
+
+`c
+bool audio_player_toggle_browse_item_in_target_playlist(int browse_idx, bool *out_added, int *out_count);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_like_current()
+
+`c
+bool audio_player_like_current(bool like, bool *out_status);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_like_browse_item()
+
+`c
+bool audio_player_like_browse_item(int browse_idx, bool like, bool *out_status);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_get_browse_dir()
+
+`c
+void audio_player_get_browse_dir(char *out, size_t out_len);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_rescan_browser()
+
+`c
+void audio_player_rescan_browser(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_browse_to_root()
+
+`c
+void audio_player_browse_to_root(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_is_current_favorite()
+
+`c
+bool audio_player_is_current_favorite(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_player_is_browse_item_favorite()
+
+`c
+bool audio_player_is_browse_item_favorite(int browse_idx);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player.h](components/audio_player/include/audio_player.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] state_lock()
+
+`c
+void state_lock(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] state_unlock()
+
+`c
+void state_unlock(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_dsp_send_pcm()
+
+`c
+esp_err_t audio_dsp_send_pcm(const int32_t *samples, size_t count, uint32_t rate);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_dsp_flush()
+
+`c
+void audio_dsp_flush(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_dsp_drain()
+
+`c
+void audio_dsp_drain(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_dsp_set_rate()
+
+`c
+void audio_dsp_set_rate(uint32_t rate);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] audio_dsp_trigger_fade_in()
+
+`c
+void audio_dsp_trigger_fade_in(uint32_t sample_rate);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] ensure_stereo_scratch()
+
+`c
+int32_t *ensure_stereo_scratch(size_t needed_samples);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] play_web_radio()
+
+`c
+void play_web_radio(const char *url);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/audio_player_internal.h](components/audio_player/include/audio_player_internal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] fs_browser_set_sort_mode()
+
+`c
+void fs_browser_set_sort_mode(track_sort_mode_t mode);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] fs_browser_get_sort_mode()
+
+`c
+track_sort_mode_t fs_browser_get_sort_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] has_supported_extension()
+
+`c
+bool has_supported_extension(const char *name);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] is_playlist_extension()
+
+`c
+bool is_playlist_extension(const char *name);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] is_junk_entry()
+
+`c
+bool is_junk_entry(const char *name);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] free_dir_scan()
+
+`c
+void free_dir_scan(DirScan &scan);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] scan_dir()
+
+`c
+void scan_dir(const char *path, DirScan &out);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/fs_browser.h](components/audio_player/include/fs_browser.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] user_metrics_init()
+
+`c
+void user_metrics_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/user_metrics.h](components/audio_player/include/user_metrics.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/user_metrics.h](components/audio_player/include/user_metrics.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] user_metrics_on_track_begin()
+
+`c
+void user_metrics_on_track_begin(const char *rel_path);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/user_metrics.h](components/audio_player/include/user_metrics.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/user_metrics.h](components/audio_player/include/user_metrics.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] user_metrics_add_listened_frames()
+
+`c
+void user_metrics_add_listened_frames(uint32_t frames, uint32_t sample_rate, int volume_pct);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/user_metrics.h](components/audio_player/include/user_metrics.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/user_metrics.h](components/audio_player/include/user_metrics.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] user_metrics_on_track_end()
+
+`c
+void user_metrics_on_track_end(const user_metrics_end_info_t *info, bool is_seek_restart);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/include/user_metrics.h](components/audio_player/include/user_metrics.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/include/user_metrics.h](components/audio_player/include/user_metrics.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] metadata_extract()
+
+`c
+void metadata_extract(const char *abs_path, track_metadata_t *out);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema audio_player declarada em [components/audio_player/metadata_extract.h](components/audio_player/metadata_extract.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo audio_player.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** audio_player ([components/audio_player/metadata_extract.h](components/audio_player/metadata_extract.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] battery_init()
+
+`c
+esp_err_t battery_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/battery.h](components/board_io/include/battery.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/battery.h](components/board_io/include/battery.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] battery_get_percent()
+
+`c
+int battery_get_percent(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/battery.h](components/board_io/include/battery.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/battery.h](components/board_io/include/battery.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] battery_get_info()
+
+`c
+void battery_get_info(int *mv, int *percent, int *time_left_mins);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/battery.h](components/board_io/include/battery.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/battery.h](components/board_io/include/battery.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] battery_is_charging()
+
+`c
+bool battery_is_charging(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/battery.h](components/board_io/include/battery.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/battery.h](components/board_io/include/battery.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] battery_is_full()
+
+`c
+bool battery_is_full(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/battery.h](components/board_io/include/battery.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/battery.h](components/board_io/include/battery.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] battery_get_status()
+
+`c
+battery_status_t battery_get_status(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/battery.h](components/board_io/include/battery.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/battery.h](components/board_io/include/battery.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] i2s_output_init()
+
+`c
+esp_err_t i2s_output_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] i2s_output_set_rate()
+
+`c
+esp_err_t i2s_output_set_rate(uint32_t sample_rate);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] i2s_output_get_rate()
+
+`c
+uint32_t i2s_output_get_rate(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] i2s_output_set_rate_change_cb()
+
+`c
+void i2s_output_set_rate_change_cb(void (*cb)(uint32_t sample_rate));
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] i2s_output_write()
+
+`c
+esp_err_t i2s_output_write(const int32_t *samples, size_t sample_count, size_t *samples_written);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] i2s_output_disable()
+
+`c
+esp_err_t i2s_output_disable(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] i2s_output_enable()
+
+`c
+esp_err_t i2s_output_enable(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] i2s_output_play_test_tone()
+
+`c
+void i2s_output_play_test_tone(uint32_t freq_hz, uint32_t duration_ms);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/i2s_output.h](components/board_io/include/i2s_output.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pcf8574_init()
+
+`c
+esp_err_t pcf8574_init(i2c_master_bus_handle_t bus_handle);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pcf8574.h](components/board_io/include/pcf8574.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pcf8574.h](components/board_io/include/pcf8574.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pcf8574_is_available()
+
+`c
+bool pcf8574_is_available(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pcf8574.h](components/board_io/include/pcf8574.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pcf8574.h](components/board_io/include/pcf8574.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pcf8574_get_address()
+
+`c
+uint8_t pcf8574_get_address(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pcf8574.h](components/board_io/include/pcf8574.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pcf8574.h](components/board_io/include/pcf8574.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pcf8574_read_raw()
+
+`c
+esp_err_t pcf8574_read_raw(uint8_t *val);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pcf8574.h](components/board_io/include/pcf8574.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pcf8574.h](components/board_io/include/pcf8574.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pcf8574_write_raw()
+
+`c
+esp_err_t pcf8574_write_raw(uint8_t val);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pcf8574.h](components/board_io/include/pcf8574.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pcf8574.h](components/board_io/include/pcf8574.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pcf8574_get_pin_pressed()
+
+`c
+bool pcf8574_get_pin_pressed(uint8_t pin);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pcf8574.h](components/board_io/include/pcf8574.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pcf8574.h](components/board_io/include/pcf8574.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pwr_governor_init()
+
+`c
+esp_err_t pwr_governor_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pwr_governor_set_cpu_freq()
+
+`c
+esp_err_t pwr_governor_set_cpu_freq(pwr_freq_t freq);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pwr_governor_get_cpu_freq()
+
+`c
+pwr_freq_t pwr_governor_get_cpu_freq(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pwr_governor_update()
+
+`c
+void pwr_governor_update(bool screen_active, bool wifi_active, bool seeking, bool playing, uint32_t sample_rate);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pwr_governor_set_manual_mode()
+
+`c
+void pwr_governor_set_manual_mode(bool manual);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pwr_governor_is_manual_mode()
+
+`c
+bool pwr_governor_is_manual_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pwr_governor_enter_light_sleep()
+
+`c
+esp_err_t pwr_governor_enter_light_sleep(uint32_t timeout_ms);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pwr_governor_set_sleep_cb()
+
+`c
+void pwr_governor_set_sleep_cb(pwr_sleep_cb_t cb);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] pwr_governor_enter_deep_sleep()
+
+`c
+void pwr_governor_enter_deep_sleep(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/pwr_governor.h](components/board_io/include/pwr_governor.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rgb_led_init()
+
+`c
+esp_err_t rgb_led_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rgb_led.h](components/board_io/include/rgb_led.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rgb_led.h](components/board_io/include/rgb_led.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rgb_led_set_color()
+
+`c
+void rgb_led_set_color(uint8_t r, uint8_t g, uint8_t b);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rgb_led.h](components/board_io/include/rgb_led.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rgb_led.h](components/board_io/include/rgb_led.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rgb_led_get_config()
+
+`c
+void rgb_led_get_config(rgb_led_config_t *out_cfg);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rgb_led.h](components/board_io/include/rgb_led.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rgb_led.h](components/board_io/include/rgb_led.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rgb_led_set_config()
+
+`c
+void rgb_led_set_config(const rgb_led_config_t *cfg);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rgb_led.h](components/board_io/include/rgb_led.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rgb_led.h](components/board_io/include/rgb_led.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rgb_led_toggle()
+
+`c
+void rgb_led_toggle(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rgb_led.h](components/board_io/include/rgb_led.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rgb_led.h](components/board_io/include/rgb_led.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rgb_led_save_nvs()
+
+`c
+void rgb_led_save_nvs(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rgb_led.h](components/board_io/include/rgb_led.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rgb_led.h](components/board_io/include/rgb_led.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rtc_ds3231_detect()
+
+`c
+bool rtc_ds3231_detect(i2c_master_bus_handle_t bus_handle);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rtc_ds3231_init()
+
+`c
+esp_err_t rtc_ds3231_init(i2c_master_bus_handle_t bus_handle);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rtc_ds3231_is_available()
+
+`c
+bool rtc_ds3231_is_available(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rtc_ds3231_get_time()
+
+`c
+esp_err_t rtc_ds3231_get_time(struct tm *timeinfo);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rtc_ds3231_set_time()
+
+`c
+esp_err_t rtc_ds3231_set_time(const struct tm *timeinfo);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rtc_ds3231_get_temperature()
+
+`c
+esp_err_t rtc_ds3231_get_temperature(float *temp_c);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rtc_ds3231_sync_system_time()
+
+`c
+esp_err_t rtc_ds3231_sync_system_time(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] rtc_ds3231_get_clock_info()
+
+`c
+esp_err_t rtc_ds3231_get_clock_info(rtc_clock_info_t *info);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema board_io declarada em [components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo board_io.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** board_io ([components/board_io/include/rtc_ds3231.h](components/board_io/include/rtc_ds3231.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] bt_link_init()
+
+`c
+void bt_link_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema bt_link declarada em [components/bt_link/include/bt_link.h](components/bt_link/include/bt_link.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo bt_link.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** bt_link ([components/bt_link/include/bt_link.h](components/bt_link/include/bt_link.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] bt_link_register_menu_entry()
+
+`c
+void bt_link_register_menu_entry(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema bt_link declarada em [components/bt_link/include/bt_link.h](components/bt_link/include/bt_link.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo bt_link.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** bt_link ([components/bt_link/include/bt_link.h](components/bt_link/include/bt_link.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] bt_link_reset_companion()
+
+`c
+void bt_link_reset_companion(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema bt_link declarada em [components/bt_link/include/bt_link.h](components/bt_link/include/bt_link.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo bt_link.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** bt_link ([components/bt_link/include/bt_link.h](components/bt_link/include/bt_link.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] bt_link_send_volume()
+
+`c
+void bt_link_send_volume(uint8_t volume_percent);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema bt_link declarada em [components/bt_link/include/bt_link.h](components/bt_link/include/bt_link.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo bt_link.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** bt_link ([components/bt_link/include/bt_link.h](components/bt_link/include/bt_link.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] eq_init()
+
+`c
+void eq_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema eq declarada em [components/eq/include/eq.h](components/eq/include/eq.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo eq.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** eq ([components/eq/include/eq.h](components/eq/include/eq.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] eq_set_sample_rate()
+
+`c
+void eq_set_sample_rate(uint32_t sample_rate);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema eq declarada em [components/eq/include/eq.h](components/eq/include/eq.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo eq.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** eq ([components/eq/include/eq.h](components/eq/include/eq.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] eq_update_config()
+
+`c
+void eq_update_config(const eq_config_t *config);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema eq declarada em [components/eq/include/eq.h](components/eq/include/eq.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo eq.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** eq ([components/eq/include/eq.h](components/eq/include/eq.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] eq_process()
+
+`c
+void eq_process(int32_t *buffer, size_t samples);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema eq declarada em [components/eq/include/eq.h](components/eq/include/eq.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo eq.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** eq ([components/eq/include/eq.h](components/eq/include/eq.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] eq_process_with_gain()
+
+`c
+bool eq_process_with_gain(int32_t *buffer, size_t samples, float gain_l, float gain_r);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema eq declarada em [components/eq/include/eq.h](components/eq/include/eq.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo eq.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** eq ([components/eq/include/eq.h](components/eq/include/eq.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] eq_get_config()
+
+`c
+void eq_get_config(eq_config_t *config);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema eq declarada em [components/eq/include/eq.h](components/eq/include/eq.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo eq.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** eq ([components/eq/include/eq.h](components/eq/include/eq.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] eq_reset_to_defaults()
+
+`c
+void eq_reset_to_defaults(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema eq declarada em [components/eq/include/eq.h](components/eq/include/eq.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo eq.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** eq ([components/eq/include/eq.h](components/eq/include/eq.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] eq_reset_state()
+
+`c
+void eq_reset_state(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema eq declarada em [components/eq/include/eq.h](components/eq/include/eq.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo eq.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** eq ([components/eq/include/eq.h](components/eq/include/eq.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_register()
+
+`c
+void menu_register(const menu_item_t *item);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_count()
+
+`c
+int menu_count(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_get()
+
+`c
+const menu_item_t *menu_get(int index);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_select()
+
+`c
+void menu_select(int index);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_any_active()
+
+`c
+bool menu_any_active(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_poll_active()
+
+`c
+bool menu_poll_active(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_draw_active_status()
+
+`c
+void menu_draw_active_status(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_request_exit_active()
+
+`c
+void menu_request_exit_active(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_request_action_active()
+
+`c
+void menu_request_action_active(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_nav_up_active()
+
+`c
+void menu_nav_up_active(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_nav_down_active()
+
+`c
+void menu_nav_down_active(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_nav_select_active()
+
+`c
+void menu_nav_select_active(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] menu_nav_left_active()
+
+`c
+void menu_nav_left_active(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema menu declarada em [components/menu/include/menu.h](components/menu/include/menu.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo menu.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** menu ([components/menu/include/menu.h](components/menu/include/menu.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] bitmap_animations_init()
+
+`c
+void bitmap_animations_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/bitmaps.h](components/oled_display/include/bitmaps.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/bitmaps.h](components/oled_display/include/bitmaps.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_init()
+
+`c
+esp_err_t oled_display_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_main_menu()
+
+`c
+void oled_display_show_main_menu(int cursor, const playback_state_t *now_playing);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_is_anim_enabled()
+
+`c
+bool oled_display_is_anim_enabled(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_set_anim_enabled()
+
+`c
+void oled_display_set_anim_enabled(bool en);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_update_animations()
+
+`c
+void oled_display_update_animations(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_set_viz_mode()
+
+`c
+void oled_display_set_viz_mode(oled_display_viz_mode_t mode);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_get_viz_mode()
+
+`c
+oled_display_viz_mode_t oled_display_get_viz_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_cycle_viz_mode()
+
+`c
+void oled_display_cycle_viz_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_trigger_viz_overlay()
+
+`c
+void oled_display_trigger_viz_overlay(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_now_playing()
+
+`c
+void oled_display_show_now_playing(const playback_state_t *state);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_list()
+
+`c
+void oled_display_show_list(const char **names, int count, int cursor, const playback_state_t *now_playing);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_trigger_az_hud()
+
+`c
+void oled_display_trigger_az_hud(char letter);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_message()
+
+`c
+void oled_display_show_message(const char *line1, const char *line2);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_bt_devices()
+
+`c
+void oled_display_show_bt_devices(const char **names, int count, int cursor, bool scanning);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_bt_connected()
+
+`c
+void oled_display_show_bt_connected(const char *dev_name, const char *codec_name, uint32_t sample_rate, int8_t rssi);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_blank()
+
+`c
+void oled_display_blank(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_volume()
+
+`c
+void oled_display_show_volume(int volume_percent);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_balance()
+
+`c
+void oled_display_show_balance(int balance);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_locked()
+
+`c
+void oled_display_show_locked(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_reset_life()
+
+`c
+void oled_display_reset_life(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_usb_mode()
+
+`c
+void oled_display_show_usb_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_transfer()
+
+`c
+void oled_display_show_transfer(const char *label, const char *filename, int percent, int eta_sec, int overall_pct, int count);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_wifi_idle()
+
+`c
+void oled_display_show_wifi_idle(const char *ip, const char *mdns_host, bool dns_active, int rssi);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_wifi_connected()
+
+`c
+void oled_display_show_wifi_connected(const char *ip, const char *mdns_host, int rssi, int clients);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_wifi_transfer()
+
+`c
+void oled_display_show_wifi_transfer(const char *filename, int file_pct, int overall_pct, int idx, int count, float kbps, int eta_sec, int total_eta, int rssi);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_wifi_done()
+
+`c
+void oled_display_show_wifi_done(int files_received);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_wifi_submenu()
+
+`c
+void oled_display_show_wifi_submenu(int cursor);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_wifi_scan()
+
+`c
+void oled_display_show_wifi_scan(const wifi_scan_display_ap_t *aps, int count, int cursor, int top_idx, bool is_scanning);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_wifi_keyboard()
+
+`c
+void oled_display_show_wifi_keyboard(const char *ssid, const char *input_buf, int cur_r, int cur_c, int shift_mode);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_wifi_manage()
+
+`c
+void oled_display_show_wifi_manage(const char (*ssids)[33], const char (*passes)[65], int count, int cursor, int top_idx);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_wifi_network_action()
+
+`c
+void oled_display_show_wifi_network_action(const char *ssid, const char *pass, int action_cursor);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_eq()
+
+`c
+void oled_display_show_eq(const float gains[11], int selected_band, bool eq_enabled);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_led()
+
+`c
+void oled_display_show_led(uint8_t r, uint8_t g, uint8_t b, int selected_channel, bool enabled);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_set_brightness()
+
+`c
+void oled_display_set_brightness(uint8_t level);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_set_power_save()
+
+`c
+void oled_display_set_power_save(bool enable);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_tela()
+
+`c
+void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx, int fallback_idx);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_top_screen()
+
+`c
+void oled_display_show_top_screen(int volume, const void *eq_cfg, int eq_focus, float voltage, int percentage, int time_left_mins, int cursor);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_usb_prompt()
+
+`c
+void oled_display_show_usb_prompt(int cursor);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_usb_msc()
+
+`c
+void oled_display_show_usb_msc(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_usb_dac()
+
+`c
+void oled_display_show_usb_dac(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_sd_error()
+
+`c
+void oled_display_show_sd_error(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_loading()
+
+`c
+void oled_display_show_loading(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_eq_preset_list()
+
+`c
+void oled_display_show_eq_preset_list(int cursor, int active_preset, bool eq_enabled, const void *eq_cfg);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_keyboard()
+
+`c
+void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int grid_y, int page, bool is_confirming);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_unsupported()
+
+`c
+void oled_display_show_unsupported(const char *filename);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_sort_mode()
+
+`c
+void oled_display_show_sort_mode(int mode);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_deepsleep_cfg()
+
+`c
+void oled_display_show_deepsleep_cfg(int current_idx);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_ota_progress()
+
+`c
+void oled_display_show_ota_progress(int percent, const char *status_msg);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_podcast_sync()
+
+`c
+void oled_display_show_podcast_sync(const char *program, const char *title, int cur_idx, int total_idx, int percent, float speed_kbs, const char *status_msg);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_wifi_qr()
+
+`c
+void oled_display_show_wifi_qr(const char *ssid, const char *pass, const char *tag_label, int cur_idx, int total_idx);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_clock()
+
+`c
+void oled_display_show_clock(const rtc_clock_info_t *info);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_chrono()
+
+`c
+void oled_display_show_chrono(bool running, uint32_t elapsed_ms, const uint32_t *laps, int lap_count);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_lock_clock()
+
+`c
+void oled_display_show_lock_clock(const rtc_clock_info_t *info, bool is_locked, const char *track_title, int battery_pct, bool battery_charging);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_show_lock_clock_cfg()
+
+`c
+void oled_display_show_lock_clock_cfg(int opt_idx);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_capture_buffer()
+
+`c
+esp_err_t oled_display_capture_buffer(uint8_t *dest_buf);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_trigger_heart_anim()
+
+`c
+void oled_display_trigger_heart_anim(bool liked, const char *toast_msg);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_set_chord_drawer()
+
+`c
+void oled_display_set_chord_drawer(chord_drawer_mode_t mode, uint8_t expand_pct, const char **items, int item_count, int cursor_idx, int active_idx);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_set_chord_hud()
+
+`c
+void oled_display_set_chord_hud(bool visible, uint8_t progress_pct, int8_t selected_dir, bool is_liked);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_trigger_bubble_expand_toast()
+
+`c
+void oled_display_trigger_bubble_expand_toast(int cx, int cy, const char *line1, const char *line2, const uint8_t *icon_16x16);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_render_overlays()
+
+`c
+void oled_display_render_overlays(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_trigger_lock_anim()
+
+`c
+void oled_display_trigger_lock_anim(bool closing);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_is_lock_anim_active()
+
+`c
+bool oled_display_is_lock_anim_active(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] oled_display_get_lock_anim_type()
+
+`c
+oled_lock_anim_t oled_display_get_lock_anim_type(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/oled_display.h](components/oled_display/include/oled_display.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] qrcode_getBufferSize()
+
+`c
+uint16_t qrcode_getBufferSize(uint8_t version);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/qrcode.h](components/oled_display/include/qrcode.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/qrcode.h](components/oled_display/include/qrcode.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] qrcode_initText()
+
+`c
+int8_t qrcode_initText(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8_t ecc, const char *data);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/qrcode.h](components/oled_display/include/qrcode.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/qrcode.h](components/oled_display/include/qrcode.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] qrcode_initBytes()
+
+`c
+int8_t qrcode_initBytes(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8_t ecc, uint8_t *data, uint16_t length);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/qrcode.h](components/oled_display/include/qrcode.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/qrcode.h](components/oled_display/include/qrcode.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] qrcode_getModule()
+
+`c
+bool qrcode_getModule(QRCode *qrcode, uint8_t x, uint8_t y);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/qrcode.h](components/oled_display/include/qrcode.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/qrcode.h](components/oled_display/include/qrcode.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] u8g2_hal_i2c_init()
+
+`c
+esp_err_t u8g2_hal_i2c_init(int sda_gpio, int scl_gpio, uint8_t i2c_addr_7bit);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/u8g2_hal.h](components/oled_display/include/u8g2_hal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/u8g2_hal.h](components/oled_display/include/u8g2_hal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] u8g2_hal_get_bus_handle()
+
+`c
+i2c_master_bus_handle_t u8g2_hal_get_bus_handle(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/u8g2_hal.h](components/oled_display/include/u8g2_hal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/u8g2_hal.h](components/oled_display/include/u8g2_hal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] u8g2_hal_i2c_probe()
+
+`c
+esp_err_t u8g2_hal_i2c_probe(uint16_t addr, int timeout_ms);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/u8g2_hal.h](components/oled_display/include/u8g2_hal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/u8g2_hal.h](components/oled_display/include/u8g2_hal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] u8g2_hal_byte_cb()
+
+`c
+uint8_t u8g2_hal_byte_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/u8g2_hal.h](components/oled_display/include/u8g2_hal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/u8g2_hal.h](components/oled_display/include/u8g2_hal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] u8g2_hal_gpio_and_delay_cb()
+
+`c
+uint8_t u8g2_hal_gpio_and_delay_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/u8g2_hal.h](components/oled_display/include/u8g2_hal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/u8g2_hal.h](components/oled_display/include/u8g2_hal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] u8x8_cad_mps3_fast_i2c()
+
+`c
+uint8_t u8x8_cad_mps3_fast_i2c(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema oled_display declarada em [components/oled_display/include/u8g2_hal.h](components/oled_display/include/u8g2_hal.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo oled_display.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** oled_display ([components/oled_display/include/u8g2_hal.h](components/oled_display/include/u8g2_hal.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_history_init()
+
+`c
+esp_err_t podcast_history_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_history_is_played()
+
+`c
+bool podcast_history_is_played(const char *rel_path);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_history_mark_played()
+
+`c
+void podcast_history_mark_played(const char *rel_path, uint32_t duration_sec);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_history_remove_entry()
+
+`c
+void podcast_history_remove_entry(const char *rel_path);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_history_unmark_played()
+
+`c
+esp_err_t podcast_history_unmark_played(const char *rel_path);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_history_get_count()
+
+`c
+int podcast_history_get_count(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_history_get_entry()
+
+`c
+bool podcast_history_get_entry(int idx, char *out_rel_path, size_t max_len, uint32_t *out_ts, uint32_t *out_dur);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_history_audio_player_cb()
+
+`c
+void podcast_history_audio_player_cb(const char *rel_path, uint32_t elapsed_sec, uint32_t total_sec);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_history.h](components/podcast_sync/include/podcast_history.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_init()
+
+`c
+esp_err_t podcast_sync_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_start_manual()
+
+`c
+esp_err_t podcast_sync_start_manual(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_start()
+
+`c
+esp_err_t podcast_sync_start(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_check_auto()
+
+`c
+esp_err_t podcast_sync_check_auto(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_request_cancel()
+
+`c
+void podcast_sync_request_cancel(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_cancel()
+
+`c
+void podcast_sync_cancel(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_is_busy()
+
+`c
+bool podcast_sync_is_busy(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_is_auto_mode()
+
+`c
+bool podcast_sync_is_auto_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_notify_activity()
+
+`c
+void podcast_sync_notify_activity(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_on_begin()
+
+`c
+void podcast_sync_on_begin(int total_files, uint64_t total_bytes);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_mark_completed()
+
+`c
+void podcast_sync_mark_completed(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_get_progress()
+
+`c
+void podcast_sync_get_progress(podcast_sync_progress_t *out);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_set_server_url()
+
+`c
+void podcast_sync_set_server_url(const char *url);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] podcast_sync_get_server_url()
+
+`c
+void podcast_sync_get_server_url(char *out_url, size_t max_len);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema podcast_sync declarada em [components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo podcast_sync.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** podcast_sync ([components/podcast_sync/include/podcast_sync.h](components/podcast_sync/include/podcast_sync.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] sd_card_init()
+
+`c
+esp_err_t sd_card_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema sd_card declarada em [components/sd_card/include/sd_card.h](components/sd_card/include/sd_card.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo sd_card.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** sd_card ([components/sd_card/include/sd_card.h](components/sd_card/include/sd_card.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] sd_card_deinit()
+
+`c
+void sd_card_deinit(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema sd_card declarada em [components/sd_card/include/sd_card.h](components/sd_card/include/sd_card.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo sd_card.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** sd_card ([components/sd_card/include/sd_card.h](components/sd_card/include/sd_card.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] sd_card_get_handle()
+
+`c
+sdmmc_card_t *sd_card_get_handle(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema sd_card declarada em [components/sd_card/include/sd_card.h](components/sd_card/include/sd_card.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo sd_card.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** sd_card ([components/sd_card/include/sd_card.h](components/sd_card/include/sd_card.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] sd_card_set_frequency()
+
+`c
+esp_err_t sd_card_set_frequency(uint32_t freq_khz);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema sd_card declarada em [components/sd_card/include/sd_card.h](components/sd_card/include/sd_card.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo sd_card.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** sd_card ([components/sd_card/include/sd_card.h](components/sd_card/include/sd_card.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] sd_card_get_frequency()
+
+`c
+uint32_t sd_card_get_frequency(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema sd_card declarada em [components/sd_card/include/sd_card.h](components/sd_card/include/sd_card.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo sd_card.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** sd_card ([components/sd_card/include/sd_card.h](components/sd_card/include/sd_card.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] debug_nav_init()
+
+`c
+void debug_nav_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] debug_nav_set_enabled()
+
+`c
+void debug_nav_set_enabled(bool enable);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] debug_nav_is_enabled()
+
+`c
+bool debug_nav_is_enabled(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] debug_nav_press()
+
+`c
+esp_err_t debug_nav_press(uint8_t btn_mask, uint32_t duration_ms);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] debug_nav_enqueue_seq()
+
+`c
+esp_err_t debug_nav_enqueue_seq(const char *seq_str);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] debug_nav_release_all()
+
+`c
+void debug_nav_release_all(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] debug_nav_get_vmask()
+
+`c
+uint8_t debug_nav_get_vmask(uint32_t now_ms);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] debug_nav_notify_mode_change()
+
+`c
+void debug_nav_notify_mode_change(int old_mode, int new_mode);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] debug_nav_dump_state()
+
+`c
+void debug_nav_dump_state(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] debug_nav_request_screenshot()
+
+`c
+esp_err_t debug_nav_request_screenshot(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] debug_nav_reset_home()
+
+`c
+void debug_nav_reset_home(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/debug_nav.h](components/touch_input/include/debug_nav.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_set_display_task_handle()
+
+`c
+void touch_input_set_display_task_handle(TaskHandle_t handle);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_wake_display()
+
+`c
+void touch_input_wake_display(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_start()
+
+`c
+esp_err_t touch_input_start(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_set_usb_prompt()
+
+`c
+void touch_input_set_usb_prompt(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_cancel_usb()
+
+`c
+void touch_input_cancel_usb(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_enter_usb_msc()
+
+`c
+void touch_input_enter_usb_msc(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_enter_usb_dac()
+
+`c
+void touch_input_enter_usb_dac(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_reset_to_main_menu()
+
+`c
+void touch_input_reset_to_main_menu(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_set_menu_cursor()
+
+`c
+void touch_input_set_menu_cursor(int c);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_last_activity_ms()
+
+`c
+uint32_t touch_input_get_last_activity_ms(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_mode()
+
+`c
+ui_mode_t touch_input_get_mode(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_list_cursor()
+
+`c
+int touch_input_get_list_cursor(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_is_locked()
+
+`c
+bool touch_input_is_locked(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_is_powered_off()
+
+`c
+bool touch_input_is_powered_off(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_is_in_player_browser()
+
+`c
+bool touch_input_is_in_player_browser(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_register_player_entry()
+
+`c
+void touch_input_register_player_entry(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_register_conf_entry()
+
+`c
+void touch_input_register_conf_entry(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_register_usb_entry()
+
+`c
+void touch_input_register_usb_entry(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_register_game_entry()
+
+`c
+void touch_input_register_game_entry(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_eq_band()
+
+`c
+int touch_input_get_eq_band(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_led_channel()
+
+`c
+int touch_input_get_led_channel(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_oled_brightness()
+
+`c
+uint8_t touch_input_get_oled_brightness(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_top_cursor()
+
+`c
+int touch_input_get_top_cursor(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_top_eq_focus()
+
+`c
+int touch_input_get_top_eq_focus(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_tela_cursor()
+
+`c
+int touch_input_get_tela_cursor(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_timeout_idx()
+
+`c
+int touch_input_get_timeout_idx(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_fallback_idx()
+
+`c
+int touch_input_get_fallback_idx(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_is_sleeping()
+
+`c
+bool touch_input_is_sleeping(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_eq_preset_cursor()
+
+`c
+int touch_input_get_eq_preset_cursor(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_wifi_net_cursor()
+
+`c
+int touch_input_get_wifi_net_cursor(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_games_cursor()
+
+`c
+int touch_input_get_games_cursor(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_deepsleep_idx()
+
+`c
+int touch_input_get_deepsleep_idx(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_deepsleep_ms()
+
+`c
+uint32_t touch_input_get_deepsleep_ms(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] keyboard_start()
+
+`c
+void keyboard_start(const char *initial_text, keyboard_callback_t cb);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_keyboard_state()
+
+`c
+void touch_input_get_keyboard_state(char *text, int *cursor, int *grid_x, int *grid_y, int *page, bool *is_confirming);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_register_chrono_entry()
+
+`c
+void touch_input_register_chrono_entry(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_chrono_is_running()
+
+`c
+bool touch_input_chrono_is_running(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_chrono_get_elapsed_ms()
+
+`c
+uint32_t touch_input_chrono_get_elapsed_ms(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_chrono_get_laps()
+
+`c
+int touch_input_chrono_get_laps(uint32_t *out_laps, int max_laps);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_is_lock_clock_visible()
+
+`c
+bool touch_input_is_lock_clock_visible(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_lock_clock_timeout_idx()
+
+`c
+int touch_input_get_lock_clock_timeout_idx(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_lock_clock_secs()
+
+`c
+uint32_t touch_input_get_lock_clock_secs(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_action_cursor()
+
+`c
+int touch_input_get_action_cursor(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_action_items()
+
+`c
+int touch_input_get_action_items(const char *items[], int max_items);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] touch_input_get_clipboard_item()
+
+`c
+const char *touch_input_get_clipboard_item(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema touch_input declarada em [components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo touch_input.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** touch_input ([components/touch_input/include/touch_input.h](components/touch_input/include/touch_input.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] uart_ctrl_init()
+
+`c
+int uart_ctrl_init(const uart_ctrl_config_t *cfg);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema uart_ctrl declarada em [components/uart_ctrl/include/uart_ctrl.h](components/uart_ctrl/include/uart_ctrl.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo uart_ctrl.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** uart_ctrl ([components/uart_ctrl/include/uart_ctrl.h](components/uart_ctrl/include/uart_ctrl.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] uart_ctrl_send()
+
+`c
+bool uart_ctrl_send(uart_ctrl_cmd_t cmd, const uint8_t *payload, size_t len);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema uart_ctrl declarada em [components/uart_ctrl/include/uart_ctrl.h](components/uart_ctrl/include/uart_ctrl.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo uart_ctrl.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** uart_ctrl ([components/uart_ctrl/include/uart_ctrl.h](components/uart_ctrl/include/uart_ctrl.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] uart_ctrl_send_status()
+
+`c
+bool uart_ctrl_send_status(uart_link_state_t state, const uint8_t bt_addr[6], uint32_t sample_rate);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema uart_ctrl declarada em [components/uart_ctrl/include/uart_ctrl.h](components/uart_ctrl/include/uart_ctrl.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo uart_ctrl.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** uart_ctrl ([components/uart_ctrl/include/uart_ctrl.h](components/uart_ctrl/include/uart_ctrl.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] usb_manager_init()
+
+`c
+esp_err_t usb_manager_init(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema usb_manager declarada em [components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo usb_manager.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** usb_manager ([components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] usb_manager_set_mode()
+
+`c
+void usb_manager_set_mode(usb_mode_t mode);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema usb_manager declarada em [components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo usb_manager.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** usb_manager ([components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] usb_manager_is_connected()
+
+`c
+bool usb_manager_is_connected(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema usb_manager declarada em [components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo usb_manager.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** usb_manager ([components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] usb_manager_send_hid()
+
+`c
+void usb_manager_send_hid(int command);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema usb_manager declarada em [components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo usb_manager.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** usb_manager ([components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] usb_manager_enter_bootloader()
+
+`c
+void usb_manager_enter_bootloader(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema usb_manager declarada em [components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo usb_manager.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** usb_manager ([components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] usb_manager_get_sample_rate()
+
+`c
+uint32_t usb_manager_get_sample_rate(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema usb_manager declarada em [components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo usb_manager.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** usb_manager ([components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] usb_manager_get_pkt_count()
+
+`c
+uint32_t usb_manager_get_pkt_count(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema usb_manager declarada em [components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo usb_manager.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** usb_manager ([components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] usb_manager_get_last_sample()
+
+`c
+int32_t usb_manager_get_last_sample(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema usb_manager declarada em [components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo usb_manager.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** usb_manager ([components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] usb_manager_is_streaming()
+
+`c
+bool usb_manager_is_streaming(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema usb_manager declarada em [components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo usb_manager.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** usb_manager ([components/usb_manager/include/usb_manager.h](components/usb_manager/include/usb_manager.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_enter()
+
+`c
+esp_err_t wifi_transfer_enter(wifi_transfer_mode_t mode);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_poll()
+
+`c
+bool wifi_transfer_poll(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_request_exit()
+
+`c
+void wifi_transfer_request_exit(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_is_active()
+
+`c
+bool wifi_transfer_is_active(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_is_ota_busy()
+
+`c
+bool wifi_transfer_is_ota_busy(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_is_transferring()
+
+`c
+bool wifi_transfer_is_transferring(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_has_sta_ip()
+
+`c
+bool wifi_transfer_has_sta_ip(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_get_gateway_ip()
+
+`c
+bool wifi_transfer_get_gateway_ip(char *out_gw, size_t max_len);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_get_ap_credentials()
+
+`c
+void wifi_transfer_get_ap_credentials(char *out_ssid, size_t ssid_len, char *out_pass, size_t pass_len);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_get_known_count()
+
+`c
+int wifi_transfer_get_known_count(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_get_known_network()
+
+`c
+bool wifi_transfer_get_known_network(int idx, char *out_ssid, size_t ssid_len, char *out_pass, size_t pass_len);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_save_network()
+
+`c
+void wifi_transfer_save_network(const char *ssid, const char *pass);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_delete_network()
+
+`c
+bool wifi_transfer_delete_network(const char *ssid);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_promote_network()
+
+`c
+bool wifi_transfer_promote_network(const char *ssid);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_scan_start()
+
+`c
+esp_err_t wifi_transfer_scan_start(void);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_scan_get_results()
+
+`c
+esp_err_t wifi_transfer_scan_get_results(void *out_aps, int max_aps, int *out_count);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** FreeRTOS Dual-Core cooperativo (Core 0 / Core 1) com orçamento estrito de SRAM interna e PSRAM Octal.
+- **Subsistema:** wifi_transfer ([components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h)).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] wifi_transfer_get_status()
+
+`c
+void wifi_transfer_get_status(char *out, size_t out_len, int *files_received);
+`
+
+**Descrição Técnica:**  
+@brief Função do subsistema wifi_transfer declarada em [components/wifi_transfer/include/wifi_transfer.h](components/wifi_transfer/include/wifi_transfer.h). Executa operação de controle, estado, renderização ou I/O conforme contrato do módulo wifi_transfer.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** F
+... [truncated for diff preview]

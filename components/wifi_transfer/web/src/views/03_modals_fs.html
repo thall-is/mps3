@@ -1,0 +1,128 @@
+<!-- ========================================================================
+     VIEW 03: Modais de Sistema de Arquivos (Nova Pasta e Mover/Copiar)
+     ======================================================================== -->
+        <!-- MODAL DE CRIAR NOVA PASTA NATIVO -->
+    <div id="mkdirModal" class="modal-backdrop" style="display:none;">
+        <div class="modal-card" style="max-width:400px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:10px;margin-bottom:14px;">
+                <h3 style="margin:0;font-size:1.1em;display:flex;align-items:center;gap:8px;">
+                    <span>📁 Nova Pasta</span>
+                </h3>
+                <button type="button" onclick="closeMkdirModal()" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:var(--text-muted);padding:0 4px;">✕</button>
+            </div>
+            <div style="margin-bottom:14px;">
+                <label style="font-size:0.85em;color:var(--text-muted);display:block;margin-bottom:6px;">Criar dentro de: <strong id="mkdirCurrentPathLabel" style="color:var(--text-primary);font-family:monospace;">/</strong></label>
+                <input type="text" id="mkdirInputName" class="search-box" style="margin-bottom:0;width:100%;" placeholder="Nome da pasta (ex: Rock 2026)">
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:8px;">
+                <button type="button" class="btn-secondary" onclick="closeMkdirModal()">Cancelar</button>
+                <button type="button" id="btnConfirmMkdir" class="btn-primary">Criar Pasta</button>
+            </div>
+        </div>
+    </div>
+
+<!-- MODAL DE MOVER ARQUIVO / EXPLORADOR DE PASTAS -->
+    <div id="moveModal" class="modal-backdrop" style="display:none;">
+        <div class="modal-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:10px;margin-bottom:12px;">
+                <h3 style="margin:0;font-size:1.1em;display:flex;align-items:center;gap:8px;">
+                    <span>📁 Mover:</span>
+                    <span id="moveItemName" style="color:var(--accent-color);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                </h3>
+                <button type="button" onclick="closeMoveModal()" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:var(--text-muted);padding:0 4px;">✕</button>
+            </div>
+
+            <div style="background:var(--bg-subtle);padding:8px 12px;border-radius:6px;margin-bottom:10px;display:flex;align-items:center;gap:6px;font-size:0.88em;border:1px solid var(--border-color);">
+                <strong style="color:var(--text-muted);">Destino:</strong>
+                <span id="moveCurrentPath" style="font-family:monospace;color:var(--text-primary);word-break:break-all;">/</span>
+            </div>
+
+            <div style="display:flex;gap:8px;margin-bottom:10px;">
+                <button type="button" id="btnMoveNewFolder" class="btn-secondary" style="display:flex;align-items:center;gap:6px;">
+                    📁 + Nova Pasta Aqui
+                </button>
+            </div>
+
+            <div id="moveFolderList" class="folder-picker-list">
+                <!-- Pastas inseridas dinamicamente -->
+            </div>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border-color);padding-top:12px;">
+                <button type="button" class="btn-secondary" onclick="closeMoveModal()">Cancelar</button>
+                <button type="button" id="btnConfirmMove" class="btn-primary">✓ Mover para esta pasta</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL ESTÚDIO DE PLAYLISTS (.m3u / .m3u8) -->
+    <div id="playlistModal" class="modal-backdrop" style="display:none;">
+        <div class="modal-card" style="max-width:780px; width:96%; max-height:90vh; display:flex; flex-direction:column;">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:10px;margin-bottom:12px;">
+                <h3 style="margin:0;font-size:1.12em;display:flex;align-items:center;gap:8px;">
+                    <span>🎶 Estúdio de Playlists (.m3u / .m3u8)</span>
+                </h3>
+                <button type="button" onclick="closePlaylistModal()" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:var(--text-muted);padding:0 4px;">✕</button>
+            </div>
+
+            <!-- Barra Superior: Selecionar Playlist Existente ou Criar Nova -->
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--bg-subtle);padding:10px;border-radius:8px;border:1px solid var(--border-color);margin-bottom:12px;">
+                <div style="display:flex;flex-direction:column;gap:3px;min-width:170px;flex:1;">
+                    <label style="font-size:0.75em;color:var(--text-muted);font-weight:bold;">PLAYLIST NO CARTÃO SD:</label>
+                    <select id="plSelectExisting" style="padding:7px 10px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-weight:600;">
+                        <option value="__new__">✨ + Criar Nova Playlist...</option>
+                    </select>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:3px;min-width:170px;flex:1.2;">
+                    <label style="font-size:0.75em;color:var(--text-muted);font-weight:bold;">NOME DO ARQUIVO:</label>
+                    <div style="display:flex;gap:4px;">
+                        <input type="text" id="plNameInput" class="search-box" style="margin:0;flex:1;padding:7px 10px;" placeholder="Ex: Favoritos, Treino, Viagem">
+                        <select id="plExtSelect" style="padding:7px 8px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-weight:bold;">
+                            <option value=".m3u8">.m3u8</option>
+                            <option value=".m3u">.m3u</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="display:flex;gap:6px;align-self:flex-end;flex-wrap:wrap;">
+                    <button type="button" class="btn-secondary" onclick="startNewPlaylistInStudio()" title="Iniciar lista em branco">➕ Nova</button>
+                    <button type="button" class="btn-secondary" onclick="playCurrentM3uInWebPlayer()" title="Tocar esta playlist agora no navegador">▶️ Tocar</button>
+                    <button type="button" class="btn-secondary" style="color:#ef4444;" onclick="deleteCurrentM3uFromSd()" title="Excluir este arquivo .m3u/.m3u8 do cartão SD">🗑️</button>
+                </div>
+            </div>
+
+            <!-- Painel Duplo: Faixas da Playlist (Esquerda) + Explorador do SD para Adicionar (Direita) -->
+            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:12px;flex:1;min-height:280px;overflow:hidden;margin-bottom:12px;">
+                <!-- Coluna 1: Faixas na Playlist -->
+                <div style="display:flex;flex-direction:column;border:1px solid var(--border-color);border-radius:8px;overflow:hidden;background:var(--bg-card);">
+                    <div style="padding:8px 10px;background:var(--bg-subtle);border-bottom:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
+                        <strong style="font-size:0.86em;">📋 Ordem das Faixas (<span id="plTrackCountBadge">0</span>)</strong>
+                        <div style="display:flex;gap:4px;">
+                            <button type="button" class="btn-secondary" style="font-size:0.75em;padding:3px 7px;" onclick="sortPlaylistStudioTracks()" title="Ordenar A-Z">🔤 A-Z</button>
+                            <button type="button" class="btn-secondary" style="font-size:0.75em;padding:3px 7px;" onclick="shufflePlaylistStudioTracks()" title="Embaralhar ordem">🔀 Mix</button>
+                            <button type="button" class="btn-secondary" style="font-size:0.75em;padding:3px 7px;color:#ef4444;" onclick="clearPlaylistStudioTracks()" title="Limpar todas as faixas">🧹 Limpar</button>
+                        </div>
+                    </div>
+                    <div id="plTracksList" style="flex:1;overflow-y:auto;max-height:300px;padding:6px;"></div>
+                </div>
+
+                <!-- Coluna 2: Explorador do SD para Adicionar Faixas ou Pastas -->
+                <div style="display:flex;flex-direction:column;border:1px solid var(--border-color);border-radius:8px;overflow:hidden;background:var(--bg-card);">
+                    <div style="padding:8px 10px;background:var(--bg-subtle);border-bottom:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;gap:6px;">
+                        <div style="font-size:0.82em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                            <strong>📁 SD:</strong> <span id="plBrowserPath" style="font-family:monospace;">/</span>
+                        </div>
+                        <button type="button" class="btn-secondary" style="font-size:0.75em;padding:3px 8px;white-space:nowrap;" onclick="addAllCurrentBrowserFolderToPlaylist()">+ Pasta Atual</button>
+                    </div>
+                    <div id="plBrowserList" style="flex:1;overflow-y:auto;max-height:300px;padding:6px;"></div>
+                </div>
+            </div>
+
+            <!-- Rodapé: Status + Salvar -->
+            <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border-color);padding-top:10px;flex-wrap:wrap;gap:8px;">
+                <span id="plStatusMsg" style="font-size:0.84em;color:var(--text-muted);">Pronto — as listas salvas em <code>/sdcard</code> aparecem como <strong>[PL]</strong> no OLED do MPS3.</span>
+                <div style="display:flex;gap:8px;">
+                    <button type="button" class="btn-secondary" onclick="closePlaylistModal()">Fechar</button>
+                    <button type="button" id="btnSavePlaylist" class="btn-primary" onclick="savePlaylistToSd()">💾 Salvar Playlist no SD</button>
+                </div>
+            </div>
+        </div>
+    </div>

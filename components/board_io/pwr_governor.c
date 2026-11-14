@@ -46,6 +46,10 @@ esp_err_t pwr_governor_init(void)
 
 esp_err_t pwr_governor_set_cpu_freq(pwr_freq_t freq)
 {
+    if (!s_initialized) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
     if (freq != PWR_FREQ_40MHZ && freq != PWR_FREQ_80MHZ && freq != PWR_FREQ_160MHZ && freq != PWR_FREQ_240MHZ) {
         return ESP_ERR_INVALID_ARG;
     }

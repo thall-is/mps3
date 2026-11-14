@@ -1,0 +1,127 @@
+<!-- ========================================================================
+     VIEW 01: Barra de Status (Bateria/SD), Mini-OLED 128x64, Caixa de Upload, Toolbar e Tabela
+     ======================================================================== -->
+    <div id="header-status" style="display:flex; flex-direction:column; gap:8px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <div id="batInfo" class="bat-info" style="display:flex; align-items:center; gap:6px; font-weight:bold;">🔋 --</div>
+                <div class="oled-color-bar" title="Mudar a cor física do display OLED 128x64 (Site e Stories)">
+                    <span>OLED 128×64:</span>
+                    <button type="button" class="oled-swatch oled-swatch-white" data-oled="white" onclick="setOledColor('white')" title="OLED Branco Puro"></button>
+                    <button type="button" class="oled-swatch oled-swatch-blue active" data-oled="blue" onclick="setOledColor('blue')" title="OLED Azul Ciano"></button>
+                    <button type="button" class="oled-swatch oled-swatch-yellow" data-oled="yellow" onclick="setOledColor('yellow')" title="OLED Amarelo Âmbar"></button>
+                    <button type="button" class="oled-swatch oled-swatch-green" data-oled="green" onclick="setOledColor('green')" title="OLED Verde Fósforo"></button>
+                    <button type="button" class="oled-swatch oled-swatch-dual" data-oled="dual" onclick="setOledColor('dual')" title="OLED Dual-Zone (Topo Amarelo + Corpo Azul)"></button>
+                </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px;">
+                <div class="sd-traffic-indicator" id="sdTrafficBox" title="Estado de I/O do Cartão SD (MicroSD 128GB)">
+                    <span class="sd-dot" id="sdDot"></span>
+                    <span id="sdTrafficText">Livre</span>
+                </div>
+                <div id="sdInfoText" class="sd-info" style="font-size:0.9em; font-weight:bold;">SD: --</div>
+            </div>
+        </div>
+        <div style="width:100%; background:var(--bg-subtle); height:6px; border-radius:3px; overflow:hidden;">
+            <div id="sdBar" style="height:100%; width:0%; background:var(--accent-color); transition: width 0.3s;"></div>
+        </div>
+        <!-- Painel Emblemático SSD1306 128x64 1-Bit ao vivo -->
+        <div class="oled-live-bezel">
+            <div style="display:flex; flex-direction:column; gap:3px; min-width:170px; flex:1;">
+                <div style="font-family:ui-monospace,Consolas,monospace; font-size:0.74em; font-weight:800; color:var(--oled-top); letter-spacing:0.05em;">
+                    SSD1306 128×64 • 1-BIT MATRIX MONITOR
+                </div>
+                <div id="oledLiveSubText" style="font-size:0.82em; color:#cbd5e1;">
+                    Espelho interativo em tempo real do hardware MPS3 — clique nas cores acima (Branco, Azul, Amarelo, Verde ou Dual-Zone) ou abra <strong>📊 Estatísticas</strong> para gerar seu Story 1-bit!
+                </div>
+            </div>
+            <canvas id="headerOledCanvas" width="384" height="192" onclick="openWrappedModal()" style="cursor:pointer;" title="Clique para abrir o MPS3 Wrapped e o Estúdio de Stories OLED 128x64"></canvas>
+        </div>
+    </div>
+
+    <!-- Upload Status Box -->
+    <div id="upload-status-box">
+        <div class="up-row">
+            <strong id="upFileName">Enviando arquivo...</strong>
+            <span id="upFilePct">0%</span>
+        </div>
+        <div class="up-bar-track"><div id="upFileBar" class="up-bar-fill"></div></div>
+        
+        <div class="up-row" style="font-size:0.78em; color:#666;">
+            <span id="upOverallLabel">Geral (0/0)</span>
+            <span id="upOverallPct">0%</span>
+        </div>
+        <div class="up-bar-track"><div id="upOverallBar" class="up-bar-fill overall"></div></div>
+        
+        <div class="up-stats">
+            <span id="upSpeed">0 KB/s</span>
+            <span id="upEta">--</span>
+        </div>
+        <div id="queue"></div>
+    </div>
+
+    <!-- Download Status Box -->
+    <div id="download-status-box">
+        <div class="up-row">
+            <strong id="dlFileName">Baixando arquivo...</strong>
+            <span id="dlFilePct">0%</span>
+        </div>
+        <div class="up-bar-track"><div id="dlFileBar" class="up-bar-fill"></div></div>
+        <div class="up-stats">
+            <span id="dlSpeed">0 KB/s</span>
+            <span id="dlEta">--</span>
+            <span id="dlSize" style="margin-left:auto; color:var(--text-muted);">0 / 0 MB</span>
+        </div>
+    </div>
+
+    <h2>Arquivos 
+        <div class="toolbar" style="display:flex; gap:6px; margin-left:auto; flex-wrap:wrap;">
+            <button id="playlistBtn" class="tool-btn" style="font-size:.85em;padding:.4em .65em;">🎶 Playlists</button>
+            <button id="wrappedBtn" class="tool-btn" style="font-size:.85em;padding:.4em .65em;">📊 Estatísticas</button>
+            <button id="podBtn" class="tool-btn" style="font-size:.85em;padding:.4em .6em;">🎙️ Podcasts</button>
+            <button id="eqBtn" class="tool-btn" style="font-size:.85em;padding:.4em .6em;">🎚️ Equalizador</button>
+            <button id="mkdirBtn" class="tool-btn" style="font-size:.85em;padding:.4em .6em;">📁 Nova Pasta</button>
+            <button id="themeToggleBtn" class="tool-btn" title="Alternar Tema Claro / Escuro" onclick="toggleTheme()" style="font-size:.9em;padding:.4em .65em;">🌙</button>
+            <button id="configBtn" class="tool-btn" style="font-size:.85em;padding:.4em .6em;">⚙️ Config</button>
+            <button id="otaBtn" class="btn-primary" style="font-size:.85em;padding:.4em .7em;font-weight:600;">🚀 Atualizar</button>
+        </div>
+    </h2>
+
+    <!-- Barra de Ações em Lote (Seleção Múltipla) -->
+    <div id="batchBar" class="batch-bar">
+        <div class="batch-summary">
+            <span id="batchCountText">0 itens selecionados</span>
+        </div>
+        <div class="batch-actions">
+            <button type="button" id="btnBatchPlaylist">🎶 + Playlist</button>
+            <button type="button" id="btnBatchDownload">📥 Baixar</button>
+            <button type="button" id="btnBatchMove">📁 Mover</button>
+            <button type="button" id="btnBatchCopy">📋 Copiar</button>
+            <button type="button" id="btnBatchDelete" class="btn-danger">🗑️ Excluir</button>
+            <button type="button" id="btnBatchClear" style="background:none;border:none;cursor:pointer;">✕ Cancelar</button>
+        </div>
+    </div>
+    <input type="text" id="filterInput" class="search-box" placeholder="🔍 Filtrar músicas e pastas...">
+    
+    <div id="crumbs">/</div>
+    <table>
+        <thead>
+            <tr style="background:var(--bg-subtle);border-bottom:1px solid var(--border-color);font-size:0.82em;color:var(--text-muted);text-align:left;">
+                <th style="width:38px;text-align:center;padding:8px 0 8px 10px;">
+                    <input type="checkbox" id="chkSelectAll" class="item-chk" title="Selecionar Todos">
+                </th>
+                <th style="padding:8px 10px;">Nome</th>
+            </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+    </table>
+
+    <div id="dropzone">
+        📁 <strong>Arraste arquivos ou pastas de música aqui</strong>
+    </div>
+    <div class="upload-btns">
+        <button onclick="el.inpFiles.click()">+ Selecionar Arquivos</button>
+        <button onclick="el.inpFolder.click()">+ Selecionar Pasta</button>
+        <input type="file" id="inpFiles" multiple style="display:none">
+        <input type="file" id="inpFolder" webkitdirectory multiple style="display:none">
+    </div>

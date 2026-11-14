@@ -6,7 +6,7 @@ import os
 import sys
 import time
 
-TARGET = 'http://192.168.15.61'
+TARGET = os.environ.get('MPS3_TARGET', 'http://mps3.local')
 
 def req(url, data=None, headers=None, method=None):
     h = headers or {}

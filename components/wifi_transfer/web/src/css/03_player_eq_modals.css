@@ -1,0 +1,120 @@
+/* ==========================================================================
+ * MÓDULO CSS 03: Mini Player, Fullscreen Visualizer, Modais, Faders EQ e Mobile
+ * ========================================================================== */
+        /* Vertical Equalizer Studio Console */
+        .eq-faders-wrapper { display: flex; justify-content: space-between; align-items: center; background: #14181c; border-radius: 10px; padding: 16px 8px; margin-bottom: 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; box-shadow: inset 0 2px 8px rgba(0,0,0,0.6); }
+        .eq-fader-col { display: flex; flex-direction: column; align-items: center; justify-content: space-between; height: 200px; min-width: 44px; flex: 1; position: relative; }
+        .eq-preamp-col { border-right: 1px solid rgba(255,255,255,0.12); padding-right: 8px; margin-right: 6px; min-width: 54px; }
+        .eq-fader-val { font-size: 0.72em; font-family: ui-monospace, SFMono-Regular, monospace; font-weight: bold; color: #4da3ff; min-height: 16px; text-align: center; margin-bottom: 4px; }
+        .eq-fader-track-wrap { position: relative; height: 135px; display: flex; align-items: center; justify-content: center; width: 32px; }
+        .eq-fader-zero-line { position: absolute; top: 50%; left: 4px; right: 4px; height: 1px; background: rgba(255,255,255,0.22); pointer-events: none; }
+        .v-fader { -webkit-appearance: slider-vertical; writing-mode: vertical-lr; direction: rtl; width: 22px; height: 130px; background: transparent; cursor: pointer; accent-color: #0077ff; }
+        .eq-fader-freq { font-size: 0.72em; font-weight: 600; color: #8fa0b0; margin-top: 6px; text-align: center; }
+        /* Upload & Download Progress Boxes */
+        #upload-status-box, #download-status-box { display: none; background: var(--bg-card); border: 1px solid var(--accent-color); border-radius: 8px; padding: 12px; margin-bottom: 15px; box-shadow: var(--card-shadow); color: var(--text-primary); }
+        .up-row { display: flex; justify-content: space-between; font-size: 0.85em; color: var(--text-primary); margin-bottom: 4px; }
+        .up-bar-track { background: var(--bg-subtle); border-radius: 4px; height: 8px; overflow: hidden; margin-bottom: 6px; }
+        .up-bar-fill { height: 100%; background: var(--accent-color); width: 0%; transition: width 0.35s ease-out; }
+        .up-bar-fill.overall { background: #28a745; transition: width 0.35s ease-out; }
+        .up-stats { font-size: 0.8em; color: var(--text-muted); display: flex; justify-content: space-between; }
+        
+        #queue { max-height: 120px; overflow-y: auto; font-size: 0.8em; border-top: 1px solid var(--border-color); margin-top: 8px; padding-top: 4px; }
+        .q-item { display: flex; justify-content: space-between; padding: 3px 0; color: var(--text-muted); }
+        .q-item.active { color: var(--accent-color); font-weight: bold; }
+        .q-item.done { color: #28a745; }
+        .q-item.error { color: #dc3545; }
+
+        /* Floating Mini Player */
+        #player-bar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg-card); box-shadow: 0 -4px 15px rgba(0,0,0,0.3); padding: 10px 15px; display: flex; flex-direction: column; z-index: 1000; transform: translateY(100%); transition: transform 0.3s ease-out; border-top: 1px solid var(--border-color); color: var(--text-regular); }
+        #player-bar.active { transform: translateY(0); }
+        .player-row { display: flex; align-items: center; justify-content: space-between; }
+        .track-info { display: flex; align-items: center; flex: 1; overflow: hidden; cursor: pointer; }
+        .album-art { width: 48px; height: 48px; border-radius: 6px; background: var(--bg-subtle); margin-right: 12px; object-fit: cover; flex-shrink: 0; box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
+        .track-text { display: flex; flex-direction: column; overflow: hidden; }
+        .track-title { font-weight: bold; font-size: 0.95em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
+        .track-artist { font-size: 0.82em; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+        .controls { display: flex; align-items: center; gap: 8px; margin-left: 8px; }
+        .btn-icon { background: none; border: none; font-size: 1.4em; color: var(--text-muted); cursor: pointer; padding: 5px; }
+        .btn-icon:hover { color: var(--text-primary); }
+        .play-btn { width: 42px; height: 42px; border-radius: 50%; background: var(--accent-color); color: #fff; border: none; font-size: 1.1em; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        .progress-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 0.78em; color: var(--text-muted); }
+        .progress-bar-container { flex: 1; height: 6px; background: var(--bg-subtle); border-radius: 3px; cursor: pointer; position: relative; overflow: hidden; }
+        .buffer-bar-fill { position: absolute; top: 0; left: 0; height: 100%; background: var(--accent-color); opacity: 0.35; border-radius: 3px; width: 0%; pointer-events: none; transition: width 0.2s ease-out; }
+        .progress-bar-fill { position: absolute; top: 0; left: 0; height: 100%; background: var(--accent-color); border-radius: 3px; width: 0%; pointer-events: none; z-index: 2; }
+        .play-btn.buffering svg, .fs-play.buffering svg { animation: spin 1s linear infinite; opacity: 0.75; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        
+        /* Fullscreen Player */
+        #fs-player { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #111; z-index: 2000; display: flex; flex-direction: column; opacity: 0; pointer-events: none; transition: opacity 0.3s; color: #fff; }
+        #fs-player.active { opacity: 1; pointer-events: all; }
+        #fs-bg { position: absolute; top: -10%; left: -10%; right: -10%; bottom: -10%; background-size: cover; background-position: center; filter: blur(35px) brightness(0.35); z-index: -1; transition: background-image 0.5s; }
+        .fs-header { display: flex; justify-content: space-between; align-items: center; padding: 18px; font-size: 1.3em; }
+        .fs-close { cursor: pointer; padding: 8px 14px; font-size: 1.4em; }
+        .fs-art-container { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 10px 20px; position: relative; }
+        .fs-art { width: 100%; max-width: 280px; aspect-ratio: 1; object-fit: cover; border-radius: 12px; box-shadow: 0 12px 35px rgba(0,0,0,0.6); z-index: 2; }
+        
+        /* Audio Visualizer Canvas */
+        #visualizer { width: 100%; max-width: 320px; height: 50px; margin-top: 10px; z-index: 2; }
+
+        .fs-info { padding: 0 30px 10px 30px; text-align: center; }
+        .fs-title { font-size: 1.35em; font-weight: bold; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .fs-artist { font-size: 1em; color: #bbb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        
+        /* Equalizer Sliders */
+        .eq-panel { display: flex; justify-content: center; gap: 15px; margin: 5px 0 10px 0; font-size: 0.75em; color: #aaa; }
+        .eq-group { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .eq-group input[type=range] { width: 60px; accent-color: #1db954; }
+
+        .fs-controls-container { padding: 0 30px 30px 30px; }
+        .fs-controls { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
+        .fs-btn { background: none; border: none; color: #fff; font-size: 1.8em; cursor: pointer; padding: 6px; }
+        .fs-btn.small { font-size: 1.2em; color: #777; }
+        .fs-btn.active { color: #1db954; }
+        .fs-play { width: 56px; height: 56px; border-radius: 50%; background: #fff; color: #000; display: flex; align-items: center; justify-content: center; font-size: 1.4em; }
+        
+        .fs-progress-row { display: flex; align-items: center; gap: 12px; font-size: 0.82em; color: #aaa; margin-top: 6px;}
+        .fs-progress-cont { flex: 1; height: 7px; background: rgba(255,255,255,0.25); border-radius: 4px; cursor: pointer; position: relative; overflow: hidden;}
+        .fs-buffer-fill { position: absolute; top: 0; left: 0; height: 100%; background: #fff; opacity: 0.35; border-radius: 4px; width: 0%; pointer-events: none; transition: width 0.2s ease-out;}
+        .fs-progress-fill { height: 100%; background: #fff; border-radius: 4px; width: 0%; pointer-events: none; z-index: 2;}
+        
+        /* Dropdown Menu */
+        .dropdown { position: absolute; background: var(--bg-card); box-shadow: var(--card-shadow); border-radius: 6px; z-index: 1500; display: none; flex-direction: column; overflow: hidden; border: 1px solid var(--border-color); }
+        .dropdown.active { display: flex; }
+        .dropdown div { padding: 10px 18px; cursor: pointer; font-size: 0.88em; border-bottom: 1px solid var(--border-color); color: var(--text-primary); }
+        .dropdown div:hover { background: var(--bg-card-hover); color: var(--accent-color); }
+        .dropdown div:last-child { border-bottom: none; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .loading-spin { animation: spin 1s linear infinite; opacity: 0.6; }
+    
+        .eq-curve-btn { background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 8px; font-size: 0.75em; cursor: pointer; font-weight: 500; color: var(--text-primary); }
+        .eq-curve-btn:hover { background: var(--accent-color); color: #fff; border-color: var(--accent-color); }
+        .band-card { background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 4px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .band-card span.freq { font-size: 0.75em; font-weight: bold; color: var(--text-muted); }
+        .band-card span.val { font-size: 0.72em; color: var(--accent-color); font-weight: 600; min-height: 14px; }
+        .band-card input[type=range] { width: 100%; accent-color: var(--accent-color); }
+
+        /* Mobile Responsive Enhancements */
+        @media (max-width: 600px) {
+            body { padding: 8px 10px 150px 10px; }
+            h2 { flex-direction: column; align-items: stretch; gap: 8px; }
+            .toolbar { width: 100%; margin-left: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+            .toolbar button { flex: 1 1 calc(50% - 6px); min-height: 40px; padding: 6px 8px; font-size: 0.88em; text-align: center; }
+            .search-box { padding: 12px 14px; font-size: 1em; }
+            table td { padding: 12px 8px; }
+            .name span { font-size: 0.95em; }
+            .actions { padding: 10px 14px; font-size: 1.4em; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+            .upload-btns { flex-direction: column; gap: 8px; }
+            .upload-btns button { min-height: 44px; font-size: 0.95em; }
+            .modal-card { width: 95%; max-width: 95vw; padding: 14px 12px; max-height: 92vh; }
+            #player-bar { padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px)) 12px; }
+            .fs-info { padding: 0 16px 10px 16px; }
+            .fs-controls-container { padding: 0 16px 24px 16px; }
+            .dropdown div { padding: 14px 20px; font-size: 1em; }
+        }
+
+        @media (max-width: 420px) {
+            .toolbar button { font-size: 0.8em; padding: 6px 6px; }
+            .bat-info, .sd-info { font-size: 0.85em; }
+            .eq-faders-wrapper { padding: 12px 4px; }
+            .eq-fader-col { min-width: 38px; }
+        }

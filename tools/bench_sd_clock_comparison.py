@@ -6,6 +6,7 @@ Benchmark comparativo direto em hardware real: SDMMC @ 20 MHz vs 40 MHz no Wi-Fi
 Mede Latência, Wi-Fi RX Puro, Wi-Fi TX Puro e Upload com Gravação no MicroSD + Validação MD5.
 """
 
+import os
 import sys
 import time
 import hashlib
@@ -20,7 +21,7 @@ if sys.stdout.encoding != 'utf-8':
     except Exception:
         pass
 
-TARGET_IP = "192.168.15.61"
+TARGET_IP = os.environ.get("MPS3_TARGET_IP", "192.168.4.1")
 BASE_URL = f"http://{TARGET_IP}"
 PAYLOAD_SIZE_MB = 5
 PAYLOAD_SIZE = PAYLOAD_SIZE_MB * 1024 * 1024
@@ -119,7 +120,7 @@ def bench_sd_upload(payload):
 def run_suite():
     print("=" * 70)
     print("  MPS3 DAP — BENCHMARK COMPARATIVO SDMMC 20 MHz vs 40 MHz")
-    print(f"  Target: {BASE_URL} (Canal 6: 'Neves 2.4G') | Payload: {PAYLOAD_SIZE_MB} MB")
+    print(f"  Target: {BASE_URL} (Wi-Fi Canal 6) | Payload: {PAYLOAD_SIZE_MB} MB")
     print("=" * 70)
 
     # Gera payload sintético determinístico com padrão de áudio/dados

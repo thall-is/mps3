@@ -59,6 +59,10 @@ static const char* ui_mode_to_string(ui_mode_t mode)
         case UI_MODE_CONF_AUDIO: return "CONF_AUDIO";
         case UI_MODE_CONF_DISPLAY: return "CONF_DISPLAY";
         case UI_MODE_CONF_SYSTEM: return "CONF_SYSTEM";
+        case UI_MODE_GAMES_MENU: return "GAMES_MENU";
+        case UI_MODE_CHRONO: return "CHRONO";
+        case UI_MODE_LOCK_CLOCK_CFG: return "LOCK_CLOCK_CFG";
+        case UI_MODE_ACTIONS_MENU: return "ACTIONS_MENU";
         default: return "UNKNOWN";
     }
 }
@@ -80,6 +84,7 @@ void debug_nav_init(void)
     } else {
         esp_log_level_set("*", ESP_LOG_INFO);
     }
+    esp_log_level_set("BOOT_TIME", ESP_LOG_INFO);
     ESP_LOGI(TAG, "debug_nav inicializado (enabled=%d)", s_enabled);
 }
 
@@ -228,7 +233,7 @@ void debug_nav_dump_state(void)
     playback_state_t st;
     audio_player_get_state(&st);
 
-    printf("@UI {\"mode\":%d,\"mode_name\":\"%s\",\"cursor\":%d,\"top\":%d,\"locked\":%s,\"sleeping\":%s,\"browse_root\":%s,\"in_player\":%s,\"menu_active\":%s,\"wifi\":%s,\"playing\":%s,\"paused\":%s}\n",
+    printf("@UI {\"mode\":%d,\"mode_name\":\"%s\",\"cursor\":%d,\"top\":%d,\"locked\":%s,\"sleeping\":%s,\"browse_root\":%s,\"in_player\":%s,\"menu_active\":%s,\"wifi\":%s,\"wifi_menu\":%s,\"wifi_substate\":\"%s\",\"wifi_cursor\":%d,\"playing\":%s,\"paused\":%s,\"loop\":%d,\"rep_cnt\":%d,\"shuf\":%d,\"file\":\"%s\",\"elapsed\":%u,\"total\":%u}\n",
            (int)mode, ui_mode_to_string(mode), cursor, top_cursor,
            locked ? "true" : "false",
            sleeping ? "true" : "false",
@@ -236,8 +241,17 @@ void debug_nav_dump_state(void)
            in_player ? "true" : "false",
            menu_active ? "true" : "false",
            wifi ? "true" : "false",
+           wifi_transfer_is_menu_open() ? "true" : "false",
+           wifi_transfer_get_substate_name(),
+           wifi_transfer_get_submenu_cursor(),
            st.playing ? "true" : "false",
-           st.paused ? "true" : "false");
+           st.paused ? "true" : "false",
+           (int)st.loop_mode,
+           (int)st.loop_track_repeat_count,
+           (int)st.shuffle_mode,
+           st.filename,
+           (unsigned)st.elapsed_sec,
+           (unsigned)st.total_sec);
 }
 
 esp_err_t debug_nav_request_screenshot(void)

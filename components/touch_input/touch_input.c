@@ -13,6 +13,9 @@
 
 #include <stdbool.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -222,6 +225,45 @@ static int s_conf_audio_cursor = 0;
 static int s_conf_display_cursor = 0;
 static int s_conf_system_cursor = 0;
 static int s_games_cursor = 0;
+
+#define NAV_STACK_MAX_DEPTH 16
+
+typedef struct {
+    char dir_name[64];
+    int cursor_index;
+} nav_stack_entry_t;
+
+static nav_stack_entry_t s_nav_stack[NAV_STACK_MAX_DEPTH];
+static int s_nav_stack_depth = 0;
+
+static void nav_history_push(const char *name, int cursor)
+{
+    if (s_nav_stack_depth < NAV_STACK_MAX_DEPTH) {
+        nav_stack_entry_t *entry = &s_nav_stack[s_nav_stack_depth++];
+        strlcpy(entry->dir_name, name ? name : "", sizeof(entry->dir_name));
+        entry->cursor_index = cursor;
+        ESP_LOGI(TAG, "Nav stack push [%d]: '%s' cursor=%d", s_nav_stack_depth - 1, entry->dir_name, cursor);
+    }
+}
+
+static bool nav_history_pop(nav_stack_entry_t *out)
+{
+    if (s_nav_stack_depth > 0) {
+        s_nav_stack_depth--;
+        if (out) {
+            *out = s_nav_stack[s_nav_stack_depth];
+        }
+        ESP_LOGI(TAG, "Nav stack pop [%d]: '%s' cursor=%d", s_nav_stack_depth, out ? out->dir_name : "", out ? out->cursor_index : -1);
+        return true;
+    }
+    return false;
+}
+
+static void nav_history_clear(void)
+{
+    s_nav_stack_depth = 0;
+}
+
 static volatile bool s_locked = false;
 static volatile bool s_game_active = false;
 static TaskHandle_t s_display_task_handle = NULL;
@@ -240,8 +282,77 @@ void touch_input_wake_display(void)
 
 uint32_t touch_input_get_last_activity_ms(void) { return s_last_activity_ms; }
 ui_mode_t touch_input_get_mode(void)            { return s_mode; }
+#ifndef MAX_PATH_LEN
+#define MAX_PATH_LEN 512
+#endif
+#ifndef NAME_BUF_LEN
+#define NAME_BUF_LEN 160
+#endif
+
+static int s_action_cursor = 0;
+static ui_mode_t s_prev_mode_before_actions = UI_MODE_LIST;
+static char s_clipboard_path[MAX_PATH_LEN] = {0};
+static bool s_clipboard_is_cut = false;
+static char s_action_target_path[MAX_PATH_LEN] = {0};
+static char s_action_target_name[NAME_BUF_LEN] = {0};
+static bool s_action_target_is_dir = false;
+static bool s_action_target_is_playlist = false;
+
+int touch_input_get_action_cursor(void) { return s_action_cursor; }
+
+int touch_input_get_action_items(const char *items[], int max_items) {
+    if (!items || max_items <= 0) return 0;
+    static char s_target_pl_label[36];
+    snprintf(s_target_pl_label, sizeof(s_target_pl_label), "Alvo: %s", audio_player_get_target_playlist());
+
+    if (s_action_target_is_playlist) {
+        static const char *pl_actions[] = {
+            "Reproduzir Lista",
+            "Definir como Alvo",
+            "+ Adic. Faixa Atual",
+            "+ Adic. Pasta Atual",
+            "+ Nova Playlist",
+            "Renomear Lista",
+            "Apagar Playlist",
+            "Informacoes"
+        };
+        int count = sizeof(pl_actions) / sizeof(pl_actions[0]);
+        if (count > max_items) count = max_items;
+        for (int i = 0; i < count; i++) items[i] = pl_actions[i];
+        return count;
+    } else {
+        const char *norm_actions[] = {
+            "Reproduzir Agora",
+            "Tocar a Seguir",
+            "Adicionar a Fila",
+            "+ Adic. Lista Alvo",
+            "Pasta -> Lista Alvo",
+            s_target_pl_label,
+            "+ Nova Playlist",
+            "Renomear Item",
+            "Copiar",
+            "Recortar",
+            "Colar",
+            "Informacoes",
+            "Mover p/ Lixeira"
+        };
+        int count = sizeof(norm_actions) / sizeof(norm_actions[0]);
+        if (count > max_items) count = max_items;
+        for (int i = 0; i < count; i++) items[i] = norm_actions[i];
+        return count;
+    }
+}
+const char *touch_input_get_clipboard_item(void) {
+    if (s_clipboard_path[0] == '\0') return "";
+    const char *p = strrchr(s_clipboard_path, '/');
+    return p ? (p + 1) : s_clipboard_path;
+}
+
 int touch_input_get_list_cursor(void)
 {
+    if (s_mode == UI_MODE_ACTIONS_MENU) {
+        return s_action_cursor;
+    }
     if (s_mode == UI_MODE_CONF_MENU) {
         return s_conf_cursor;
     } else if (s_mode == UI_MODE_CONF_AUDIO) {
@@ -290,6 +401,8 @@ int touch_input_get_eq_preset_cursor(void) {
     return s_eq_preset_cursor;
 }
 
+static ui_mode_t s_prev_mode_before_kbd = UI_MODE_LIST;
+
 void keyboard_start(const char *initial_text, keyboard_callback_t cb) {
     if (initial_text) {
         strncpy(s_kbd_text, initial_text, sizeof(s_kbd_text) - 1);
@@ -303,6 +416,7 @@ void keyboard_start(const char *initial_text, keyboard_callback_t cb) {
     s_kbd_page = 0;
     s_kbd_confirming = false;
     s_kbd_callback = cb;
+    s_prev_mode_before_kbd = s_mode;
     s_mode = UI_MODE_KEYBOARD;
     ESP_LOGI(TAG, "Teclado iniciado com texto: '%s'", s_kbd_text);
 }
@@ -335,6 +449,58 @@ static void on_preset_renamed(const char *new_name, bool confirmed) {
         }
     }
     s_mode = UI_MODE_EQ_PRESETS;
+}
+
+static void on_new_playlist_named(const char *new_name, bool confirmed) {
+    if (confirmed && new_name && new_name[0] != '\0') {
+        char created[64] = {0};
+        if (audio_player_create_playlist(new_name, created, sizeof(created))) {
+            oled_display_show_message("PLAYLIST CRIADA", created);
+            vTaskDelay(pdMS_TO_TICKS(900));
+        } else {
+            oled_display_show_message("ERRO AO CRIAR", "Verifique o SD");
+            vTaskDelay(pdMS_TO_TICKS(900));
+        }
+    }
+    if (s_prev_mode_before_kbd == UI_MODE_ACTIONS_MENU) {
+        s_mode = s_prev_mode_before_actions;
+    } else if (s_prev_mode_before_kbd == UI_MODE_CONF_AUDIO) {
+        s_mode = UI_MODE_CONF_MENU;
+    } else {
+        s_mode = s_prev_mode_before_kbd;
+    }
+}
+
+static void on_new_eq_preset_named(const char *new_name, bool confirmed) {
+    if (confirmed && new_name && new_name[0] != '\0') {
+        player_eq_config_t cfg;
+        audio_player_get_eq_config(&cfg);
+        int new_slot = -1;
+        for (int i = 1; i < PLAYER_EQ_MAX_PRESETS; i++) {
+            if (cfg.presets[i].name[0] == '\0') {
+                new_slot = i;
+                break;
+            }
+        }
+        if (new_slot != -1) {
+            strlcpy(cfg.presets[new_slot].name, new_name, PLAYER_EQ_PRESET_NAME_LEN);
+            int cur_act = cfg.active_preset_idx;
+            if (cur_act < 0 || cur_act >= PLAYER_EQ_MAX_PRESETS) cur_act = 0;
+            for (int b = 0; b < PLAYER_EQ_BANDS; b++) {
+                cfg.presets[new_slot].band_gains[b] = cfg.presets[cur_act].band_gains[b];
+            }
+            cfg.presets[new_slot].overall_gain = cfg.presets[cur_act].overall_gain;
+            cfg.active_preset_idx = new_slot;
+            cfg.enabled = true;
+            audio_player_set_eq_config(&cfg);
+            oled_display_show_message("PRESET CRIADO", new_name);
+            vTaskDelay(pdMS_TO_TICKS(900));
+        } else {
+            oled_display_show_message("LIMITE DE PRESETS", "Max 10 atingido");
+            vTaskDelay(pdMS_TO_TICKS(900));
+        }
+    }
+    s_mode = s_prev_mode_before_kbd;
 }
 
 static esp_err_t configure_joystick(void)
@@ -451,32 +617,16 @@ static uint32_t seek_hold_amount_sec(uint32_t held_for_ms)
 static void joy_seek_hold_pulse(int dir, uint32_t now, uint32_t held_for_ms, bool is_first_pulse)
 {
     if (s_mode != UI_MODE_PLAYING) return;
+    (void)now;
+    (void)is_first_pulse;
 
-    if (is_first_pulse) {
-        bool same_dir_recent = (s_seek_last_dir == dir) && (s_seek_last_press_ms != 0) &&
-                                (now - s_seek_last_press_ms) <= DOUBLE_TAP_MS;
-        s_seek_last_dir = dir;
-        s_seek_last_press_ms = now;
-        if (same_dir_recent) {
-            // 2 apertos rapidos na mesma direcao = pular faixa, nao segurar-avancar.
-            if (dir > 0) {
-                ESP_LOGI(TAG, "Duplo toque direita - proxima faixa");
-                audio_player_next();
-            } else {
-                ESP_LOGI(TAG, "Duplo toque esquerda - faixa anterior");
-                audio_player_previous();
-            }
-            reset_seek_progression();
-            return; // nao inicia avanco/retrocesso nesse toque
-        }
-    }
-
-    uint32_t amount = seek_hold_amount_sec(held_for_ms);
+    uint32_t effective_hold = (held_for_ms >= 350) ? (held_for_ms - 350) : 0;
+    uint32_t amount = seek_hold_amount_sec(effective_hold);
     if (dir > 0) {
-        ESP_LOGI(TAG, "Avancando %u s (segurado ha' %u ms)", (unsigned)amount, (unsigned)held_for_ms);
+        ESP_LOGI(TAG, "Seek Avanco %u s (segurado ha %u ms)", (unsigned)amount, (unsigned)held_for_ms);
         audio_player_seek_forward(amount);
     } else {
-        ESP_LOGI(TAG, "Retrocedendo %u s (segurado ha' %u ms)", (unsigned)amount, (unsigned)held_for_ms);
+        ESP_LOGI(TAG, "Seek Retrocesso %u s (segurado ha %u ms)", (unsigned)amount, (unsigned)held_for_ms);
         audio_player_seek_backward(amount);
     }
 }
@@ -503,18 +653,20 @@ static void joy_select(void)
         real_index = s_list_cursor + 1;
     }
 
-    // Log para diagnÃ³stico
     char entry_name[64];
     audio_player_get_browse_entry_name(real_index, entry_name, sizeof(entry_name));
     bool is_dir = audio_player_browse_entry_is_dir(real_index);
     ESP_LOGI(TAG, "select: idx=%d, name='%s', is_dir=%d", real_index, entry_name, is_dir);
 
-    audio_player_select_entry(real_index);
-    s_in_player_browser = true;
-
     if (is_dir) {
+        // Salva na pilha a posicao do cursor atual e o nome da pasta em que estamos entrando
+        nav_history_push(entry_name, s_list_cursor);
+        audio_player_select_entry(real_index);
+        s_in_player_browser = true;
         s_list_cursor = 0;
     } else {
+        audio_player_select_entry(real_index);
+        s_in_player_browser = true;
         s_mode = UI_MODE_PLAYING;
     }
 }
@@ -523,30 +675,624 @@ static void joy_back(void)
 {
     if (s_mode == UI_MODE_PLAYING) {
         s_mode = UI_MODE_LIST;
-        ESP_LOGI(TAG, "Voltando para a lista");
+        int cur_track = audio_player_get_current_track_browse_index();
+        if (cur_track >= 0) {
+            int max_c = current_list_count();
+            if (cur_track < max_c) {
+                s_list_cursor = cur_track;
+            }
+        }
+        ESP_LOGI(TAG, "Voltando para a lista (cursor=%d)", s_list_cursor);
         return;
     }
     if (s_mode == UI_MODE_LIST) {
         bool at_root = audio_player_browse_is_root();
 
         if (!at_root) {
-            // Sempre sobe uma pasta, independente de s_in_player_browser
+            // Sobe uma pasta
             audio_player_select_entry(0);
-            s_list_cursor = 0;
-            // Se nÃ£o estava no Player Browser, agora passa a estar
             s_in_player_browser = true;
-            ESP_LOGI(TAG, "Voltando uma pasta");
+
+            nav_stack_entry_t entry;
+            if (nav_history_pop(&entry)) {
+                int total_items = current_list_count();
+                int restored_cursor = entry.cursor_index;
+
+                // Tenta validar se a pasta que entramos ainda existe no mesmo indice ou em outro
+                if (strlen(entry.dir_name) > 0) {
+                    bool now_at_root = audio_player_browse_is_root();
+                    char check_name[64];
+                    int check_idx = now_at_root ? restored_cursor : (restored_cursor + 1);
+                    audio_player_get_browse_entry_name(check_idx, check_name, sizeof(check_name));
+                    if (strcmp(check_name, entry.dir_name) != 0) {
+                        for (int k = 0; k < total_items; k++) {
+                            int k_idx = now_at_root ? k : (k + 1);
+                            audio_player_get_browse_entry_name(k_idx, check_name, sizeof(check_name));
+                            if (strcmp(check_name, entry.dir_name) == 0) {
+                                restored_cursor = k;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (restored_cursor >= total_items) {
+                    restored_cursor = total_items > 0 ? total_items - 1 : 0;
+                }
+                if (restored_cursor < 0) restored_cursor = 0;
+                s_list_cursor = restored_cursor;
+            } else {
+                s_list_cursor = 0;
+            }
+            ESP_LOGI(TAG, "Voltando uma pasta -> cursor restaurado para %d", s_list_cursor);
         } else {
-            // JÃ¡ na raiz
+            // Ja na raiz
             if (s_in_player_browser) {
                 s_in_player_browser = false;
-                s_list_cursor = 0;
+                nav_history_clear();
+                s_list_cursor = 0; // Retorna para "Player" (indice 0) no menu principal
                 ESP_LOGI(TAG, "Voltando ao menu principal");
             }
-            // Se jÃ¡ estÃ¡ no menu principal (in_player==false), JOY_LEFT nÃ£o faz nada
+            // Se ja esta no menu principal (in_player==false), JOY_LEFT nao faz nada
         }
     }
 }
+
+static bool fs_copy_file(const char *src_path, const char *dst_path) {
+    if (!src_path || !dst_path || strcmp(src_path, dst_path) == 0) return false;
+    FILE *in = fopen(src_path, "rb");
+    if (!in) return false;
+    FILE *out = fopen(dst_path, "wb");
+    if (!out) {
+        fclose(in);
+        return false;
+    }
+    uint8_t *buf = (uint8_t *)heap_caps_malloc(4096, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    size_t chunk_sz = buf ? 4096 : 256;
+    static uint8_t min_buf[256];
+    if (!buf) buf = min_buf;
+
+    size_t bytes_read = 0;
+    bool ok = true;
+    while ((bytes_read = fread(buf, 1, chunk_sz, in)) > 0) {
+        if (fwrite(buf, 1, bytes_read, out) != bytes_read) {
+            ok = false;
+            break;
+        }
+    }
+    fclose(in);
+    fclose(out);
+    if (buf != min_buf) {
+        heap_caps_free(buf);
+    }
+    return ok;
+}
+
+static bool fs_move_to_trash(const char *src_path) {
+    if (!src_path || src_path[0] == '\0') return false;
+    mkdir("/sdcard/.trash", 0777);
+    const char *fname = strrchr(src_path, '/');
+    fname = fname ? (fname + 1) : src_path;
+    char dst_path[MAX_PATH_LEN];
+    snprintf(dst_path, sizeof(dst_path), "/sdcard/.trash/%.240s", fname);
+    if (rename(src_path, dst_path) == 0) {
+        return true;
+    }
+    if (fs_copy_file(src_path, dst_path)) {
+        unlink(src_path);
+        return true;
+    }
+    return false;
+}
+
+static void on_action_item_renamed(const char *new_name, bool confirmed) {
+    if (confirmed && new_name && new_name[0] != '\0' && s_action_target_path[0] != '\0') {
+        char parent[MAX_PATH_LEN];
+        strlcpy(parent, s_action_target_path, sizeof(parent));
+        char *slash = strrchr(parent, '/');
+        if (slash) {
+            *slash = '\0';
+            char new_full_path[MAX_PATH_LEN];
+            snprintf(new_full_path, sizeof(new_full_path), "%.240s/%.240s", parent, new_name);
+            if (rename(s_action_target_path, new_full_path) == 0) {
+                oled_display_trigger_heart_anim(true, "RENOMEADO!");
+                audio_player_rescan_browser();
+            } else {
+                oled_display_show_message("ERRO RENOMEAR", "Falha de IO");
+                vTaskDelay(pdMS_TO_TICKS(800));
+            }
+        }
+    }
+    s_mode = s_prev_mode_before_actions;
+}
+
+static void open_context_actions_menu(void) {
+    s_action_target_path[0] = '\0';
+    s_action_target_name[0] = '\0';
+    s_action_target_is_dir = false;
+    s_action_target_is_playlist = false;
+
+    if (s_mode == UI_MODE_PLAYING) {
+        playback_state_t st;
+        audio_player_get_state(&st);
+        if (st.filename[0] != '\0') {
+            strlcpy(s_action_target_name, st.filename, sizeof(s_action_target_name));
+            char cur_dir[MAX_PATH_LEN];
+            audio_player_get_browse_dir(cur_dir, sizeof(cur_dir));
+            snprintf(s_action_target_path, sizeof(s_action_target_path), "%.240s/%.240s", cur_dir, st.filename);
+        }
+    } else if (s_mode == UI_MODE_LIST) {
+        bool at_root = audio_player_browse_is_root();
+        bool in_player = s_in_player_browser;
+        if (!at_root || in_player) {
+            int src_idx = at_root ? s_list_cursor : (s_list_cursor + 1);
+            char raw_name[NAME_BUF_LEN];
+            audio_player_get_browse_entry_name(src_idx, raw_name, sizeof(raw_name));
+            s_action_target_is_dir = audio_player_browse_entry_is_dir(src_idx);
+
+            const char *clean_ptr = raw_name;
+            if (strncmp(clean_ptr, "[PL] ", 5) == 0) {
+                clean_ptr += 5;
+                s_action_target_is_playlist = true;
+            }
+            char clean_name[NAME_BUF_LEN];
+            strlcpy(clean_name, clean_ptr, sizeof(clean_name));
+            size_t len = strlen(clean_name);
+            if (len > 0 && clean_name[len - 1] == '/') clean_name[len - 1] = '\0';
+
+            if (strlen(clean_name) > 4) {
+                const char *ext = clean_name + strlen(clean_name) - 4;
+                if (strcasecmp(ext, ".m3u") == 0) s_action_target_is_playlist = true;
+            }
+            if (strlen(clean_name) > 5) {
+                const char *ext = clean_name + strlen(clean_name) - 5;
+                if (strcasecmp(ext, ".m3u8") == 0) s_action_target_is_playlist = true;
+            }
+
+            strlcpy(s_action_target_name, clean_name, sizeof(s_action_target_name));
+
+            char cur_dir[MAX_PATH_LEN];
+            audio_player_get_browse_dir(cur_dir, sizeof(cur_dir));
+            snprintf(s_action_target_path, sizeof(s_action_target_path), "%.240s/%.240s", cur_dir, clean_name);
+        }
+    }
+
+    if (s_action_target_path[0] != '\0') {
+        s_prev_mode_before_actions = s_mode;
+        s_mode = UI_MODE_ACTIONS_MENU;
+        s_action_cursor = 0;
+        ESP_LOGI(TAG, "Menu de Acoes aberto para: %s (is_pl=%d)", s_action_target_path, s_action_target_is_playlist);
+    } else {
+        oled_display_trigger_heart_anim(false, "NENHUM ITEM");
+    }
+}
+
+static void execute_context_action(void) {
+    char cur_dir[MAX_PATH_LEN];
+    audio_player_get_browse_dir(cur_dir, sizeof(cur_dir));
+
+    if (s_action_target_is_playlist) {
+        switch (s_action_cursor) {
+            case 0: // Reproduzir Lista
+                if (s_prev_mode_before_actions == UI_MODE_LIST) {
+                    bool at_root = audio_player_browse_is_root();
+                    int src_idx = at_root ? s_list_cursor : (s_list_cursor + 1);
+                    audio_player_select_entry(src_idx);
+                }
+                s_mode = UI_MODE_PLAYING;
+                return;
+            case 1: { // Definir como Alvo
+                audio_player_create_playlist(s_action_target_name, NULL, 0);
+                oled_display_show_message(s_action_target_name, "Lista Alvo Ativa!");
+                vTaskDelay(pdMS_TO_TICKS(800));
+                s_mode = s_prev_mode_before_actions;
+                return;
+            }
+            case 2: { // + Adic. Faixa Atual
+                bool added = false;
+                char prev_target[64];
+                strlcpy(prev_target, audio_player_get_target_playlist(), sizeof(prev_target));
+                audio_player_create_playlist(s_action_target_name, NULL, 0);
+                if (audio_player_toggle_favorite_current(&added)) {
+                    oled_display_show_message(s_action_target_name, added ? "+ Faixa adicionada!" : "- Faixa removida!");
+                } else {
+                    oled_display_show_message(s_action_target_name, "Nenhuma faixa ativa");
+                }
+                audio_player_create_playlist(prev_target, NULL, 0);
+                vTaskDelay(pdMS_TO_TICKS(900));
+                s_mode = s_prev_mode_before_actions;
+                return;
+            }
+            case 3: { // + Adic. Pasta Atual
+                int added_cnt = 0;
+                char prev_target[64];
+                strlcpy(prev_target, audio_player_get_target_playlist(), sizeof(prev_target));
+                audio_player_create_playlist(s_action_target_name, NULL, 0);
+                if (audio_player_add_current_folder_to_target_playlist(&added_cnt)) {
+                    char msg[32];
+                    snprintf(msg, sizeof(msg), "+ %d faixas adic.", added_cnt);
+                    oled_display_show_message(s_action_target_name, msg);
+                } else {
+                    oled_display_show_message(s_action_target_name, "Erro ao adicionar");
+                }
+                audio_player_create_playlist(prev_target, NULL, 0);
+                vTaskDelay(pdMS_TO_TICKS(900));
+                s_mode = s_prev_mode_before_actions;
+                return;
+            }
+            case 4: // + Nova Playlist
+                keyboard_start("MinhaLista", on_new_playlist_named);
+                return;
+            case 5: // Renomear Lista
+                keyboard_start(s_action_target_name, on_action_item_renamed);
+                return;
+            case 6: { // Apagar Playlist
+                if (strncasecmp(s_action_target_name, "Favoritos", 9) == 0) {
+                    oled_display_show_message("FAVORITOS", "Lista protegida!");
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                } else {
+                    if (audio_player_delete_playlist(s_action_target_name)) {
+                        oled_display_show_message(s_action_target_name, "Lista Apagada!");
+                        audio_player_rescan_browser();
+                    } else {
+                        oled_display_show_message("ERRO", "Falha ao apagar");
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(900));
+                }
+                s_mode = s_prev_mode_before_actions;
+                return;
+            }
+            case 7: { // Informacoes
+                struct stat st;
+                if (stat(s_action_target_path, &st) == 0) {
+                    char size_str[32];
+                    if (st.st_size >= 1048576) {
+                        snprintf(size_str, sizeof(size_str), "Tam: %.1f MB", (float)st.st_size / 1048576.0f);
+                    } else {
+                        snprintf(size_str, sizeof(size_str), "Tam: %ld B", (long)st.st_size);
+                    }
+                    oled_display_show_message("INFO LISTA", size_str);
+                    vTaskDelay(pdMS_TO_TICKS(1400));
+                } else {
+                    oled_display_trigger_heart_anim(false, "SEM INFO");
+                }
+                s_mode = s_prev_mode_before_actions;
+                return;
+            }
+        }
+    } else {
+        switch (s_action_cursor) {
+            case 0: // Reproduzir Agora
+                if (!s_action_target_is_dir) {
+                    if (s_prev_mode_before_actions == UI_MODE_LIST) {
+                        bool at_root = audio_player_browse_is_root();
+                        int src_idx = at_root ? s_list_cursor : (s_list_cursor + 1);
+                        audio_player_select_entry(src_idx);
+                    }
+                    s_mode = UI_MODE_PLAYING;
+                } else {
+                    oled_display_trigger_heart_anim(false, "E DIRETORIO");
+                    s_mode = s_prev_mode_before_actions;
+                }
+                break;
+            case 1: // Tocar a Seguir
+                oled_display_trigger_heart_anim(true, "PROXIMA FAIXA");
+                s_mode = s_prev_mode_before_actions;
+                break;
+            case 2: // Adicionar a Fila
+                oled_display_trigger_heart_anim(true, "NA FILA");
+                s_mode = s_prev_mode_before_actions;
+                break;
+            case 3: { // + Adic. Lista Alvo
+                const char *pl = audio_player_get_target_playlist();
+                bool added = false;
+                if (s_prev_mode_before_actions == UI_MODE_LIST) {
+                    bool at_root = audio_player_browse_is_root();
+                    int src_idx = at_root ? s_list_cursor : (s_list_cursor + 1);
+                    int cnt = 0;
+                    if (audio_player_toggle_browse_item_in_target_playlist(src_idx, &added, &cnt)) {
+                        oled_display_show_message(pl, added ? "+ Adicionado!" : "- Removido!");
+                    } else {
+                        oled_display_show_message(pl, "Erro ao adicionar");
+                    }
+                } else {
+                    if (audio_player_toggle_favorite_current(&added)) {
+                        oled_display_show_message(pl, added ? "+ Faixa adicionada!" : "- Faixa removida!");
+                    } else {
+                        oled_display_show_message(pl, "Nenhuma faixa ativa");
+                    }
+                }
+                vTaskDelay(pdMS_TO_TICKS(900));
+                s_mode = s_prev_mode_before_actions;
+                break;
+            }
+            case 4: { // Pasta -> Lista Alvo
+                int added_cnt = 0;
+                const char *pl = audio_player_get_target_playlist();
+                if (audio_player_add_current_folder_to_target_playlist(&added_cnt)) {
+                    char msg[32];
+                    snprintf(msg, sizeof(msg), "+ %d faixas adic.", added_cnt);
+                    oled_display_show_message(pl, msg);
+                } else {
+                    oled_display_show_message(pl, "Erro ao adicionar");
+                }
+                vTaskDelay(pdMS_TO_TICKS(900));
+                s_mode = s_prev_mode_before_actions;
+                break;
+            }
+            case 5: { // Mudar Lista Alvo
+                audio_player_cycle_target_playlist(+1);
+                oled_display_show_message("LISTA ALVO", audio_player_get_target_playlist());
+                vTaskDelay(pdMS_TO_TICKS(800));
+                break;
+            }
+            case 6: // + Nova Playlist
+                keyboard_start("MinhaLista", on_new_playlist_named);
+                break;
+            case 7: // Renomear Item
+                keyboard_start(s_action_target_name, on_action_item_renamed);
+                break;
+            case 8: // Copiar
+                strlcpy(s_clipboard_path, s_action_target_path, sizeof(s_clipboard_path));
+                s_clipboard_is_cut = false;
+                oled_display_trigger_heart_anim(true, "COPIADO");
+                s_mode = s_prev_mode_before_actions;
+                break;
+            case 9: // Recortar
+                strlcpy(s_clipboard_path, s_action_target_path, sizeof(s_clipboard_path));
+                s_clipboard_is_cut = true;
+                oled_display_trigger_heart_anim(true, "RECORTADO");
+                s_mode = s_prev_mode_before_actions;
+                break;
+            case 10: // Colar
+                if (s_clipboard_path[0] == '\0') {
+                    oled_display_trigger_heart_anim(false, "CLIP VAZIO");
+                } else {
+                    const char *fname = strrchr(s_clipboard_path, '/');
+                    fname = fname ? (fname + 1) : s_clipboard_path;
+                    char dst_path[MAX_PATH_LEN];
+                    snprintf(dst_path, sizeof(dst_path), "%.240s/%.240s", cur_dir, fname);
+                    bool ok = false;
+                    if (s_clipboard_is_cut) {
+                        ok = (rename(s_clipboard_path, dst_path) == 0);
+                        if (!ok) {
+                            ok = fs_copy_file(s_clipboard_path, dst_path);
+                            if (ok) unlink(s_clipboard_path);
+                        }
+                        if (ok) s_clipboard_path[0] = '\0';
+                    } else {
+                        ok = fs_copy_file(s_clipboard_path, dst_path);
+                    }
+                    if (ok) {
+                        oled_display_trigger_heart_anim(true, "COLADO!");
+                        audio_player_rescan_browser();
+                    } else {
+                        oled_display_show_message("ERRO AO COLAR", "Falha de IO");
+                        vTaskDelay(pdMS_TO_TICKS(800));
+                    }
+                }
+                s_mode = s_prev_mode_before_actions;
+                break;
+            case 11: { // Informacoes
+                struct stat st;
+                if (stat(s_action_target_path, &st) == 0) {
+                    char size_str[32];
+                    if (st.st_size >= 1048576) {
+                        snprintf(size_str, sizeof(size_str), "Tam: %.1f MB", (float)st.st_size / 1048576.0f);
+                    } else {
+                        snprintf(size_str, sizeof(size_str), "Tam: %ld KB", (long)(st.st_size / 1024));
+                    }
+                    oled_display_show_message("INFO ARQUIVO", size_str);
+                    vTaskDelay(pdMS_TO_TICKS(1400));
+                } else {
+                    oled_display_trigger_heart_anim(false, "SEM INFO");
+                }
+                s_mode = s_prev_mode_before_actions;
+                break;
+            }
+            case 12: // Mover p/ Lixeira
+                if (fs_move_to_trash(s_action_target_path)) {
+                    oled_display_trigger_heart_anim(true, "LIXEIRA OK");
+                    audio_player_rescan_browser();
+                } else {
+                    oled_display_show_message("ERRO LIXEIRA", "Falha ao mover");
+                    vTaskDelay(pdMS_TO_TICKS(800));
+                }
+                s_mode = s_prev_mode_before_actions;
+                break;
+        }
+    }
+}
+
+static bool s_chord_is_liked_cached = false;
+static void handle_chord_like(bool like) {
+    bool ok = false;
+    const char *pl = audio_player_get_target_playlist();
+
+    if (s_mode == UI_MODE_PLAYING) {
+        if (audio_player_like_current(like, &ok)) {
+            s_chord_is_liked_cached = like;
+            char toast[48];
+            snprintf(toast, sizeof(toast), "%s %s", like ? "+" : "-", pl);
+            oled_display_trigger_heart_anim(like, toast);
+        }
+    } else if (s_mode == UI_MODE_LIST) {
+        bool at_root = audio_player_browse_is_root();
+        bool in_player = s_in_player_browser;
+        if (!at_root || in_player) {
+            if (audio_player_like_browse_item(s_list_cursor, like, &ok)) {
+                s_chord_is_liked_cached = like;
+                char toast[48];
+                snprintf(toast, sizeof(toast), "%s %s", like ? "+" : "-", pl);
+                oled_display_trigger_heart_anim(like, toast);
+            }
+        }
+    }
+}
+
+// Controle da Semi Aba (Drawers de Playlists e Equalizador dentro das Bolhas)
+static inline bool is_chord_menu_allowed(void)
+{
+    if (s_mode == UI_MODE_PLAYING) {
+        return true;
+    }
+    if (s_mode == UI_MODE_LIST) {
+        bool at_root = audio_player_browse_is_root();
+        bool in_player = s_in_player_browser;
+        return (!at_root || in_player);
+    }
+    return false;
+}
+
+static chord_drawer_mode_t s_active_chord_drawer = CHORD_DRAWER_NONE;
+static uint32_t s_dir_hold_start_ms = 0;
+static uint32_t s_rehold_start_ms = 0;
+static int s_drawer_pl_cursor = 0;
+static int s_drawer_eq_cursor = 0;
+static bool s_deep_hold_triggered = false;
+static bool s_drawer_latched_open = false;
+static char s_cached_drawer_pl_names[10][32];
+static const char *s_cached_drawer_pl_ptrs[10];
+static int s_cached_drawer_pl_count = 0;
+static int s_cached_drawer_active_pl_idx = 0;
+static player_eq_config_t s_cached_eq_cfg;
+static char s_cached_drawer_eq_names[10][32];
+static const char *s_cached_drawer_eq_ptrs[10];
+static int s_cached_drawer_eq_count = 0;
+static uint32_t s_last_chord_action_ms = 0;
+static uint8_t s_chord_suppressed_mask = 0;
+static bool s_chord_hud_latched = false;
+
+
+// --- Gaveta Inferior de Modos de Reproducao (Loop e Shuffle) ---
+static int s_drawer_modes_cursor = 0; // 0 = Loop, 1 = Shuffle
+static char s_cached_modes_strings[2][32];
+static const char *s_cached_modes_ptrs[2];
+
+static void update_modes_drawer_strings(void)
+{
+    audio_player_loop_mode_t lm = audio_player_get_loop_mode();
+    const char *lm_str = (lm == AUDIO_LOOP_TRACK) ? "< 1x >" : ((lm == AUDIO_LOOP_ALL) ? "< Tudo >" : "< Off >");
+    snprintf(s_cached_modes_strings[0], sizeof(s_cached_modes_strings[0]), "%s", lm_str);
+    s_cached_modes_ptrs[0] = s_cached_modes_strings[0];
+
+    audio_player_shuffle_mode_t sm = audio_player_get_shuffle_mode();
+    const char *sm_str = (sm == AUDIO_SHUFFLE_FOLDER) ? "< Pasta >" : ((sm == AUDIO_SHUFFLE_ALL) ? "< Tudo >" : "< Off >");
+    snprintf(s_cached_modes_strings[1], sizeof(s_cached_modes_strings[1]), "%s", sm_str);
+    s_cached_modes_ptrs[1] = s_cached_modes_strings[1];
+}
+
+static void open_modes_drawer(uint32_t now)
+{
+    s_active_chord_drawer = CHORD_DRAWER_MODES;
+    s_dir_hold_start_ms = now;
+    s_rehold_start_ms = 0;
+    s_deep_hold_triggered = false;
+    s_drawer_latched_open = true;
+
+    update_modes_drawer_strings();
+    oled_display_set_chord_drawer(CHORD_DRAWER_MODES, 50, s_cached_modes_ptrs, 2, s_drawer_modes_cursor, 0);
+}
+
+static void open_playlists_drawer(uint32_t now)
+{
+    s_active_chord_drawer = CHORD_DRAWER_PLAYLISTS;
+    s_dir_hold_start_ms = now;
+    s_rehold_start_ms = 0;
+    s_deep_hold_triggered = false;
+    s_drawer_latched_open = false;
+
+    int real_pls = audio_player_get_playlists_count();
+    if (real_pls > 8) real_pls = 8;
+    s_cached_drawer_active_pl_idx = 0;
+    for (int i = 0; i < real_pls; i++) {
+        bool is_act = false;
+        audio_player_get_playlist_by_index(i, s_cached_drawer_pl_names[i], sizeof(s_cached_drawer_pl_names[i]), &is_act);
+        s_cached_drawer_pl_ptrs[i] = s_cached_drawer_pl_names[i];
+        if (is_act) s_cached_drawer_active_pl_idx = i;
+    }
+    strlcpy(s_cached_drawer_pl_names[real_pls], "+ Nova Lista", sizeof(s_cached_drawer_pl_names[real_pls]));
+    s_cached_drawer_pl_ptrs[real_pls] = s_cached_drawer_pl_names[real_pls];
+    s_cached_drawer_pl_count = real_pls + 1;
+
+    s_drawer_pl_cursor = s_cached_drawer_active_pl_idx;
+    oled_display_set_chord_drawer(CHORD_DRAWER_PLAYLISTS, 0, s_cached_drawer_pl_ptrs, s_cached_drawer_pl_count, s_drawer_pl_cursor, s_cached_drawer_active_pl_idx);
+}
+
+static void open_equalizer_drawer(uint32_t now)
+{
+    s_active_chord_drawer = CHORD_DRAWER_EQUALIZER;
+    s_dir_hold_start_ms = now;
+    s_rehold_start_ms = 0;
+    s_deep_hold_triggered = false;
+    s_drawer_latched_open = false;
+
+    audio_player_get_eq_config(&s_cached_eq_cfg);
+    int real_eq = 0;
+    for (int i = 0; i < PLAYER_EQ_MAX_PRESETS; i++) {
+        if (s_cached_eq_cfg.presets[i].name[0] != '\0') {
+            strlcpy(s_cached_drawer_eq_names[real_eq], s_cached_eq_cfg.presets[i].name, sizeof(s_cached_drawer_eq_names[real_eq]));
+            s_cached_drawer_eq_ptrs[real_eq] = s_cached_drawer_eq_names[real_eq];
+            real_eq++;
+        }
+    }
+    if (real_eq == 0) {
+        strlcpy(s_cached_drawer_eq_names[0], "Padrao", sizeof(s_cached_drawer_eq_names[0]));
+        s_cached_drawer_eq_ptrs[0] = s_cached_drawer_eq_names[0];
+        real_eq = 1;
+    }
+
+    if (real_eq < PLAYER_EQ_MAX_PRESETS) {
+        strlcpy(s_cached_drawer_eq_names[real_eq], "+ Novo Preset", sizeof(s_cached_drawer_eq_names[real_eq]));
+        s_cached_drawer_eq_ptrs[real_eq] = s_cached_drawer_eq_names[real_eq];
+        s_cached_drawer_eq_count = real_eq + 1;
+    } else {
+        s_cached_drawer_eq_count = real_eq;
+    }
+
+    s_drawer_eq_cursor = (s_cached_eq_cfg.active_preset_idx < real_eq) ? s_cached_eq_cfg.active_preset_idx : 0;
+    oled_display_set_chord_drawer(CHORD_DRAWER_EQUALIZER, 0, s_cached_drawer_eq_ptrs, s_cached_drawer_eq_count, s_drawer_eq_cursor, s_cached_eq_cfg.active_preset_idx);
+}
+
+static void close_active_drawer(void)
+{
+    s_active_chord_drawer = CHORD_DRAWER_NONE;
+    s_deep_hold_triggered = false;
+    s_drawer_latched_open = false;
+    s_dir_hold_start_ms = 0;
+    s_rehold_start_ms = 0;
+    oled_display_set_chord_drawer(CHORD_DRAWER_NONE, 0, NULL, 0, 0, -1);
+}
+
+static void transition_to_playlists_browser(uint32_t now)
+{
+    oled_display_trigger_bubble_expand_toast(0, 31, "PLAYLISTS", "Explorador de Arquivos", NULL);
+    audio_player_browse_to_playlists();
+    s_in_player_browser = true;
+    s_mode = UI_MODE_LIST;
+    s_list_cursor = 0;
+    s_chord_hud_latched = false;
+    close_active_drawer();
+    oled_display_set_chord_hud(false, 0, -1, false);
+    s_chord_suppressed_mask |= (1 << JOY_LEFT);
+    s_last_chord_action_ms = now;
+    ESP_LOGI(TAG, "Navegando para /Playlists com anuncio expansivo!");
+}
+
+static void transition_to_equalizer_presets(uint32_t now)
+{
+    oled_display_trigger_bubble_expand_toast(127, 31, "EQUALIZADOR", "Painel de Presets", NULL);
+    s_prev_mode_before_eq = UI_MODE_PLAYING;
+    s_mode = UI_MODE_EQ_PRESETS;
+    s_eq_preset_cursor = s_drawer_eq_cursor;
+    s_chord_hud_latched = false;
+    close_active_drawer();
+    oled_display_set_chord_hud(false, 0, -1, false);
+    s_chord_suppressed_mask |= (1 << JOY_RIGHT);
+    s_last_chord_action_ms = now;
+    ESP_LOGI(TAG, "Navegando para Equalizador (Presets) com anuncio expansivo!");
+}
+
 
 static void touch_task(void *arg)
 {
@@ -560,10 +1306,16 @@ static void touch_task(void *arg)
     uint32_t center_press_start = 0;
     bool center_long_fired = false;
     bool center_modifier_used = false;
+    uint32_t s_last_center_release_ms = 0;
+    bool center_is_lock_candidate = false;
 
     // Segurar JOY_LEFT com um modo de tela cheia ativo (USB/WiFi) = sair.
     uint32_t exit_active_hold_start = 0;
     bool exit_active_fired = false;
+
+    // Blindagem de acordes e prevencao de vazamento de comandos de 1a ordem:
+    uint32_t joy_pending_edge_ms[NUM_JOY_BTNS] = {0};
+    int8_t s_chord_focused_dir = -1;  // Direcao focada (0=UP, 1=DOWN, 2=LEFT, 3=RIGHT) para XOR no hold e exec no release
 
     while (true) {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
@@ -616,12 +1368,348 @@ static void touch_task(void *arg)
         bool center_pressed_edge = joy_cur[JOY_CENTER] && !joy_prev[JOY_CENTER];
         bool center_released_edge = !joy_cur[JOY_CENTER] && joy_prev[JOY_CENTER];
         if (center_pressed_edge) {
-            center_press_start = now;
-            center_long_fired = false;
+            if (s_active_chord_drawer != CHORD_DRAWER_NONE) {
+                if (is_chord_menu_allowed()) {
+                    // Clique no centro confirma o item ativo na Semi Aba!
+                    if (s_active_chord_drawer == CHORD_DRAWER_PLAYLISTS) {
+                        int real_pls = s_cached_drawer_pl_count - 1;
+                        if (s_drawer_pl_cursor >= real_pls) {
+                            close_active_drawer();
+                            s_chord_hud_latched = false;
+                            oled_display_set_chord_hud(false, 0, -1, false);
+                            center_modifier_used = true;
+                            s_last_chord_action_ms = now;
+                            s_chord_suppressed_mask |= (1 << JOY_CENTER);
+                            center_press_start = 0;
+                            s_chord_focused_dir = -1;
+                            keyboard_start("MinhaLista", on_new_playlist_named);
+                            continue;
+                        } else {
+                            audio_player_set_target_playlist_by_index(s_drawer_pl_cursor);
+                            const char *pl = audio_player_get_target_playlist();
+                            char clean_pl[32];
+                            strlcpy(clean_pl, pl, sizeof(clean_pl));
+                            char *dot = strrchr(clean_pl, '.');
+                            if (dot) *dot = '\0';
+                            oled_display_trigger_bubble_expand_toast(0, 31, "PLAYLIST ALVO", clean_pl, NULL);
+                        }
+                    } else if (s_active_chord_drawer == CHORD_DRAWER_EQUALIZER) {
+                        int real_eq = s_cached_drawer_eq_count - 1;
+                        if (s_cached_drawer_eq_count > 1 && s_drawer_eq_cursor == real_eq && strcmp(s_cached_drawer_eq_ptrs[real_eq], "+ Novo Preset") == 0) {
+                            close_active_drawer();
+                            s_chord_hud_latched = false;
+                            oled_display_set_chord_hud(false, 0, -1, false);
+                            center_modifier_used = true;
+                            s_last_chord_action_ms = now;
+                            s_chord_suppressed_mask |= (1 << JOY_CENTER);
+                            center_press_start = 0;
+                            s_chord_focused_dir = -1;
+                            keyboard_start("MeuPreset", on_new_eq_preset_named);
+                            continue;
+                        } else {
+                            s_cached_eq_cfg.active_preset_idx = s_drawer_eq_cursor;
+                            s_cached_eq_cfg.enabled = true;
+                            audio_player_set_eq_config(&s_cached_eq_cfg);
+                            oled_display_trigger_bubble_expand_toast(127, 31, "EQUALIZADOR", s_cached_drawer_eq_ptrs[s_drawer_eq_cursor], NULL);
+                        }
+                    } else if (s_active_chord_drawer == CHORD_DRAWER_MODES) {
+                        // Confirma a selecao atual na gaveta sem ciclar novamente
+                        update_modes_drawer_strings();
+                        if (s_drawer_modes_cursor == 0) {
+                            audio_player_loop_mode_t lm = audio_player_get_loop_mode();
+                            const char *lm_toast = (lm == AUDIO_LOOP_TRACK) ? "Repetir: 1x" : ((lm == AUDIO_LOOP_ALL) ? "Repetir: Tudo" : "Repetir: Off");
+                            oled_display_trigger_bubble_expand_toast(64, 63, "REPRODUCAO", lm_toast, NULL);
+                        } else {
+                            audio_player_shuffle_mode_t sm = audio_player_get_shuffle_mode();
+                            const char *sm_toast = (sm == AUDIO_SHUFFLE_FOLDER) ? "Aleatorio: Pasta" : ((sm == AUDIO_SHUFFLE_ALL) ? "Aleatorio: Tudo" : "Aleatorio: Off");
+                            oled_display_trigger_bubble_expand_toast(64, 63, "REPRODUCAO", sm_toast, NULL);
+                        }
+                    }
+                }
+                close_active_drawer();
+                s_chord_hud_latched = false;
+                oled_display_set_chord_hud(false, 0, -1, false);
+                center_modifier_used = true;
+                s_last_chord_action_ms = now;
+                s_chord_suppressed_mask |= (1 << JOY_CENTER);
+                center_press_start = 0;
+                s_chord_focused_dir = -1;
+            } else if (s_chord_hud_latched && is_chord_menu_allowed()) {
+                // "um outro clique no meio estouraria as bolhas"
+                s_chord_hud_latched = false;
+                oled_display_set_chord_hud(false, 0, -1, false);
+                s_last_chord_action_ms = now;
+                s_chord_suppressed_mask |= (1 << JOY_CENTER);
+                center_modifier_used = true; // Impede play/pause ou tap-lock na soltura
+                center_press_start = 0;
+                s_chord_focused_dir = -1;
+                ESP_LOGI(TAG, "Bolhas estouradas pelo clique central");
+            } else {
+                center_press_start = now;
+                center_long_fired = false;
+                center_modifier_used = false;
+
+                // Cache do status de favorito no momento do aperto inicial apenas em telas permitidas (ZERO I/O no loop de hold!)
+                if (is_chord_menu_allowed()) {
+                    if (s_mode == UI_MODE_LIST) {
+                        s_chord_is_liked_cached = audio_player_is_browse_item_favorite(s_list_cursor);
+                    } else {
+                        s_chord_is_liked_cached = audio_player_is_current_favorite();
+                    }
+                }
+
+                // Bloqueio deliberado: exige clique rapido anterior (< 400 ms) + este 2o clique segurado
+                if (!s_locked && s_last_center_release_ms > 0 && (now - s_last_center_release_ms) < 400) {
+                    center_is_lock_candidate = true;
+                } else {
+                    center_is_lock_candidate = false;
+                }
+            }
         }
-        if (joy_cur[JOY_CENTER] && !center_long_fired && center_press_start != 0 &&
-            (now - center_press_start) >= CENTER_LOCK_HOLD_MS) {
+
+        // Se o modo atual nao for permitido para acordes, assegura que qualquer gaveta ou HUD aberto seja imediatamente fechado
+        if (!is_chord_menu_allowed()) {
+            if (s_active_chord_drawer != CHORD_DRAWER_NONE) {
+                close_active_drawer();
+            }
+            if (s_chord_hud_latched) {
+                s_chord_hud_latched = false;
+                oled_display_set_chord_hud(false, 0, -1, false);
+            }
+        }
+
+        // --- Gerenciamento da Gaveta Lateral Ativa (Playlists / Equalizador) ---
+        if (s_active_chord_drawer != CHORD_DRAWER_NONE && !s_locked && is_chord_menu_allowed()) {
+            if (s_active_chord_drawer == CHORD_DRAWER_PLAYLISTS) {
+                if (joy_cur[JOY_LEFT]) {
+                    if (!s_drawer_latched_open) {
+                        // 1o acionamento:
+                        // 0..150 ms: infla suavemente ate 50%
+                        // 150..550 ms: segura em 50% exibindo a lista
+                        // >= 550 ms (hold continuo): dispara a transicao com o anuncio da bolha!
+                        uint32_t elapsed = now - s_dir_hold_start_ms;
+                        if (elapsed < 150) {
+                            uint8_t pct = (uint8_t)((elapsed * 50) / 150);
+                            oled_display_set_chord_drawer(CHORD_DRAWER_PLAYLISTS, pct, s_cached_drawer_pl_ptrs, s_cached_drawer_pl_count, s_drawer_pl_cursor, s_cached_drawer_active_pl_idx);
+                        } else if (elapsed < 550) {
+                            oled_display_set_chord_drawer(CHORD_DRAWER_PLAYLISTS, 50, s_cached_drawer_pl_ptrs, s_cached_drawer_pl_count, s_drawer_pl_cursor, s_cached_drawer_active_pl_idx);
+                        } else {
+                            if (!s_deep_hold_triggered) {
+                                s_deep_hold_triggered = true;
+                                transition_to_playlists_browser(now);
+                            }
+                        }
+                    }
+                } else if (!joy_cur[JOY_LEFT] && joy_prev[JOY_LEFT]) {
+                    // Soltura da direcao Esquerda:
+                    if (!s_drawer_latched_open) {
+                        // Soltura do 1o aperto (toque rapido ou segurado < 550 ms): gaveta trava aberta a 50%!
+                        s_drawer_latched_open = true;
+                        oled_display_set_chord_drawer(CHORD_DRAWER_PLAYLISTS, 50, s_cached_drawer_pl_ptrs, s_cached_drawer_pl_count, s_drawer_pl_cursor, s_cached_drawer_active_pl_idx);
+                    }
+                }
+
+                // 2º clique na MESMA direcao com a gaveta ja aberta a 50%:
+                // Tanto um toque rapido quanto segurar navega de fato para o local com anuncio expansivo
+                if (!s_deep_hold_triggered && s_drawer_latched_open && joy_cur[JOY_LEFT] && !joy_prev[JOY_LEFT]) {
+                    s_deep_hold_triggered = true;
+                    transition_to_playlists_browser(now);
+                }
+
+                // Direcao oposta (Direita): fecha a gaveta de Playlists e retorna ao HUD de bolhas
+                if (!s_deep_hold_triggered && joy_cur[JOY_RIGHT] && !joy_prev[JOY_RIGHT]) {
+                    s_chord_suppressed_mask |= (1 << JOY_RIGHT);
+                    close_active_drawer();
+                    s_chord_hud_latched = false;
+                    oled_display_set_chord_hud(false, 0, -1, false);
+                }
+            } else if (s_active_chord_drawer == CHORD_DRAWER_EQUALIZER) {
+                if (joy_cur[JOY_RIGHT]) {
+                    if (!s_drawer_latched_open) {
+                        // 1o acionamento:
+                        // 0..150 ms: infla suavemente ate 50%
+                        // 150..550 ms: segura em 50% exibindo presets
+                        // >= 550 ms (hold continuo): dispara a transicao com o anuncio da bolha!
+                        uint32_t elapsed = now - s_dir_hold_start_ms;
+                        if (elapsed < 150) {
+                            uint8_t pct = (uint8_t)((elapsed * 50) / 150);
+                            oled_display_set_chord_drawer(CHORD_DRAWER_EQUALIZER, pct, s_cached_drawer_eq_ptrs, s_cached_drawer_eq_count, s_drawer_eq_cursor, s_cached_eq_cfg.active_preset_idx);
+                        } else if (elapsed < 550) {
+                            oled_display_set_chord_drawer(CHORD_DRAWER_EQUALIZER, 50, s_cached_drawer_eq_ptrs, s_cached_drawer_eq_count, s_drawer_eq_cursor, s_cached_eq_cfg.active_preset_idx);
+                        } else {
+                            if (!s_deep_hold_triggered) {
+                                s_deep_hold_triggered = true;
+                                transition_to_equalizer_presets(now);
+                            }
+                        }
+                    }
+                } else if (!joy_cur[JOY_RIGHT] && joy_prev[JOY_RIGHT]) {
+                    // Soltura da direcao Direita:
+                    if (!s_drawer_latched_open) {
+                        // Soltura do 1o aperto (toque rapido ou segurado < 550 ms): gaveta trava aberta a 50%!
+                        s_drawer_latched_open = true;
+                        oled_display_set_chord_drawer(CHORD_DRAWER_EQUALIZER, 50, s_cached_drawer_eq_ptrs, s_cached_drawer_eq_count, s_drawer_eq_cursor, s_cached_eq_cfg.active_preset_idx);
+                    }
+                }
+
+                // 2º clique na MESMA direcao com a gaveta ja aberta a 50%:
+                // Tanto um toque rapido quanto segurar navega de fato para o local com anuncio expansivo
+                if (!s_deep_hold_triggered && s_drawer_latched_open && joy_cur[JOY_RIGHT] && !joy_prev[JOY_RIGHT]) {
+                    s_deep_hold_triggered = true;
+                    transition_to_equalizer_presets(now);
+                }
+
+                // Direcao oposta (Esquerda): fecha a gaveta do Equalizador e retorna ao HUD de bolhas
+                if (!s_deep_hold_triggered && joy_cur[JOY_LEFT] && !joy_prev[JOY_LEFT]) {
+                    s_chord_suppressed_mask |= (1 << JOY_LEFT);
+                    close_active_drawer();
+                    s_chord_hud_latched = false;
+                    oled_display_set_chord_hud(false, 0, -1, false);
+                }
+            }
+
+            if (s_active_chord_drawer == CHORD_DRAWER_MODES) {
+                if (joy_cur[JOY_RIGHT] && !joy_prev[JOY_RIGHT]) {
+                    s_chord_suppressed_mask |= (1 << JOY_RIGHT);
+                    if (s_drawer_modes_cursor == 0) {
+                        audio_player_cycle_loop_mode();
+                    } else {
+                        audio_player_cycle_shuffle_mode();
+                    }
+                    update_modes_drawer_strings();
+                    oled_display_set_chord_drawer(CHORD_DRAWER_MODES, 50, s_cached_modes_ptrs, 2, s_drawer_modes_cursor, 0);
+                } else if (joy_cur[JOY_LEFT] && !joy_prev[JOY_LEFT]) {
+                    s_chord_suppressed_mask |= (1 << JOY_LEFT);
+                    if (s_drawer_modes_cursor == 0) {
+                        audio_player_prev_loop_mode();
+                    } else {
+                        audio_player_prev_shuffle_mode();
+                    }
+                    update_modes_drawer_strings();
+                    oled_display_set_chord_drawer(CHORD_DRAWER_MODES, 50, s_cached_modes_ptrs, 2, s_drawer_modes_cursor, 0);
+                } else if (joy_cur[JOY_CENTER] && !joy_prev[JOY_CENTER]) {
+                    // Botao Central na gaveta de Modos: CONFIRMA E FECHA com suavidade
+                    s_chord_suppressed_mask |= (1 << JOY_CENTER);
+                    center_modifier_used = true;
+                    s_last_center_release_ms = 0;
+                    close_active_drawer();
+                    s_chord_hud_latched = false;
+                    oled_display_set_chord_hud(false, 0, -1, false);
+                }
+            }
+
+            // 2. Navegacao com a Gaveta aberta (Cima / Baixo)
+            if (!s_deep_hold_triggered && s_active_chord_drawer != CHORD_DRAWER_NONE) {
+                if (joy_cur[JOY_UP] && !joy_prev[JOY_UP]) {
+                    s_chord_suppressed_mask |= (1 << JOY_UP);
+                    if (s_active_chord_drawer == CHORD_DRAWER_PLAYLISTS && s_cached_drawer_pl_count > 0) {
+                        s_drawer_pl_cursor = (s_drawer_pl_cursor - 1 + s_cached_drawer_pl_count) % s_cached_drawer_pl_count;
+                        oled_display_set_chord_drawer(CHORD_DRAWER_PLAYLISTS, 50, s_cached_drawer_pl_ptrs, s_cached_drawer_pl_count, s_drawer_pl_cursor, s_cached_drawer_active_pl_idx);
+                    } else if (s_active_chord_drawer == CHORD_DRAWER_EQUALIZER && s_cached_drawer_eq_count > 0) {
+                        s_drawer_eq_cursor = (s_drawer_eq_cursor - 1 + s_cached_drawer_eq_count) % s_cached_drawer_eq_count;
+                        oled_display_set_chord_drawer(CHORD_DRAWER_EQUALIZER, 50, s_cached_drawer_eq_ptrs, s_cached_drawer_eq_count, s_drawer_eq_cursor, s_cached_eq_cfg.active_preset_idx);
+                    } else if (s_active_chord_drawer == CHORD_DRAWER_MODES) {
+                        s_drawer_modes_cursor = 1 - s_drawer_modes_cursor;
+                        update_modes_drawer_strings();
+                        oled_display_set_chord_drawer(CHORD_DRAWER_MODES, 50, s_cached_modes_ptrs, 2, s_drawer_modes_cursor, 0);
+                    }
+                } else if (joy_cur[JOY_DOWN] && !joy_prev[JOY_DOWN]) {
+                    s_chord_suppressed_mask |= (1 << JOY_DOWN);
+                    if (s_active_chord_drawer == CHORD_DRAWER_PLAYLISTS && s_cached_drawer_pl_count > 0) {
+                        s_drawer_pl_cursor = (s_drawer_pl_cursor + 1) % s_cached_drawer_pl_count;
+                        oled_display_set_chord_drawer(CHORD_DRAWER_PLAYLISTS, 50, s_cached_drawer_pl_ptrs, s_cached_drawer_pl_count, s_drawer_pl_cursor, s_cached_drawer_active_pl_idx);
+                    } else if (s_active_chord_drawer == CHORD_DRAWER_EQUALIZER && s_cached_drawer_eq_count > 0) {
+                        s_drawer_eq_cursor = (s_drawer_eq_cursor + 1) % s_cached_drawer_eq_count;
+                        oled_display_set_chord_drawer(CHORD_DRAWER_EQUALIZER, 50, s_cached_drawer_eq_ptrs, s_cached_drawer_eq_count, s_drawer_eq_cursor, s_cached_eq_cfg.active_preset_idx);
+                    } else if (s_active_chord_drawer == CHORD_DRAWER_MODES) {
+                        s_drawer_modes_cursor = 1 - s_drawer_modes_cursor;
+                        update_modes_drawer_strings();
+                        oled_display_set_chord_drawer(CHORD_DRAWER_MODES, 50, s_cached_modes_ptrs, 2, s_drawer_modes_cursor, 0);
+                    }
+                }
+            }
+        }
+        // --- Modo Acordes Convencional (HUD de Bolhas) quando nenhuma Gaveta esta aberta ---
+        // Exige centro previamente pressionado por tempo suficiente (>= 200 ms) ou HUD latched, e tela permitida
+        else if (!s_locked && is_chord_menu_allowed() && (s_chord_hud_latched || (joy_cur[JOY_CENTER] && center_press_start != 0 && (now - center_press_start >= 200)))) {
+            if (joy_cur[JOY_LEFT] && !joy_prev[JOY_LEFT]) {
+                open_playlists_drawer(now);
+                center_modifier_used = true;
+                s_chord_suppressed_mask |= (1 << JOY_LEFT);
+            } else if (joy_cur[JOY_RIGHT] && !joy_prev[JOY_RIGHT]) {
+                open_equalizer_drawer(now);
+                center_modifier_used = true;
+                s_chord_suppressed_mask |= (1 << JOY_RIGHT);
+            } else if (joy_cur[JOY_UP] && !joy_prev[JOY_UP]) {
+                s_chord_focused_dir = 0;
+                center_modifier_used = true;
+                s_chord_suppressed_mask |= (1 << JOY_UP);
+            } else if (!joy_cur[JOY_UP] && joy_prev[JOY_UP] && (s_chord_focused_dir == 0)) {
+                bool already_liked = false;
+                if (s_mode == UI_MODE_LIST) {
+                    already_liked = audio_player_is_browse_item_favorite(s_list_cursor);
+                } else {
+                    already_liked = audio_player_is_current_favorite();
+                }
+                handle_chord_like(!already_liked);
+                s_chord_hud_latched = false;
+                s_chord_focused_dir = -1;
+                oled_display_set_chord_hud(false, 0, -1, false);
+            } else if (joy_cur[JOY_DOWN] && !joy_prev[JOY_DOWN]) {
+                s_chord_focused_dir = 1;
+                center_modifier_used = true;
+                s_chord_suppressed_mask |= (1 << JOY_DOWN);
+            } else if (!joy_cur[JOY_DOWN] && joy_prev[JOY_DOWN] && (s_chord_focused_dir == 1)) {
+                if (s_mode == UI_MODE_PLAYING) {
+                    open_modes_drawer(now);
+                    s_chord_hud_latched = false;
+                    s_chord_focused_dir = -1;
+                } else {
+                    oled_display_trigger_bubble_expand_toast(64, 63, "OPCOES", "Menu de Acoes", NULL);
+                    open_context_actions_menu();
+                    s_chord_hud_latched = false;
+                    s_chord_focused_dir = -1;
+                    oled_display_set_chord_hud(false, 0, -1, false);
+                }
+            }
+        }
+
+        // Expande o HUD de Bolhas apenas se NAO estiver bloqueado, NAO for candidato a bloqueio e ESTIVER em tela permitida
+        bool can_show_chord_hud = !s_locked && !center_is_lock_candidate && is_chord_menu_allowed();
+        if (can_show_chord_hud && joy_cur[JOY_CENTER] && !center_long_fired && !center_modifier_used && center_press_start != 0) {
+            uint32_t hold_time = now - center_press_start;
+            if (hold_time >= 200) {
+                // Cresce de 0 a 100% em 350 ms
+                uint8_t pct = (uint8_t)(((hold_time - 200) * 100) / 350);
+                if (pct >= 100) {
+                    pct = 100;
+                    s_chord_hud_latched = true; // Bolha inflada a 100%: destrava dedo, fica latched!
+                }
+                oled_display_set_chord_hud(true, pct, s_chord_focused_dir, s_chord_is_liked_cached);
+            }
+        } else if (s_chord_hud_latched && !joy_cur[JOY_CENTER] && is_chord_menu_allowed()) {
+            // Bolhas permanecem abertas e estaveis a 100% aguardando selecao de direcao ou estouro
+            oled_display_set_chord_hud(true, 100, s_chord_focused_dir, s_chord_is_liked_cached);
+        } else if (s_chord_hud_latched && !is_chord_menu_allowed()) {
+            s_chord_hud_latched = false;
+            oled_display_set_chord_hud(false, 0, -1, false);
+        }
+
+        // Bloqueio de tela vs Acoes Especiais de Tela Segurando Centro:
+        // Telas de configuracao e EQ possuem acao longa nativa direta (nao exigem Tap-Hold previo):
+        bool is_screen_special_long = (s_mode == UI_MODE_LED || s_mode == UI_MODE_TELA ||
+                                       s_mode == UI_MODE_DEEP_SLEEP || s_mode == UI_MODE_RTC_CLOCK ||
+                                       s_mode == UI_MODE_EQ || s_mode == UI_MODE_EQ_PRESETS ||
+                                       s_mode == UI_MODE_KEYBOARD || s_mode == UI_MODE_LOCK_CLOCK_CFG ||
+                                       s_mode == UI_MODE_CHRONO || (s_mode == UI_MODE_TOP_SCREEN && s_top_cursor == 1));
+
+        bool lock_time_reached = (now - center_press_start) >= CENTER_LOCK_HOLD_MS;
+        bool can_trigger_long = (is_screen_special_long || s_locked || center_is_lock_candidate) && (s_active_chord_drawer == CHORD_DRAWER_NONE);
+
+        if (joy_cur[JOY_CENTER] && !center_long_fired && !center_modifier_used && center_press_start != 0 &&
+            lock_time_reached && can_trigger_long) {
             center_long_fired = true;
+            oled_display_set_chord_hud(false, 0, -1, false);
             if (s_mode == UI_MODE_LED) {
                 s_mode = UI_MODE_CONF_DISPLAY;
                 s_conf_display_cursor = 1;
@@ -679,27 +1767,54 @@ static void touch_task(void *arg)
                 ESP_LOGI(TAG, "Saindo da tela CHRONO via pressao longa");
             } else {
                 s_locked = !s_locked;
+                center_is_lock_candidate = false;
+                s_last_center_release_ms = 0;
                 reset_seek_progression();
-                ESP_LOGI(TAG, "Controles %s pelo botao central", s_locked ? "bloqueados" : "desbloqueados");
+                ESP_LOGI(TAG, "Controles %s pelo botao central (Tap-Hold)", s_locked ? "bloqueados" : "desbloqueados");
                 uint32_t lk_secs = touch_input_get_lock_clock_secs();
-                if (s_locked && lk_secs > 0) {
-                    s_lock_clock_until_ms = now + (lk_secs * 1000UL);
+                if (s_locked) {
+                    // Bloquear: circulo cresce do centro (0 -> 74 px) tampando a tela
+                    oled_display_trigger_lock_anim(true);
+                    if (lk_secs == 0) lk_secs = 10; // Exibe o relogio por 10s apos a animacao
+                    s_lock_clock_until_ms = now + (lk_secs * 1000UL) + 400UL;
                     touch_input_wake_display();
-                } else if (!s_locked) {
+                } else {
+                    // Desbloquear: o inverso! circulo encolhe de 74 -> 0 px revelando a tela!
+                    oled_display_trigger_lock_anim(false);
+                    s_lock_clock_until_ms = 0; // Sai do relogio imediatamente
                     touch_input_wake_display();
                 }
             }
         }
         if (center_released_edge) {
-            // Com a tela bloqueada, clique curto nao tem efeito.
-            if (!center_long_fired && !s_locked) {
+            if (s_chord_hud_latched && is_chord_menu_allowed()) {
+                // Bolhas estao latched a 100%: o usuario soltou o meio para escolher com calma.
+                // Mantem HUD aberto e anula clique curto de play/pause!
+                center_modifier_used = false;
+                s_last_center_release_ms = 0;
+            } else {
+                if (s_chord_hud_latched) {
+                    s_chord_hud_latched = false;
+                }
+                oled_display_set_chord_hud(false, 0, -1, false);
+                s_chord_focused_dir = -1;
+                bool was_growing = is_chord_menu_allowed() && (center_press_start != 0) && ((now - center_press_start) >= 200);
+                if (center_modifier_used || (s_chord_suppressed_mask & (1 << JOY_CENTER))) {
+                    center_modifier_used = false;
+                    s_chord_suppressed_mask &= ~(1 << JOY_CENTER);
+                    s_last_center_release_ms = 0; // Usou modificador, anula tap
+                } else if (was_growing) {
+                    // Soltou antes de 100%: aborta expansao das bolhas sem play/pause
+                    ESP_LOGI(TAG, "Expansao abortada antes de 100% - play/pause suprimido");
+                    s_last_center_release_ms = 0;
+                } else if (!center_long_fired && !s_locked) {
+                s_last_center_release_ms = now; // Registra soltura do 1o clique curto!
                 static uint32_t s_last_short_center_ms = 0;
                 bool is_double_click = (now - s_last_short_center_ms) < 350;
                 s_last_short_center_ms = now;
 
-                if (center_modifier_used) {
-                    // Botao central foi usado como modifier (ex: CENTER + DOWN)
-                    // Nao fazemos a acao de clique curto
+                if (s_mode == UI_MODE_ACTIONS_MENU) {
+                    execute_context_action();
                 } else if (menu_any_active()) {
                     menu_request_action_active();
                 } else if (s_mode == UI_MODE_GAMES_MENU) {
@@ -734,6 +1849,18 @@ static void touch_task(void *arg)
                         s_eq_preset_cursor = 0;
                     } else if (s_conf_audio_cursor == 3) {
                         s_mode = UI_MODE_SORT;
+                    } else if (s_conf_audio_cursor == 4) {
+                        audio_player_set_gapless_enabled(!audio_player_get_gapless_enabled());
+                    } else if (s_conf_audio_cursor == 5) {
+                        audio_player_set_soft_fade_enabled(!audio_player_get_soft_fade_enabled());
+                    } else if (s_conf_audio_cursor == 6) {
+                        replaygain_mode_t cur_rg = audio_player_get_replaygain_mode();
+                        audio_player_set_replaygain_mode((replaygain_mode_t)(((int)cur_rg + 1) % 3));
+                    } else if (s_conf_audio_cursor == 7) {
+                        bookmark_mode_t cur_bm = audio_player_get_bookmark_mode();
+                        audio_player_set_bookmark_mode((bookmark_mode_t)(((int)cur_bm + 1) % 3));
+                    } else if (s_conf_audio_cursor == 8) {
+                        audio_player_set_az_jump_enabled(!audio_player_get_az_jump_enabled());
                     }
                 } else if (s_mode == UI_MODE_CONF_DISPLAY) {
                     if (s_conf_display_cursor == 0) {
@@ -875,8 +2002,21 @@ static void touch_task(void *arg)
                     audio_player_set_sort_mode(cur == SORT_MODE_NAME ? SORT_MODE_DATE : SORT_MODE_NAME);
 
                 } else if (s_mode == UI_MODE_WIFI_NETS) {
-                    s_mode = UI_MODE_CONF_SYSTEM;
-                    s_conf_system_cursor = 2;
+                    if (s_wifi_net_cursor == 0) {
+                        s_mode = UI_MODE_LIST;
+                        wifi_transfer_enter(WIFI_TRANSFER_MODE_AP);
+                    } else {
+                        char target_ssid[33] = {0};
+                        char target_pass[65] = {0};
+                        if (wifi_transfer_get_known_network(s_wifi_net_cursor - 1, target_ssid, sizeof(target_ssid), target_pass, sizeof(target_pass))) {
+                            wifi_transfer_promote_network(target_ssid);
+                            s_mode = UI_MODE_LIST;
+                            wifi_transfer_enter(WIFI_TRANSFER_MODE_STA);
+                        } else {
+                            s_mode = UI_MODE_CONF_SYSTEM;
+                            s_conf_system_cursor = 2;
+                        }
+                    }
 
                 } else if (s_mode == UI_MODE_TOP_SCREEN) {
                     if (s_top_cursor == 1) {
@@ -902,6 +2042,25 @@ static void touch_task(void *arg)
                         oled_display_cycle_viz_mode();
                         s_last_short_center_ms = 0; // Evita encadear 3º clique como duplo
                         ESP_LOGI(TAG, "Duplo-clique no centro: alternando modo de visualizacao -> %d", (int)oled_display_get_viz_mode());
+                    } else if (s_mode == UI_MODE_LIST && s_in_player_browser && is_double_click) {
+                        // Duplo-clique no navegador: reverte o play/pause do 1o clique e adiciona/remove o item na playlist alvo!
+                        audio_player_toggle_play_pause();
+                        s_last_short_center_ms = 0;
+                        bool at_root = audio_player_browse_is_root();
+                        int src_idx = at_root ? s_list_cursor : (s_list_cursor + 1);
+                        bool added = false;
+                        int cnt = 0;
+                        const char *pl = audio_player_get_target_playlist();
+                        if (audio_player_toggle_browse_item_in_target_playlist(src_idx, &added, &cnt)) {
+                            if (cnt > 1) {
+                                char msg[32];
+                                snprintf(msg, sizeof(msg), "+ %d faixas adic.", cnt);
+                                oled_display_show_message(pl, msg);
+                            } else {
+                                oled_display_show_message(pl, added ? "+ Faixa adicionada!" : "- Faixa removida!");
+                            }
+                            vTaskDelay(pdMS_TO_TICKS(800));
+                        }
                     } else {
                         audio_player_toggle_play_pause();
                         reset_seek_progression();
@@ -910,6 +2069,7 @@ static void touch_task(void *arg)
                         }
                     }
                 }
+            }
             }
             center_press_start = 0;
             center_modifier_used = false; // Reset pro proximo click
@@ -987,13 +2147,18 @@ static void touch_task(void *arg)
                     }
                 }
             } else {
+                if (joy_prev[JOY_LEFT] && !exit_active_fired) {
+                    if (menu_any_active()) {
+                        menu_nav_left_active();
+                    }
+                }
                 exit_active_hold_start = 0;
                 exit_active_fired = false;
             }
 
             // No modo DAC, ainda permitimos botoes de borda para HID
             if (s_mode != UI_MODE_USB_DAC) {
-                vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
+                vTaskDelay(pdMS_TO_TICKS(wifi_transfer_is_boost_active() ? 500 : POLL_INTERVAL_MS));
                 for (int i = 0; i < NUM_JOY_BTNS; i++) joy_prev[i] = joy_cur[i];
                 continue;
             }
@@ -1017,12 +2182,81 @@ static void touch_task(void *arg)
             if (i == JOY_CENTER) continue;
 
             bool pressed_edge = joy_cur[i] && !joy_prev[i];
+
+            // Limpa mascara de supressao se o botao foi solto e o tempo de cooldown de acorde expirou
+            if (!joy_cur[i] && (now - s_last_chord_action_ms >= 350)) {
+                s_chord_suppressed_mask &= ~(1 << i);
+            }
+
+            // Se as bolhas estao abertas (latched), ou centro pressionado por tempo suficiente (>= 200 ms) em tela permitida, ou cooldown ativo:
+            // suprime TOTALMENTE comandos de 1a ordem direcionais!
+            bool chord_suppression_active = (s_active_chord_drawer != CHORD_DRAWER_NONE) ||
+                                            (s_chord_hud_latched && is_chord_menu_allowed()) ||
+                                            (is_chord_menu_allowed() && joy_cur[JOY_CENTER] && center_press_start != 0 && (now - center_press_start >= 200)) ||
+                                            (s_chord_suppressed_mask & (1 << i)) ||
+                                            (now - s_last_chord_action_ms < 350);
+            if (chord_suppression_active) {
+                joy_pending_edge_ms[i] = 0;
+                continue;
+            }
+
+            // Em modos onde ha acordes (PLAYING e LIST permitidos), se uma direcao subiu sem o Centro,
+            // aguarda janela de 50 ms para detectar se o Centro foi acionado simultaneamente
+            bool is_chord_eligible_mode = is_chord_menu_allowed();
+            if (pressed_edge && is_chord_eligible_mode) {
+                joy_pending_edge_ms[i] = now;
+                joy_press_ms[i] = now;
+                continue; // Aguarda janela de 50 ms
+            }
+
+            bool resolved_edge = false;
+            if (joy_pending_edge_ms[i] > 0) {
+                if ((now - joy_pending_edge_ms[i]) >= 50) {
+                    joy_pending_edge_ms[i] = 0;
+                    resolved_edge = true;
+                } else {
+                    continue; // Continua aguardando janela
+                }
+            }
+
             bool is_updown_repeatable = (i == JOY_UP || i == JOY_DOWN);
             bool is_seek_repeatable = (i == JOY_LEFT || i == JOY_RIGHT) && s_mode == UI_MODE_PLAYING;
             bool is_lr_repeatable = (i == JOY_LEFT || i == JOY_RIGHT) && (s_mode == UI_MODE_VOLUME || s_mode == UI_MODE_BALANCE || s_mode == UI_MODE_EQ || s_mode == UI_MODE_LED || (s_mode == UI_MODE_TOP_SCREEN && s_top_cursor == 0));
 
-            bool fire = pressed_edge;
-            if (!fire && joy_cur[i]) {
+            bool released_edge = !joy_cur[i] && joy_prev[i];
+            if (released_edge) {
+                if (s_mode == UI_MODE_PLAYING && (i == JOY_RIGHT || i == JOY_LEFT)) {
+                    uint32_t held_for = now - joy_press_ms[i];
+                    if (held_for < 350) {
+                        // Toque curto: pular ou retroceder faixa
+                        if (i == JOY_RIGHT) {
+                            ESP_LOGI(TAG, "Clique curto JOY_RIGHT: avancar proxima faixa");
+                            audio_player_next();
+                        } else {
+                            playback_state_t cur_st;
+                            audio_player_get_state(&cur_st);
+                            if (cur_st.elapsed_sec > 3) {
+                                ESP_LOGI(TAG, "Clique curto JOY_LEFT (>3s): reiniciar faixa");
+                                audio_player_restart();
+                            } else {
+                                ESP_LOGI(TAG, "Clique curto JOY_LEFT (<=3s): faixa anterior");
+                                audio_player_previous();
+                            }
+                        }
+                    } else {
+                        // Soltou apos segurar (seek continuo)
+                        ESP_LOGI(TAG, "Soltura de seek apos %u ms", (unsigned)held_for);
+                        reset_seek_progression();
+                    }
+                }
+            }
+
+            bool effective_edge = pressed_edge || resolved_edge;
+            bool fire = effective_edge;
+            if (effective_edge && is_seek_repeatable) {
+                // Na borda de subida em modo Now Playing, nao da seek imediato (aguarda hold ou clique curto na soltura)
+                fire = false;
+            } else if (!fire && joy_cur[i]) {
                 if (is_updown_repeatable || is_lr_repeatable) {
                     uint32_t held_for = now - joy_press_ms[i];
                     if (held_for >= JOY_REPEAT_INITIAL_MS &&
@@ -1030,11 +2264,8 @@ static void touch_task(void *arg)
                         fire = true;
                     }
                 } else if (is_seek_repeatable) {
-                    // Sem atraso inicial aqui (diferente do cima/baixo) -
-                    // o 1o pulso ja' sai na borda do aperto, os seguintes
-                    // continuam nesse ritmo desde logo, acelerando por
-                    // conta do calculo em seek_hold_amount_sec().
-                    if ((now - joy_last_repeat_ms[i]) >= SEEK_HOLD_PULSE_MS) {
+                    uint32_t held_for = now - joy_press_ms[i];
+                    if (held_for >= 350 && (now - joy_last_repeat_ms[i]) >= SEEK_HOLD_PULSE_MS) {
                         fire = true;
                     }
                 }
@@ -1043,12 +2274,16 @@ static void touch_task(void *arg)
             if (pressed_edge) {
                 joy_press_ms[i] = now;
             }
+            pressed_edge = effective_edge; // Propaga borda efetiva para o switch interno!
             if (fire) {
                 joy_last_repeat_ms[i] = now;
                 s_last_interaction_ms = now;
                 switch (i) {
                     case JOY_UP:
-                        if (s_mode == UI_MODE_USB_PROMPT) {
+                        if (s_mode == UI_MODE_ACTIONS_MENU && pressed_edge) {
+                            int max_act = s_action_target_is_playlist ? 8 : 13;
+                            s_action_cursor = (s_action_cursor == 0) ? (max_act - 1) : (s_action_cursor - 1);
+                        } else if (s_mode == UI_MODE_USB_PROMPT) {
                             if (s_list_cursor == 1 && pressed_edge) {
                                 usb_manager_set_mode(USB_MODE_DAC);
                                 s_mode = UI_MODE_USB_DAC;
@@ -1060,7 +2295,7 @@ static void touch_task(void *arg)
                         } else if (s_mode == UI_MODE_CONF_MENU) {
                             s_conf_cursor = (s_conf_cursor == 0) ? 2 : (s_conf_cursor - 1);
                         } else if (s_mode == UI_MODE_CONF_AUDIO) {
-                            s_conf_audio_cursor = (s_conf_audio_cursor == 0) ? 3 : (s_conf_audio_cursor - 1);
+                            s_conf_audio_cursor = (s_conf_audio_cursor == 0) ? 8 : (s_conf_audio_cursor - 1);
                         } else if (s_mode == UI_MODE_CONF_DISPLAY) {
                             s_conf_display_cursor = (s_conf_display_cursor == 0) ? 2 : (s_conf_display_cursor - 1);
                         } else if (s_mode == UI_MODE_LOCK_CLOCK_CFG && pressed_edge) {
@@ -1115,11 +2350,27 @@ static void touch_task(void *arg)
                             audio_player_adjust_volume(VOLUME_STEP_PERCENT);
                             usb_manager_send_hid(3);
                         } else if (s_mode == UI_MODE_LIST) {
-                            joy_move_cursor(-1, pressed_edge);
+                            uint32_t held_ms = now - joy_press_ms[i];
+                            if (!pressed_edge && s_in_player_browser && audio_player_get_az_jump_enabled() &&
+                                held_ms >= 950 && current_list_count() > 10) {
+                                bool at_root = audio_player_browse_is_root();
+                                int offset = at_root ? 0 : 1;
+                                char let = 0;
+                                int new_real = audio_player_jump_browse_letter(s_list_cursor + offset, -1, &let);
+                                int new_cur = new_real - offset;
+                                if (new_cur < 0) new_cur = 0;
+                                s_list_cursor = new_cur;
+                                if (let != 0) oled_display_trigger_az_hud(let);
+                            } else {
+                                joy_move_cursor(-1, pressed_edge);
+                            }
                         }
                         break;
                     case JOY_DOWN:
-                        if (s_mode == UI_MODE_USB_PROMPT) {
+                        if (s_mode == UI_MODE_ACTIONS_MENU && pressed_edge) {
+                            int max_act = s_action_target_is_playlist ? 8 : 13;
+                            s_action_cursor = (s_action_cursor + 1) % max_act;
+                        } else if (s_mode == UI_MODE_USB_PROMPT) {
                             if (s_list_cursor == 4 && pressed_edge) {
                                 touch_input_cancel_usb();
                             } else {
@@ -1130,7 +2381,7 @@ static void touch_task(void *arg)
                         } else if (s_mode == UI_MODE_CONF_MENU) {
                             s_conf_cursor = (s_conf_cursor + 1) % 3;
                         } else if (s_mode == UI_MODE_CONF_AUDIO) {
-                            s_conf_audio_cursor = (s_conf_audio_cursor + 1) % 4;
+                            s_conf_audio_cursor = (s_conf_audio_cursor + 1) % 9;
                         } else if (s_mode == UI_MODE_CONF_DISPLAY) {
                             s_conf_display_cursor = (s_conf_display_cursor + 1) % 3;
                         } else if (s_mode == UI_MODE_LOCK_CLOCK_CFG && pressed_edge) {
@@ -1184,18 +2435,62 @@ static void touch_task(void *arg)
                             audio_player_set_eq_config(&cfg);
                         } else if (s_mode == UI_MODE_PLAYING) {
                             if (pressed_edge) {
-                                ESP_LOGI(TAG, "Voltando para a lista (JOY_DOWN)");
                                 s_mode = UI_MODE_LIST;
+                                int cur_track = audio_player_get_current_track_browse_index();
+                                if (cur_track >= 0) {
+                                    int max_c = current_list_count();
+                                    if (cur_track < max_c) {
+                                        s_list_cursor = cur_track;
+                                    }
+                                }
+                                ESP_LOGI(TAG, "Voltando para a lista (JOY_DOWN, cursor=%d)", s_list_cursor);
                             }
                         } else if (s_mode == UI_MODE_USB_DAC) {
                             audio_player_adjust_volume(-VOLUME_STEP_PERCENT);
                             usb_manager_send_hid(4);
                         } else if (s_mode == UI_MODE_LIST) {
-                            joy_move_cursor(+1, pressed_edge);
+                            uint32_t held_ms = now - joy_press_ms[i];
+                            if (!pressed_edge && s_in_player_browser && audio_player_get_az_jump_enabled() &&
+                                held_ms >= 950 && current_list_count() > 10) {
+                                bool at_root = audio_player_browse_is_root();
+                                int offset = at_root ? 0 : 1;
+                                char let = 0;
+                                int new_real = audio_player_jump_browse_letter(s_list_cursor + offset, +1, &let);
+                                int new_cur = new_real - offset;
+                                int max_c = current_list_count();
+                                if (new_cur < 0) new_cur = 0;
+                                if (max_c > 0 && new_cur >= max_c) new_cur = max_c - 1;
+                                s_list_cursor = new_cur;
+                                if (let != 0) oled_display_trigger_az_hud(let);
+                            } else {
+                                joy_move_cursor(+1, pressed_edge);
+                            }
                         }
                         break;
                     case JOY_LEFT:
-                        if (s_mode == UI_MODE_USB_PROMPT && pressed_edge) {
+                        if (pressed_edge) {
+                            static uint32_t s_last_left_tap_ms = 0;
+                            static int s_left_taps = 0;
+                            if (now - s_last_left_tap_ms < 350) {
+                                s_left_taps++;
+                            } else {
+                                s_left_taps = 1;
+                            }
+                            s_last_left_tap_ms = now;
+
+                            if (s_left_taps >= 3) {
+                                s_left_taps = 0;
+                                s_mode = UI_MODE_LIST;
+                                s_list_cursor = 0;
+                                s_in_player_browser = false;
+                                audio_player_browse_to_root();
+                                oled_display_trigger_heart_anim(true, "MENU PRINCIPAL");
+                                break;
+                            }
+                        }
+                        if (s_mode == UI_MODE_ACTIONS_MENU && pressed_edge) {
+                            s_mode = s_prev_mode_before_actions;
+                        } else if (s_mode == UI_MODE_USB_PROMPT && pressed_edge) {
                             if (s_list_cursor == 3) {
                                 oled_display_show_message("Entrando em modo", "FLASH / GRAVACAO");
                                 vTaskDelay(pdMS_TO_TICKS(400));
@@ -1307,7 +2602,9 @@ static void touch_task(void *arg)
                         }
                         break;
                     case JOY_RIGHT:
-                        if (s_mode == UI_MODE_USB_PROMPT && pressed_edge) {
+                        if (s_mode == UI_MODE_ACTIONS_MENU && pressed_edge) {
+                            execute_context_action();
+                        } else if (s_mode == UI_MODE_USB_PROMPT && pressed_edge) {
                             if (s_list_cursor == 2) {
                                 usb_manager_set_mode(USB_MODE_MSC);
                                 s_mode = UI_MODE_USB_MSC;
@@ -1346,6 +2643,18 @@ static void touch_task(void *arg)
                                 s_eq_preset_cursor = 0;
                             } else if (s_conf_audio_cursor == 3) {
                                 s_mode = UI_MODE_SORT;
+                            } else if (s_conf_audio_cursor == 4) {
+                                audio_player_set_gapless_enabled(!audio_player_get_gapless_enabled());
+                            } else if (s_conf_audio_cursor == 5) {
+                                audio_player_set_soft_fade_enabled(!audio_player_get_soft_fade_enabled());
+                            } else if (s_conf_audio_cursor == 6) {
+                                replaygain_mode_t cur_rg = audio_player_get_replaygain_mode();
+                                audio_player_set_replaygain_mode((replaygain_mode_t)(((int)cur_rg + 1) % 3));
+                            } else if (s_conf_audio_cursor == 7) {
+                                bookmark_mode_t cur_bm = audio_player_get_bookmark_mode();
+                                audio_player_set_bookmark_mode((bookmark_mode_t)(((int)cur_bm + 1) % 3));
+                            } else if (s_conf_audio_cursor == 8) {
+                                audio_player_set_az_jump_enabled(!audio_player_get_az_jump_enabled());
                             }
                         } else if (s_mode == UI_MODE_CONF_DISPLAY && pressed_edge) {
                             if (s_conf_display_cursor == 0) {
@@ -1376,6 +2685,19 @@ static void touch_task(void *arg)
                             ESP_LOGI(TAG, "JOY_RIGHT: Forcando Deep Sleep imediato como teste de bancada...");
                             save_deepsleep_nvs();
                             pwr_governor_enter_deep_sleep();
+                        } else if (s_mode == UI_MODE_WIFI_NETS && pressed_edge) {
+                            if (s_wifi_net_cursor == 0) {
+                                s_mode = UI_MODE_LIST;
+                                wifi_transfer_enter(WIFI_TRANSFER_MODE_AP);
+                            } else {
+                                char target_ssid[33] = {0};
+                                char target_pass[65] = {0};
+                                if (wifi_transfer_get_known_network(s_wifi_net_cursor - 1, target_ssid, sizeof(target_ssid), target_pass, sizeof(target_pass))) {
+                                    wifi_transfer_promote_network(target_ssid);
+                                    s_mode = UI_MODE_LIST;
+                                    wifi_transfer_enter(WIFI_TRANSFER_MODE_STA);
+                                }
+                            }
                         } else if (s_mode == UI_MODE_SORT && pressed_edge) {
                             track_sort_mode_t cur = audio_player_get_sort_mode();
                             audio_player_set_sort_mode(cur == SORT_MODE_NAME ? SORT_MODE_DATE : SORT_MODE_NAME);
@@ -1466,7 +2788,7 @@ static void touch_task(void *arg)
         if (!s_is_sleeping && timeout > 0 && (now - s_last_interaction_ms) > (uint32_t)(timeout * 1000)) {
             s_is_sleeping = true;
         }
-        vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
+        vTaskDelay(pdMS_TO_TICKS(wifi_transfer_is_boost_active() ? 500 : POLL_INTERVAL_MS));
     }
 }
 
@@ -1590,7 +2912,7 @@ esp_err_t touch_input_start(void)
 
     // Prioridade 4 no Core 0: cede passagem imediata para a audio_dsp_task (prioridade 5),
     // garantindo que eventos de UI não causem preempção sobre o envio de blocos DMA ao I2S.
-    BaseType_t ok = xTaskCreatePinnedToCore(touch_task, "touch_task", 8192, NULL, 4, NULL, 0);
+    BaseType_t ok = xTaskCreatePinnedToCore(touch_task, "touch_task", 12288, NULL, 4, NULL, 0);
     return ok == pdPASS ? ESP_OK : ESP_FAIL;
 }
 
@@ -1625,6 +2947,7 @@ void touch_input_enter_usb_dac(void) {
 }
 
 void touch_input_reset_to_main_menu(void) {
+    nav_history_clear();
     while (!audio_player_browse_is_root()) {
         audio_player_select_entry(0);
     }
@@ -1632,10 +2955,14 @@ void touch_input_reset_to_main_menu(void) {
     s_in_player_browser = false;
     s_list_cursor = 0;
     s_is_sleeping = false;
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    s_last_activity_ms = now;
+    s_last_interaction_ms = now;
     touch_input_wake_display();
 }
 
 void touch_input_set_menu_cursor(int c) {
+    nav_history_clear();
     while (!audio_player_browse_is_root()) {
         audio_player_select_entry(0);
     }
@@ -1645,6 +2972,9 @@ void touch_input_set_menu_cursor(int c) {
         s_list_cursor = c;
     }
     s_is_sleeping = false;
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    s_last_activity_ms = now;
+    s_last_interaction_ms = now;
     touch_input_wake_display();
 }
 

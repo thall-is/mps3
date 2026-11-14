@@ -28,8 +28,7 @@ def test_suite(port="COM5"):
 
         # Teste 3: Navegacao para TOP_SCREEN
         print("\n[3] Testando navegacao para TOP_SCREEN...")
-        nav.seq("U")
-        st = nav.wait_for(lambda s: s.get("mode_name") == "TOP_SCREEN", timeout=3.0)
+        st = nav.goto("TOP_SCREEN")
         assert st["mode_name"] == "TOP_SCREEN"
         print(f"  [PASS] TOP_SCREEN alcancado com sucesso (top_cursor={st.get('top')})")
         nav.screenshot("tools/golden_top_screen.png")
@@ -60,6 +59,34 @@ def test_suite(port="COM5"):
         st = nav.home()
         assert st.get("locked") is False
         print(f"  [PASS] Home limpo e pronto")
+
+        # Teste 7: Navegacao Automatizada para o Submenu Wi-Fi
+        print("\n[7] Testando navegacao para WIFI_SUBMENU...")
+        st_wifi = nav.goto("WIFI_SUBMENU")
+        assert st_wifi.get("wifi_substate") == "SUBMENU", f"Esperado SUBMENU, obtido {st_wifi.get('wifi_substate')}"
+        assert st_wifi.get("wifi_menu") is True
+        print(f"  [PASS] Submenu Wi-Fi alcancado com sucesso (wifi_cursor={st_wifi.get('wifi_cursor')})")
+        nav.screenshot("captures/test_nav_wifi_submenu.png")
+
+        # Teste 8: Navegacao interna no Submenu Wi-Fi (cursor 0 -> 1)
+        print("\n[8] Testando selecao interna do Submenu Wi-Fi (press D)...")
+        nav.press("d", 80)
+        time.sleep(0.3)
+        st_down = nav.query_ui()
+        assert st_down.get("wifi_cursor") == 1, f"Esperado wifi_cursor=1, obtido {st_down.get('wifi_cursor')}"
+        print(f"  [PASS] Cursor desceu para opcao 1 ('Conectar Wi-Fi STA')")
+
+        # Teste 9: Saida do Submenu Wi-Fi via Botao Esquerdo (L)
+        print("\n[9] Testando retorno do Submenu Wi-Fi para o carrossel (press L)...")
+        nav.press("l", 80)
+        time.sleep(0.3)
+        st_exit = nav.query_ui()
+        assert st_exit.get("wifi_substate") == "OFF" or st_exit.get("wifi_menu") is False
+        print(f"  [PASS] Submenu Wi-Fi encerrado com sucesso (modo={st_exit.get('mode_name')})")
+
+        # Teste 10: Reset Home final
+        print("\n[10] Reset Home final...")
+        nav.home()
 
     print("\n=== TODOS OS TESTES DE NAVEGACAO PASSARAM COM SUCESSO! ===")
 

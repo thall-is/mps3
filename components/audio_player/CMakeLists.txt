@@ -15,6 +15,7 @@ idf_component_register(
         eq
         esp_http_client
         audio_meter
+        sd_card
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -O3)

@@ -53,6 +53,14 @@ struct DirScan {
 bool has_supported_extension(const char *name);
 
 /**
+ * @brief Verifica se o arquivo ou caminho corresponde a uma playlist (.m3u / .m3u8).
+ *
+ * @param[in] name Nome do arquivo ou caminho completo.
+ * @return true se terminar em .m3u ou .m3u8; false caso contrário.
+ */
+bool is_playlist_extension(const char *name);
+
+/**
  * @brief Identifica se o arquivo ou diretório é lixo de sistema ou arquivo oculto.
  *
  * Filtra arquivos que começam com '.', pastas de sistema como 'System Volume Information',

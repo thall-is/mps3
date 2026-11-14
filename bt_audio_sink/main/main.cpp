@@ -22,6 +22,7 @@
  #include "esp_ota_ops.h"
  #include "esp_partition.h"
  #include "esp_bt_device.h"
+ #include "esp_gap_bt_api.h"
  #include "bt/a2dp_sink_native.h"
 
  // Modular components
@@ -380,7 +381,7 @@
  static void onBleName(const char* name, size_t len) {
      g_settings.saveDeviceName(name);
      // Update Classic Bluetooth (A2DP) device name
-     esp_bt_gap_set_device_name(name);
+     esp_bt_dev_set_device_name(name);
      // BLE advertising name is updated by ble_gatt
      ESP_LOGI(TAG, "BLE name changed: %s", name);
  }

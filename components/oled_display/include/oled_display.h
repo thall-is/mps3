@@ -95,6 +95,14 @@ void oled_display_show_list(const char **names, int count, int cursor,
                              const playback_state_t *now_playing);
 
 /**
+ * @brief Aciona o badge HUD temporário de Salto Alfabético ([ A-Z: X ]) sobre a lista.
+ *
+ * @param[in] letter Caractere inicial alcançado pelo salto (ex: 'A'..'Z' ou '#').
+ */
+void oled_display_trigger_az_hud(char letter);
+
+
+/**
  * @brief Exibe mensagem informativa temporária de até duas linhas de texto.
  *
  * @param[in] line1 Texto da primeira linha.
@@ -205,11 +213,33 @@ void oled_display_show_wifi_connected(const char *ip, const char *mdns_host, int
 void oled_display_show_wifi_transfer(const char *filename, int file_pct, int overall_pct, int idx, int count, float kbps, int eta_sec, int total_eta, int rssi);
 
 /**
+ * @brief Exibe status de streaming de áudio em tempo real para a Central Web.
+ *
+ * @param[in] filename   Nome da faixa em streaming.
+ * @param[in] buffer_pct Porcentagem bufferizada da faixa (0-100%).
+ * @param[in] kbps       Taxa de transferência em KB/s.
+ * @param[in] rssi       Nível de sinal Wi-Fi (-dBm).
+ */
+void oled_display_show_wifi_streaming(const char *filename, int buffer_pct, float kbps, int rssi);
+
+/**
  * @brief Exibe tela de confirmação de conclusão de transferência Wi-Fi.
  *
  * @param[in] files_received Quantidade de arquivos recebidos com sucesso.
  */
 void oled_display_show_wifi_done(int files_received);
+
+typedef struct {
+    char ssid[33];
+    int8_t rssi;
+    uint8_t authmode;
+} wifi_scan_display_ap_t;
+
+void oled_display_show_wifi_submenu(int cursor);
+void oled_display_show_wifi_scan(const wifi_scan_display_ap_t *aps, int count, int cursor, int top_idx, bool is_scanning);
+void oled_display_show_wifi_keyboard(const char *ssid, const char *input_buf, int cur_r, int cur_c, int shift_mode);
+void oled_display_show_wifi_manage(const char (*ssids)[33], const char (*passes)[65], int count, int cursor, int top_idx);
+void oled_display_show_wifi_network_action(const char *ssid, const char *pass, int action_cursor);
 
 /**
  * @brief Renderiza a interface visual de ajuste do equalizador paramétrico.
@@ -329,6 +359,14 @@ void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int gr
 void oled_display_show_unsupported(const char *filename);
 
 /**
+ * @brief Exibe notificação com monólito SEELE para formato não suportado ou limite físico excedido.
+ *
+ * @param[in] filename Nome do arquivo incompatível.
+ * @param[in] reason   Motivo ou detalhe do erro (ex: "FLAC max 24b/192k", "WAV max 32b/384k", "Formato nao suportado").
+ */
+void oled_display_show_unsupported_ex(const char *filename, const char *reason);
+
+/**
  * @brief Exibe tela de configuração do modo de ordenação de músicas (Nome A-Z vs Data mtime).
  *
  * @param[in] mode Modo selecionado (0=Nome, 1=Data).
@@ -410,6 +448,81 @@ void oled_display_show_lock_clock_cfg(int opt_idx);
  * @return esp_err_t ESP_OK em caso de sucesso.
  */
 esp_err_t oled_display_capture_buffer(uint8_t *dest_buf);
+
+/**
+ * @brief Dispara a animação visual de Like (coração) ou Deslike (coração partido) sobreposta na tela.
+ *
+ * @param[in] liked     true para coração cheio (Like), false para partido (Unlike).
+ * @param[in] toast_msg Mensagem de feedback (ex: "+ Favoritos", "- Favoritos").
+ */
+void oled_display_trigger_heart_anim(bool liked, const char *toast_msg);
+
+/**
+ * @brief Configura a visibilidade, o progresso e a direção selecionada do HUD de acordes (Bolhas / Rosa dos Ventos).
+ *
+ * @param[in] visible      true se o HUD deve ser desenhado na tela.
+ * @param[in] progress_pct Progresso de 0 a 100% até o bloqueio completo.
+ * @param[in] selected_dir Direção ativa (-1 = nenhuma, 0 = UP, 1 = DOWN, 2 = LEFT, 3 = RIGHT).
+ */
+typedef enum {
+    CHORD_DRAWER_NONE = 0,
+    CHORD_DRAWER_PLAYLISTS, // Esquerda: Semi Aba de Playlists
+    CHORD_DRAWER_EQUALIZER, // Direita: Semi Aba de Presets do Equalizador
+    CHORD_DRAWER_MODES      // Baixo: Semi Aba de Modos de Reproducao (Loop e Shuffle)
+} chord_drawer_mode_t;
+
+/**
+ * @brief Configura a Semi Aba (Drawer) ativa dentro da bolha semi expandida.
+ *
+ * @param[in] mode        Tipo da semi aba ativa (NONE, PLAYLISTS ou EQUALIZER).
+ * @param[in] expand_pct  Porcentagem de expansao da bolha (0..100%).
+ * @param[in] items       Vetor de strings com os nomes dos itens (playlists ou presets de EQ).
+ * @param[in] item_count  Total de itens no vetor.
+ * @param[in] cursor_idx  Indice do item em foco.
+ * @param[in] active_idx  Indice do item atualmente em vigor no audio.
+ */
+void oled_display_set_chord_drawer(chord_drawer_mode_t mode, uint8_t expand_pct, const char **items, int item_count, int cursor_idx, int active_idx);
+
+void oled_display_set_chord_hud(bool visible, uint8_t progress_pct, int8_t selected_dir, bool is_liked);
+
+/**
+ * @brief Dispara a animacao de expansao de bolha com toast centralizado em tela cheia.
+ *
+ * @param[in] cx          Coordenada X do centro da bolha (ex: 64, 0, 127).
+ * @param[in] cy          Coordenada Y do centro da bolha (ex: 0, 63, 31).
+ * @param[in] line1       Texto da linha principal de confirmacao (ex: "FAVORITADO").
+ * @param[in] line2       Texto complementar secundario (ex: nome da playlist ou acao).
+ * @param[in] icon_16x16  Bitmap XBM 16x16 opcional (ex: coracao cheio/quebrado, ou NULL).
+ */
+void oled_display_trigger_bubble_expand_toast(int cx, int cy, const char *line1, const char *line2, const uint8_t *icon_16x16);
+
+/**
+ * @brief Renderiza overlays ativos (HUD de acordes, animação de like) sobre o buffer atual.
+ */
+void oled_display_render_overlays(void);
+
+typedef enum {
+    OLED_LOCK_ANIM_NONE = 0,
+    OLED_LOCK_ANIM_CLOSING,  // Bloqueio: circulo cresce do centro (0 -> 74 px) tampando a tela
+    OLED_LOCK_ANIM_OPENING   // Desbloqueio: circulo encolhe ate o centro (74 -> 0 px) revelando a tela
+} oled_lock_anim_t;
+
+/**
+ * @brief Aciona a animacao de transicao de bloqueio ou desbloqueio.
+ *
+ * @param[in] closing true para fechar/bloquear (0 -> 74 px), false para abrir/desbloquear (74 -> 0 px).
+ */
+void oled_display_trigger_lock_anim(bool closing);
+
+/**
+ * @brief Informa se alguma animacao de bloqueio/desbloqueio esta ativa.
+ */
+bool oled_display_is_lock_anim_active(void);
+
+/**
+ * @brief Retorna o tipo de animacao de bloqueio em andamento (NONE, CLOSING ou OPENING).
+ */
+oled_lock_anim_t oled_display_get_lock_anim_type(void);
 
 #ifdef __cplusplus
 }

@@ -4,6 +4,7 @@ idf_component_register(
         "battery.c"
         "rgb_led.c"
         "rtc_ds3231.c"
+        "pcf8574.c"
         "pwr_governor.c"
     INCLUDE_DIRS
         "include"

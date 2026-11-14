@@ -27,6 +27,8 @@ typedef struct {
     const char *title;          /**< Título da faixa. */
     const char *artist;         /**< Nome do artista. */
     const char *album;          /**< Nome do álbum. */
+    const char *genre;          /**< Gênero musical extraído das tags (ou vazio). */
+    uint16_t release_year;      /**< Ano de lançamento extraído das tags (ex: 1973, ou 0). */
     const char *codec;          /**< Formato do codec ("FLAC", "MP3", "WAV", etc.). */
     uint32_t sample_rate;       /**< Taxa de amostragem em Hz (ex: 44100, 192000). */
     uint32_t bits_per_sample;   /**< Resolução em bits (16, 24, 32). */

@@ -13,6 +13,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -30,6 +31,26 @@ extern "C" {
  *   - ESP_FAIL: Falha ao alocar canal ou descritores DMA.
  */
 esp_err_t i2s_output_init(void);
+
+/**
+ * @brief Desinicializa o canal transmissor I2S e desaloca todos os buffers e descritores DMA.
+ *
+ * Utilizado durante os modos de transferência Wi-Fi de alta velocidade e SDMMC para
+ * devolver ~96 KB de memória DRAM interna DMA ao heap do sistema, permitindo que o
+ * pipeline de transferência aloque bounce buffers contíguos de até 64 KB.
+ *
+ * @return 
+ *   - ESP_OK: Canal I2S desalocado com sucesso ou já desinicializado.
+ *   - ESP_FAIL: Falha ao desalocar o canal no driver ESP-IDF.
+ */
+esp_err_t i2s_output_deinit(void);
+
+/**
+ * @brief Consulta se o driver de saída I2S está atualmente inicializado com canal DMA ativo.
+ *
+ * @return true se o canal estiver ativo e pronto; false se foi desinicializado.
+ */
+bool i2s_output_is_initialized(void);
 
 /**
  * @brief Reconfigura a taxa de amostragem do canal I2S (de 8 kHz a 192 kHz).

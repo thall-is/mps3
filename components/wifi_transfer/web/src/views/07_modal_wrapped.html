@@ -1,0 +1,370 @@
+<!-- ========================================================================
+     VIEW 07: MPS3 Wrapped, Estatísticas de Escuta e Ponte PC -> Smartphone
+     ======================================================================== -->
+    <div id="wrappedModal" class="modal-backdrop" style="display:none;">
+        <div class="modal-card" style="max-width:780px;max-height:92vh;display:flex;flex-direction:column;">
+            <!-- Cabeçalho -->
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:10px;margin-bottom:10px;">
+                <h3 style="margin:0;display:flex;align-items:center;gap:8px;font-size:1.12em;">
+                    <span>📊 MPS3 Wrapped &amp; Estatísticas</span>
+                    <span id="wrpDataSourceBadge" style="font-size:0.68em;padding:2px 8px;border-radius:10px;background:var(--bg-subtle);color:var(--accent-color);border:1px solid var(--border-color);font-weight:bold;">Cartão SD</span>
+                </h3>
+                <button type="button" id="btnCloseWrapped" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:var(--text-muted);padding:4px 8px;">✕</button>
+            </div>
+
+            <!-- Abas Principais -->
+            <div class="wrp-tabs">
+                <button type="button" id="wrpTabStatsBtn" class="wrp-tab-btn active" onclick="switchWrappedTab('stats')">📊 Painel &amp; Hábitos</button>
+                <button type="button" id="wrpTabStudioBtn" class="wrp-tab-btn" onclick="switchWrappedTab('studio')">✨ Criar Mídia Social &amp; Enviar ao Celular</button>
+            </div>
+
+            <!-- Barra de Filtros Globais -->
+            <div class="wrp-filter-bar">
+                <div class="wrp-pill-group" id="wrpPeriodGroup">
+                    <button type="button" class="wrp-pill active" data-period="all" onclick="setWrappedPeriod('all')">Todo o Período</button>
+                    <button type="button" class="wrp-pill" data-period="year" onclick="setWrappedPeriod('year')">Este Ano</button>
+                    <button type="button" class="wrp-pill" data-period="30d" onclick="setWrappedPeriod('30d')">Últimos 30d</button>
+                    <button type="button" class="wrp-pill" data-period="7d" onclick="setWrappedPeriod('7d')">Últimos 7d</button>
+                </div>
+                <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+                    <select id="wrpCatSelect" onchange="setWrappedCategory(this.value)" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);font-size:0.76em;font-weight:600;">
+                        <option value="all">🎵 Música + Podcast</option>
+                        <option value="music">🎸 Apenas Música</option>
+                        <option value="podcast">🎙️ Apenas Podcasts</option>
+                    </select>
+                    <button type="button" id="btnWrpToggleDemo" class="btn-secondary" onclick="toggleWrappedDemoMode()" style="padding:4px 8px;font-size:0.74em;" title="Alternar entre dados reais do cartão SD e prévia interativa de demonstração">🧪 Demo</button>
+                    <button type="button" id="btnWrpImportLocal" class="btn-secondary" onclick="document.getElementById('wrpLocalFileInput').click()" style="padding:4px 8px;font-size:0.74em;" title="Importar arquivo events_YYYY.jsonl ou tracks_summary.json do computador">📂 Importar</button>
+                    <input type="file" id="wrpLocalFileInput" accept=".jsonl,.json" style="display:none" onchange="handleWrappedFileImport(this.files)">
+                </div>
+            </div>
+
+            <!-- Corpo Rolável -->
+            <div style="overflow-y:auto;padding-right:4px;flex:1;">
+                <!-- Banner Informativo (quando cartão SD ainda não tem scrobbles ou está em modo Demo) -->
+                <div id="wrpDemoBanner" class="wrp-demo-banner">
+                    <span id="wrpDemoBannerText">🧪 Exibindo dados de demonstração para pré-visualizar os gráficos e o gerador de Stories.</span>
+                    <button type="button" class="btn-secondary" onclick="refreshWrappedFromSd()" style="padding:3px 9px;font-size:0.88em;font-weight:700;">🔄 Recarregar SD</button>
+                </div>
+
+                <!-- =========================================================
+                     ABA 1: PAINEL ANALÍTICO & HÁBITOS DE ESCUTA
+                     ========================================================= -->
+                <div id="wrpStatsPanel">
+                    <!-- Card Hero: Persona Comportamental & Idade Musical -->
+                    <div class="wrp-persona-hero">
+                        <div class="wrp-persona-top">
+                            <span class="wrp-persona-badge" id="wrpPersonaBadge">PERFIL DE ESCUTA</span>
+                            <span class="wrp-era-chip" id="wrpEraChip" style="display:none;">🕰️ Alma Musical</span>
+                        </div>
+                        <h4 class="wrp-persona-title" id="wrpPersonaTitle">Analisando sua jornada sonora...</h4>
+                        <p class="wrp-persona-desc" id="wrpPersonaDesc">Carregando seu histórico privado de escuta diretamente do cartão MicroSD do MPS3.</p>
+                    </div>
+
+                    <!-- 6 KPIs Humanos & Comportamentais -->
+                    <div class="wrp-kpi-grid">
+                        <div class="wrp-kpi-card">
+                            <span class="wrp-kpi-label">⏱️ Tempo Imerso</span>
+                            <span class="wrp-kpi-val" id="wrpKpiTime">0h 00m</span>
+                            <span class="wrp-kpi-sub" id="wrpKpiVinyl">0 LPs de vinil</span>
+                        </div>
+                        <div class="wrp-kpi-card">
+                            <span class="wrp-kpi-label">📅 Dia Recorde</span>
+                            <span class="wrp-kpi-val" id="wrpKpiPeakDate">--</span>
+                            <span class="wrp-kpi-sub" id="wrpKpiPeakDateSub">Maior maratona em 1 dia</span>
+                        </div>
+                        <div class="wrp-kpi-card">
+                            <span class="wrp-kpi-label">🔁 Maior Vício</span>
+                            <span class="wrp-kpi-val" id="wrpKpiLoopTrack">--</span>
+                            <span class="wrp-kpi-sub" id="wrpKpiLoopSub">Recorde no Repeat</span>
+                        </div>
+                        <div class="wrp-kpi-card">
+                            <span class="wrp-kpi-label">👑 Domínio #1</span>
+                            <span class="wrp-kpi-val" id="wrpKpiTopArtist">--</span>
+                            <span class="wrp-kpi-sub" id="wrpKpiTopArtistShare">0% do seu tempo total</span>
+                        </div>
+                        <div class="wrp-kpi-card">
+                            <span class="wrp-kpi-label">🧘 Escuta Profunda</span>
+                            <span class="wrp-kpi-val" id="wrpKpiZeroSkip">0%</span>
+                            <span class="wrp-kpi-sub" id="wrpKpiAlbumSess">0 sessões de álbum</span>
+                        </div>
+                        <div class="wrp-kpi-card">
+                            <span class="wrp-kpi-label">🔥 Sequência &amp; Radar</span>
+                            <span class="wrp-kpi-val" id="wrpKpiStreak">0 dias</span>
+                            <span class="wrp-kpi-sub" id="wrpKpiDiscoveries">0 descobertas no período</span>
+                        </div>
+                    </div>
+
+                    <!-- Gráficos Comportamentais: Relógio Biológico 24h + Décadas & Gêneros -->
+                    <div class="wrp-section-grid">
+                        <div class="wrp-box">
+                            <div class="wrp-box-title">
+                                <span>🕒 Relógio Biológico (24h)</span>
+                                <span id="wrpPeakHourLabel" style="font-size:0.84em;color:var(--accent-color);">Pico: --h</span>
+                            </div>
+                            <div class="wrp-hours-bars" id="wrpHoursBars"></div>
+                            <div class="wrp-hours-axis">
+                                <span>00h</span><span>06h</span><span>12h</span><span>18h</span><span>23h</span>
+                            </div>
+                            <div id="wrpDayNightSplit" class="wrp-daynight-row"></div>
+                            <div id="wrpWeekdaysMini" style="margin-top:8px;padding-top:7px;border-top:1px solid var(--border-color);font-size:0.75em;color:var(--text-muted);display:flex;justify-content:space-between;gap:4px;"></div>
+                        </div>
+
+                        <div class="wrp-box">
+                            <div class="wrp-box-title">
+                                <span id="wrpEraBoxTitle">🕰️ Décadas &amp; Gêneros Musicais</span>
+                                <span id="wrpMusicalAgeLabel" style="font-size:0.84em;color:var(--accent-color);">--</span>
+                            </div>
+                            <div class="wrp-dna-bar" id="wrpDecadesBar"></div>
+                            <div class="wrp-dna-legend" id="wrpDecadesLegend"></div>
+                            <div class="wrp-genre-pills" id="wrpTopGenresPills"></div>
+                        </div>
+                    </div>
+
+                    <!-- Rankings Principais: Top Faixas & Top Artistas (% Share) -->
+                    <div class="wrp-section-grid">
+                        <div class="wrp-box">
+                            <div class="wrp-box-title">
+                                <span>🏆 Top Faixas Mais Ouvidas</span>
+                            </div>
+                            <div class="wrp-rank-list" id="wrpTopTracksList"></div>
+                        </div>
+
+                        <div class="wrp-box">
+                            <div class="wrp-box-title">
+                                <span>🎤 Top Artistas &amp; Criadores</span>
+                            </div>
+                            <div class="wrp-rank-list" id="wrpTopArtistsList"></div>
+                        </div>
+                    </div>
+
+                    <!-- Rankings de Profundidade: Top Álbuns & Fases Sonoras -->
+                    <div class="wrp-section-grid">
+                        <div class="wrp-box">
+                            <div class="wrp-box-title">
+                                <span>💿 Top Álbuns Mais Ouvidos</span>
+                            </div>
+                            <div class="wrp-rank-list" id="wrpTopAlbumsList"></div>
+                        </div>
+
+                        <div class="wrp-box">
+                            <div class="wrp-box-title">
+                                <span>📈 Evolução &amp; Fases Sonoras</span>
+                                <span id="wrpPhasesSubLabel" style="font-size:0.78em;color:var(--text-muted);">Líder por período</span>
+                            </div>
+                            <div class="wrp-rank-list" id="wrpPhasesList"></div>
+                        </div>
+                    </div>
+
+                    <!-- Curiosidades Comportamentais & Botão CTA para criar o Card Social -->
+                    <div class="wrp-box" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                        <div id="wrpFunFactsText" style="font-size:0.81em;color:var(--text-regular);flex:1;min-width:200px;line-height:1.5;"></div>
+                        <button type="button" class="wrp-btn-hero" onclick="switchWrappedTab('studio')">
+                            <span>✨ Criar Card p/ Stories &amp; Enviar ao Celular</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- =========================================================
+                     ABA 2: ESTÚDIO SOCIAL & PONTE PC -> SMARTPHONE
+                     ========================================================= -->
+                <div id="wrpStudioPanel" style="display:none;">
+                    <div class="wrp-studio-layout">
+                        <!-- Coluna Esquerda: Preview Ao Vivo do Canvas -->
+                        <div class="wrp-canvas-preview-wrap">
+                            <canvas id="wrappedCanvas" width="1080" height="1920"></canvas>
+                            <div id="wrpCanvasDimInfo" style="margin-top:8px;font-size:0.72em;color:#94a3b8;font-family:monospace;">1080 × 1920 px • Stories (9:16)</div>
+                        </div>
+
+                        <!-- Coluna Direita: Personalização + Ponte p/ Smartphone -->
+                        <div class="wrp-studio-controls">
+                            <div class="wrp-ctrl-group">
+                                <span class="wrp-ctrl-label">1. Formato da Rede Social</span>
+                                <div class="wrp-pill-group" id="wrpFormatGroup">
+                                    <button type="button" class="wrp-pill active" data-fmt="story" onclick="setWrappedFormat('story')">📱 Stories / Reels / Status (9:16)</button>
+                                    <button type="button" class="wrp-pill" data-fmt="feed" onclick="setWrappedFormat('feed')">🖼️ Feed Instagram (4:5)</button>
+                                    <button type="button" class="wrp-pill" data-fmt="square" onclick="setWrappedFormat('square')">🟦 Quadrado / X (1:1)</button>
+                                </div>
+                            </div>
+
+                            <div class="wrp-ctrl-group">
+                                <span class="wrp-ctrl-label">2. Cor do Display OLED 128×64 &amp; Estilo</span>
+                                <div class="wrp-pill-group" id="wrpThemeGroup">
+                                    <button type="button" class="wrp-pill active" data-wtheme="oled_blue" onclick="setWrappedCardTheme('oled_blue')">🔵 OLED Azul</button>
+                                    <button type="button" class="wrp-pill" data-wtheme="oled_white" onclick="setWrappedCardTheme('oled_white')">⚪ OLED Branco</button>
+                                    <button type="button" class="wrp-pill" data-wtheme="oled_yellow" onclick="setWrappedCardTheme('oled_yellow')">🟡 OLED Amarelo</button>
+                                    <button type="button" class="wrp-pill" data-wtheme="oled_green" onclick="setWrappedCardTheme('oled_green')">🟢 OLED Verde</button>
+                                    <button type="button" class="wrp-pill" data-wtheme="oled_dual" onclick="setWrappedCardTheme('oled_dual')">🌗 OLED Dual-Zone</button>
+                                    <button type="button" class="wrp-pill" data-wtheme="cyber" onclick="setWrappedCardTheme('cyber')">⚡ Cyber</button>
+                                    <button type="button" class="wrp-pill" data-wtheme="gold" onclick="setWrappedCardTheme('gold')">🔥 Tube Gold</button>
+                                </div>
+                            </div>
+
+                            <div class="wrp-ctrl-group">
+                                <span class="wrp-ctrl-label">3. Layout do Card &amp; Assinatura</span>
+                                <div class="wrp-pill-group" id="wrpTemplateGroup" style="margin-bottom:8px;">
+                                    <button type="button" class="wrp-pill active" data-wtpl="festival" onclick="setWrappedTemplate('festival')">🎪 Meu Festival (1-Bit)</button>
+                                    <button type="button" class="wrp-pill" data-wtpl="oled_matrix" onclick="setWrappedTemplate('oled_matrix')">🔲 Pôster Full 1-Bit</button>
+                                    <button type="button" class="wrp-pill" data-wtpl="albums_era" onclick="setWrappedTemplate('albums_era')">💿 Álbuns &amp; Era</button>
+                                    <button type="button" class="wrp-pill" data-wtpl="summary" onclick="setWrappedTemplate('summary')">🏆 Resumo Geral</button>
+                                    <button type="button" class="wrp-pill" data-wtpl="top10" onclick="setWrappedTemplate('top10')">🎵 Top 10</button>
+                                </div>
+                                <input type="text" id="wrpUserHandleInput" maxlength="34" placeholder="Assinatura opcional no card (ex: @seu_nome)" oninput="renderWrappedCanvas()" style="width:100%;box-sizing:border-box;padding:7px 10px;border-radius:6px;border:1px solid var(--border-input);font-size:0.83em;">
+                            </div>
+
+                            <!-- Ações Inteligentes (Smartphone Nativo + Ponte PC -> Celular via QR Code) -->
+                            <div class="wrp-ctrl-group" style="border-color:var(--accent-color);">
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px;">
+                                    <span class="wrp-ctrl-label" style="margin:0;">4. Exportar &amp; Compartilhar</span>
+                                    <div class="wrp-pill-group" id="wrpMediaTypeGroup">
+                                        <button type="button" class="wrp-pill active" data-mtype="image" onclick="setWrappedMediaType('image')">🖼️ Imagem</button>
+                                        <button type="button" class="wrp-pill" data-mtype="video" onclick="setWrappedMediaType('video')">🎬 Vídeo OLED 1-Bit</button>
+                                    </div>
+                                </div>
+
+                                <!-- Painel de Configurações de Vídeo (OLED Animado 1-Bit) -->
+                                <div id="wrpVideoControlsBox" style="display:none;background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:8px;padding:10px;margin-bottom:12px;">
+                                    <!-- 1. Estilo da Narrativa / Storyboard -->
+                                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                                        <span style="font-weight:700;font-size:0.81em;color:var(--text-primary);">Estilo da Narrativa:</span>
+                                        <span id="wrpVideoEngineBadge" style="font-size:0.68em;padding:1px 6px;border-radius:6px;background:rgba(0,229,255,0.12);color:var(--accent-color);border:1px solid rgba(0,229,255,0.3);font-weight:700;">H.264 MP4</span>
+                                    </div>
+                                    <div class="wrp-pill-group" id="wrpVideoStyleGroup" style="margin-bottom:10px;">
+                                        <button type="button" class="wrp-pill active" data-vstyle="festival" onclick="setWrappedVideoStyle('festival')" title="Lineup do Festival revelado de cima para baixo com marquees">🎪 Meu Festival</button>
+                                        <button type="button" class="wrp-pill" data-vstyle="storyboard" onclick="setWrappedVideoStyle('storyboard')" title="Retrospectiva tela a tela: KPIs, Top Artistas, Relógio 24h e Persona">🎬 Storyboard Wrapped</button>
+                                    </div>
+
+                                    <!-- 2. Modularização de Conteúdo (O que mostrar) -->
+                                    <div style="margin-bottom:8px;">
+                                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                                            <span style="font-weight:700;font-size:0.81em;color:var(--text-primary);">Módulos Incluídos:</span>
+                                            <span style="font-size:0.7em;color:var(--accent-color);cursor:pointer;text-decoration:underline;" onclick="resetWrappedVideoModules()">Marcar Todos</span>
+                                        </div>
+                                        <div class="wrp-pill-group" id="wrpVideoModulesGroup" style="margin-bottom:8px;">
+                                            <button type="button" class="wrp-pill active" data-vmod="stage_time" onclick="toggleWrappedVideoModule('stage_time')">⏳ Palco</button>
+                                            <button type="button" class="wrp-pill active" data-vmod="headliner" onclick="toggleWrappedVideoModule('headliner')">👑 Headliner</button>
+                                            <button type="button" class="wrp-pill active" data-vmod="coheadliners" onclick="toggleWrappedVideoModule('coheadliners')">🎸 Co-Headliners</button>
+                                            <button type="button" class="wrp-pill active" data-vmod="special_guests" onclick="toggleWrappedVideoModule('special_guests')">👥 Guests</button>
+                                            <button type="button" class="wrp-pill active" data-vmod="album" onclick="toggleWrappedVideoModule('album')">💿 Álbum</button>
+                                            <button type="button" class="wrp-pill active" data-vmod="clock24h" onclick="toggleWrappedVideoModule('clock24h')">⏰ Relógio 24h</button>
+                                            <button type="button" class="wrp-pill active" data-vmod="persona" onclick="toggleWrappedVideoModule('persona')">🎫 Persona</button>
+                                        </div>
+                                    </div>
+
+                                    <!-- 3. Duração da Animação (30 FPS) -->
+                                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                                        <span style="font-weight:700;font-size:0.81em;color:var(--text-primary);">Duração da Animação (30 FPS):</span>
+                                    </div>
+                                    <div class="wrp-pill-group" id="wrpVideoDurationGroup" style="margin-bottom:10px;">
+                                        <button type="button" class="wrp-pill" data-vpreset="flash" onclick="setWrappedVideoPreset('flash')" title="120 quadros • Status WhatsApp / Teaser rápido">⚡ Flash (4s)</button>
+                                        <button type="button" class="wrp-pill active" data-vpreset="rapido" onclick="setWrappedVideoPreset('rapido')" title="180 quadros • Story dinâmico que prende">🚀 Rápido (6s)</button>
+                                        <button type="button" class="wrp-pill" data-vpreset="story" onclick="setWrappedVideoPreset('story')" title="240 quadros • Story completo e confortável">🎬 Story (8s)</button>
+                                        <button type="button" class="wrp-pill" data-vpreset="completo" onclick="setWrappedVideoPreset('completo')" title="450 quadros • Retrospectiva íntegra / Reels">🎞️ Completo (15s)</button>
+                                    </div>
+
+                                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                                        <button type="button" id="btnWrpPreviewVideo" class="btn-secondary" onclick="toggleWrappedVideoPreview()" style="flex:1;padding:8px 10px;font-weight:700;font-size:0.85em;">
+                                            ▶ Pré-visualizar Animação
+                                        </button>
+                                        <button type="button" id="btnWrpGenerateVideo" class="wrp-btn-hero" onclick="generateWrappedVideo()" style="flex:1;padding:8px 10px;margin:0;font-size:0.85em;background:linear-gradient(135deg,#00c6ff,#0072ff);">
+                                            🎬 Gerar Vídeo MP4
+                                        </button>
+                                    </div>
+
+                                    <!-- Barra de Progresso de Renderização e Codificação -->
+                                    <div id="wrpVideoProgressWrap" style="display:none;margin-top:10px;">
+                                        <div style="display:flex;justify-content:space-between;font-size:0.75em;color:var(--text-muted);margin-bottom:4px;">
+                                            <span id="wrpVideoProgressStatus">Renderizando quadros 1-bit...</span>
+                                            <span id="wrpVideoProgressPct" style="font-family:monospace;font-weight:700;color:var(--accent-color);">0%</span>
+                                        </div>
+                                        <div style="height:6px;background:rgba(255,255,255,0.12);border-radius:3px;overflow:hidden;">
+                                            <div id="wrpVideoProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#00e5ff,#10b981);transition:width 0.08s linear;"></div>
+                                        </div>
+                                        <div style="display:flex;justify-content:flex-end;margin-top:6px;">
+                                            <button type="button" id="btnWrpCancelVideo" class="btn-secondary" onclick="cancelWrappedVideoEncoding()" style="padding:2px 8px;font-size:0.72em;">Cancelar</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Ações de Imagem Estática (exibidas quando modo imagem está ativo) -->
+                                <div id="wrpImageActionsStack" class="wrp-action-stack">
+                                    <!-- Botão Primário em Smartphones: Gaveta Nativa iOS/Android -->
+                                    <button type="button" id="btnWrpNativeShare" class="wrp-btn-hero" onclick="shareWrappedNative()" style="display:none;background:linear-gradient(135deg,#10b981,#059669);">
+                                        <span>📲 Compartilhar Imagem nos Stories / WhatsApp</span>
+                                    </button>
+
+                                    <!-- Botão Primário no Computador: Ponte Local Wi-Fi via QR Code no MPS3 -->
+                                    <button type="button" id="btnWrpSendPhoneQr" class="wrp-btn-hero" onclick="sendWrappedToPhoneViaMps3()">
+                                        <span>📱 Enviar para o Smartphone (QR Code Instantâneo)</span>
+                                    </button>
+
+                                    <div class="wrp-btn-row">
+                                        <button type="button" id="btnWrpCopyClipboard" class="btn-secondary" onclick="copyWrappedImageToClipboard()" title="Copia os pixels da imagem para colar com Ctrl+V no WhatsApp Web, Telegram ou Discord">📋 Copiar Imagem</button>
+                                        <button type="button" id="btnWrpDownloadPng" class="btn-secondary" onclick="downloadWrappedPng()">💾 Baixar PNG (HD)</button>
+                                    </div>
+                                </div>
+
+                                <!-- Ações de Vídeo (exibidas quando modo vídeo está ativo) -->
+                                <div id="wrpVideoActionsStack" class="wrp-action-stack" style="display:none;">
+                                    <button type="button" id="btnWrpNativeShareVideo" class="wrp-btn-hero" onclick="shareWrappedVideoNative()" style="display:none;background:linear-gradient(135deg,#10b981,#059669);">
+                                        <span>📲 Compartilhar Vídeo nos Stories / WhatsApp</span>
+                                    </button>
+
+                                    <button type="button" id="btnWrpSendPhoneQrVideo" class="wrp-btn-hero" onclick="sendWrappedVideoToPhoneViaMps3()">
+                                        <span>📱 Enviar Vídeo ao Smartphone (QR Code Instantâneo)</span>
+                                    </button>
+
+                                    <div class="wrp-btn-row">
+                                        <button type="button" id="btnWrpDownloadVideo" class="btn-secondary" onclick="downloadWrappedVideo()" title="Baixar arquivo de vídeo MP4 gerado">💾 Baixar Vídeo MP4</button>
+                                    </div>
+                                </div>
+
+                                <!-- Painel QR Code gerado ao enviar para o Smartphone -->
+                                <div id="wrpQrBridgeBox" class="wrp-qr-bridge">
+                                    <div class="wrp-qr-flex">
+                                        <div class="wrp-qr-svg-box" id="wrpQrSvgContainer"></div>
+                                        <div style="flex:1;min-width:180px;">
+                                            <div style="font-weight:800;font-size:0.92em;color:var(--text-primary);margin-bottom:4px;">📲 Aponte a câmera do Smartphone</div>
+                                            <div id="wrpQrStatusMsg" style="font-size:0.79em;color:var(--text-regular);line-height:1.4;margin-bottom:6px;">
+                                                Imagem salva no MPS3! Com o celular no mesmo Wi-Fi, escaneie o QR Code para abrir a tela de compartilhamento 1-toque.
+                                            </div>
+                                            <div id="wrpQrUrlDisplay" style="font-family:monospace;font-size:0.73em;padding:4px 7px;background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:5px;word-break:break-all;color:var(--accent-color);"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TELA MOBILE DEDICADA (?share=wrapped) AO ESCANEAR O QR CODE DO COMPUTADOR -->
+    <div id="wrappedMobileLanding">
+        <div class="wrp-mob-card">
+            <div style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+                <div style="font-weight:800;font-size:1.05em;color:#00e5ff;">📱 MPS3 Wrapped • Pronto p/ Postar</div>
+                <button type="button" onclick="closeMobileShareLanding()" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:8px;padding:5px 10px;font-size:0.82em;cursor:pointer;">Fechar ✕</button>
+            </div>
+
+            <img id="wrappedMobileImg" alt="Meu MPS3 Wrapped">
+            <video id="wrappedMobileVideo" playsinline muted loop autoplay controls style="display:none;width:100%;max-width:320px;border-radius:12px;border:1px solid rgba(0,229,255,0.4);margin-bottom:12px;box-shadow:0 12px 30px rgba(0,0,0,0.6);"></video>
+
+            <button type="button" id="btnMobLandingShare" class="wrp-btn-hero" onclick="shareMobileLandingFile()" style="width:100%;padding:14px;font-size:1em;background:linear-gradient(135deg,#00c6ff,#0072ff);">
+                <span>📲 Compartilhar nos Stories / WhatsApp</span>
+            </button>
+
+            <a id="btnMobLandingDownload" href="#" download="MPS3_Wrapped.png" style="width:100%;box-sizing:border-box;text-align:center;text-decoration:none;padding:11px;border-radius:9px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.22);color:#fff;font-weight:700;font-size:0.9em;">
+                💾 Baixar Mídia Original
+            </a>
+
+            <div style="font-size:0.76em;color:#94a3b8;text-align:center;line-height:1.4;">
+                💡 <strong>Dica rápida:</strong> No iPhone ou Android, você também pode segurar o dedo sobre a imagem acima e tocar em <em>"Salvar em Fotos"</em> ou <em>"Compartilhar"</em>.
+            </div>
+
+            <button type="button" onclick="closeMobileShareLanding(); openWrappedModal();" style="background:none;border:none;color:#00e5ff;font-size:0.84em;font-weight:700;cursor:pointer;padding:6px;text-decoration:underline;">
+                📊 Abrir Painel Completo de Estatísticas no Celular
+            </button>
+        </div>
+    </div>
+

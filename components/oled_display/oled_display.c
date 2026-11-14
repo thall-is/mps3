@@ -13,6 +13,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 #include <math.h>
 #include "u8g2.h"
 #include "esp_log.h"
@@ -78,8 +79,1033 @@ static void apply_brightness_if_needed(void) {
     }
 }
 
+
+static bool s_chord_hud_visible = false;
+static uint8_t s_chord_hud_progress = 0;
+static int8_t s_chord_hud_selected_dir = -1;
+static bool s_chord_hud_is_liked = false;
+
+// Ícones dedicados para o Menu Bolha (Chord HUD)
+static const uint8_t s_bubble_playlist_icon_15x13[] = {
+    0xff, 0x7f, 0x00, 0x00, 0xff, 0x7f, 0x00, 0x00, 0xff, 0x7f, 0x00, 0x00,
+    0xff, 0x7f, 0x00, 0x00, 0xff, 0x7f, 0x00, 0x00, 0xff, 0x7f, 0x00, 0x00,
+    0xff, 0x7f 
+}; // 15x13
+
+static const uint8_t s_bubble_eq_icon_15x16[] = {
+    0x84, 0x10, 0x9f, 0x10, 0x95, 0x10, 0x95, 0x10, 0x9f, 0x10, 0x84, 0x10,
+    0x84, 0x10, 0xe4, 0x13, 0xa4, 0x12, 0xa4, 0x12, 0xe4, 0x13, 0x84, 0x10,
+    0x84, 0x7c, 0x84, 0x54, 0x84, 0x54, 0x84, 0x7c
+}; // 15x16 (diminuido em 1px na altura, faders organizados topo->meio->base)
+
+static const uint8_t s_heart_full_16x16[] = {
+    0x00, 0x00,
+    0x38, 0x1c,
+    0x7c, 0x3e,
+    0xfe, 0x7f,
+    0xfe, 0x7f,
+    0xfe, 0x7f,
+    0xfe, 0x7f,
+    0xfc, 0x3f,
+    0xf8, 0x1f,
+    0xf0, 0x0f,
+    0xe0, 0x07,
+    0xc0, 0x03,
+    0x80, 0x01,
+    0x00, 0x00,
+    0x00, 0x00,
+    0x00, 0x00
+};
+
+static const uint8_t s_heart_broken_16x16[] = {
+    0x00, 0x00,
+    0x38, 0x1c,
+    0x78, 0x3e,
+    0xf0, 0x7e,
+    0xf4, 0x7f,
+    0xee, 0x77,
+    0xdf, 0x7b,
+    0xbe, 0x3f,
+    0xf4, 0x1f,
+    0xe8, 0x0f,
+    0xd0, 0x07,
+    0xa0, 0x03,
+    0x80, 0x01,
+    0x00, 0x00,
+    0x00, 0x00,
+    0x00, 0x00
+};
+
+// Glifos 8x8 de Modos de Reproducao (Loop e Shuffle)
+// Glifos monocromaticos 9x9 pixels (fiei ao desenho do usuario em matriz 9x9)
+static const uint8_t s_icon_loop_all_9x9[18]    = { 0x7d, 0x00, 0x83, 0x00, 0x07, 0x01, 0x00, 0x01, 0x01, 0x00, 0xc1, 0x01, 0x81, 0x01, 0x42, 0x01, 0x3c, 0x00 };
+static const uint8_t s_icon_loop_one_9x9[18]    = { 0x7d, 0x00, 0x83, 0x00, 0x17, 0x01, 0x10, 0x01, 0x11, 0x00, 0xd1, 0x01, 0x91, 0x01, 0x42, 0x01, 0x3c, 0x00 };
+static const uint8_t s_icon_shuf_folder_9x9[18] = { 0xc1, 0x01, 0x82, 0x01, 0x54, 0x01, 0x38, 0x00, 0x6c, 0x00, 0x38, 0x00, 0x54, 0x01, 0x82, 0x01, 0xc1, 0x01 };
+static const uint8_t s_icon_shuf_all_9x9[18]    = { 0xc1, 0x01, 0x82, 0x01, 0x44, 0x01, 0x28, 0x00, 0x10, 0x00, 0x28, 0x00, 0x44, 0x01, 0x82, 0x01, 0xc1, 0x01 };
+static const uint8_t s_icon_heart_outline_9x9[18] = { 0x44, 0x00, 0xaa, 0x00, 0x11, 0x01, 0x01, 0x01, 0x01, 0x01, 0x82, 0x00, 0x44, 0x00, 0x28, 0x00, 0x10, 0x00 };
+static const uint8_t s_icon_heart_solid_9x9[18]   = { 0x44, 0x00, 0xee, 0x00, 0xff, 0x01, 0xff, 0x01, 0xff, 0x01, 0xfe, 0x00, 0x7c, 0x00, 0x38, 0x00, 0x10, 0x00 };
+
+static bool s_expand_toast_active = false;
+static int s_expand_cx = 64;
+static int s_expand_cy = 0;
+static uint32_t s_expand_start_ms = 0;
+static char s_expand_line1[32] = {0};
+static char s_expand_line2[32] = {0};
+static const uint8_t *s_expand_icon = NULL;
+
+void oled_display_trigger_bubble_expand_toast(int cx, int cy, const char *line1, const char *line2, const uint8_t *icon_16x16)
+{
+    s_expand_cx = cx;
+    s_expand_cy = cy;
+    s_expand_start_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    s_expand_toast_active = true;
+    if (line1) {
+        strlcpy(s_expand_line1, line1, sizeof(s_expand_line1));
+    } else {
+        s_expand_line1[0] = '\0';
+    }
+    if (line2) {
+        strlcpy(s_expand_line2, line2, sizeof(s_expand_line2));
+    } else {
+        s_expand_line2[0] = '\0';
+    }
+    s_expand_icon = icon_16x16;
+    s_fb_dirty_all = true;
+}
+
+void oled_display_trigger_heart_anim(bool liked, const char *toast_msg)
+{
+    oled_display_trigger_bubble_expand_toast(64, 0, liked ? "FAVORITADO" : "DESFAVORITADO", toast_msg, liked ? s_heart_full_16x16 : s_heart_broken_16x16);
+}
+
+
+static chord_drawer_mode_t s_drawer_mode = CHORD_DRAWER_NONE;
+static uint8_t s_drawer_expand_pct = 0;
+static uint32_t s_drawer_anim_start_ms = 0;
+static char s_drawer_items[10][32] = {{0}};
+static int s_drawer_item_count = 0;
+static int s_drawer_cursor_idx = 0;
+static int s_drawer_active_idx = -1;
+
+void oled_display_set_chord_drawer(chord_drawer_mode_t mode, uint8_t expand_pct, const char **items, int item_count, int cursor_idx, int active_idx)
+{
+    if (mode != CHORD_DRAWER_NONE && s_drawer_mode == CHORD_DRAWER_NONE) {
+        s_drawer_anim_start_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        s_fb_dirty_all = true;
+    }
+    s_drawer_mode = mode;
+    s_drawer_expand_pct = expand_pct;
+    s_drawer_item_count = (item_count > 10) ? 10 : item_count;
+    s_drawer_cursor_idx = cursor_idx;
+    s_drawer_active_idx = active_idx;
+    for (int i = 0; i < s_drawer_item_count; i++) {
+        if (items && items[i]) {
+            strlcpy(s_drawer_items[i], items[i], sizeof(s_drawer_items[i]));
+        } else {
+            s_drawer_items[i][0] = '\0';
+        }
+    }
+}
+
+void oled_display_set_chord_hud(bool visible, uint8_t progress_pct, int8_t selected_dir, bool is_liked)
+{
+    s_chord_hud_visible = visible;
+    s_chord_hud_progress = progress_pct;
+    s_chord_hud_selected_dir = selected_dir;
+    s_chord_hud_is_liked = is_liked;
+}
+
+#define LOCK_ANIM_DURATION_MS 380
+static oled_lock_anim_t s_lock_anim_type = OLED_LOCK_ANIM_NONE;
+static uint32_t s_lock_anim_start_ms = 0;
+
+void oled_display_trigger_lock_anim(bool closing)
+{
+    s_lock_anim_type = closing ? OLED_LOCK_ANIM_CLOSING : OLED_LOCK_ANIM_OPENING;
+    s_lock_anim_start_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    s_fb_dirty_all = true;
+}
+
+bool oled_display_is_lock_anim_active(void)
+{
+    if (s_lock_anim_type == OLED_LOCK_ANIM_NONE) return false;
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    if ((now - s_lock_anim_start_ms) >= LOCK_ANIM_DURATION_MS) {
+        s_lock_anim_type = OLED_LOCK_ANIM_NONE;
+        return false;
+    }
+    return true;
+}
+
+oled_lock_anim_t oled_display_get_lock_anim_type(void)
+{
+    if (!oled_display_is_lock_anim_active()) {
+        s_lock_anim_type = OLED_LOCK_ANIM_NONE;
+    }
+    return s_lock_anim_type;
+}
+
+typedef struct {
+    char text[64];
+    int offset_px;
+    uint32_t start_ms;
+} marquee_delayed_t;
+
+static void marquee_delayed_reset_if_new(marquee_delayed_t *m, const char *text)
+{
+    if (strcmp(m->text, text) != 0) {
+        strncpy(m->text, text, sizeof(m->text) - 1);
+        m->text[sizeof(m->text) - 1] = '\0';
+        m->offset_px = 0;
+        m->start_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    }
+}
+
+static void draw_marquee_delayed(marquee_delayed_t *m, const char *text, int x_start, int available_w, int y, uint32_t delay_ms)
+{
+    marquee_delayed_reset_if_new(m, text);
+
+    int text_w = u8g2_GetStrWidth(&s_u8g2, m->text);
+    if (text_w <= available_w) {
+        int tx = x_start + (available_w - text_w) / 2;
+        u8g2_DrawStr(&s_u8g2, tx, y, m->text);
+        m->offset_px = 0;
+        return;
+    }
+
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    if ((now - m->start_ms) >= delay_ms) {
+        m->offset_px++;
+    }
+
+    const int gap = 14;
+    int x = x_start - m->offset_px;
+    u8g2_DrawStr(&s_u8g2, x, y, m->text);
+    u8g2_DrawStr(&s_u8g2, x + text_w + gap, y, m->text);
+
+    if (m->offset_px >= text_w + gap) {
+        m->offset_px = 0;
+        m->start_ms = now;
+    }
+}
+
+static marquee_delayed_t s_chord_pl_marquee = {0};
+static marquee_delayed_t s_chord_eq_marquee = {0};
+static marquee_delayed_t s_drawer_pl_marquee = {0};
+static marquee_delayed_t s_drawer_eq_marquee = {0};
+
+static const uint8_t s_glyph_heart_7x6[6] = { 0x36, 0x7F, 0x7F, 0x3E, 0x1C, 0x08 };
+// Novo glifo de selecao 7x7 (diamante estilizado com corte 3D) padronizado entre Playlists e Equalizador
+static const uint8_t s_glyph_diamond_select_7x7[7] = { 0x08, 0x1C, 0x3E, 0x7D, 0x3A, 0x14, 0x08 };
+
+static void oled_draw_bits(int x, int y, int w, int h, const uint8_t *rows, uint8_t color)
+{
+    u8g2_SetDrawColor(&s_u8g2, color);
+    for (int r = 0; r < h; r++) {
+        uint8_t row = rows[r];
+        for (int c = 0; c < w; c++) {
+            if (row & (1 << (w - 1 - c))) {
+                u8g2_DrawPixel(&s_u8g2, x + c, y + r);
+            }
+        }
+    }
+}
+
+static void draw_drawer_marquee(marquee_delayed_t *m, const char *text, int x_start, int available_w, int y, uint32_t delay_ms)
+{
+    marquee_delayed_reset_if_new(m, text);
+
+    int text_w = u8g2_GetStrWidth(&s_u8g2, m->text);
+    if (text_w <= available_w) {
+        u8g2_DrawStr(&s_u8g2, x_start, y, m->text);
+        m->offset_px = 0;
+        return;
+    }
+
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    if ((now - m->start_ms) >= delay_ms) {
+        m->offset_px++;
+    }
+
+    const int gap = 16;
+    int x = x_start - m->offset_px;
+    u8g2_DrawStr(&s_u8g2, x, y, m->text);
+    u8g2_DrawStr(&s_u8g2, x + text_w + gap, y, m->text);
+
+    if (m->offset_px >= text_w + gap) {
+        m->offset_px = 0;
+        m->start_ms = now;
+    }
+}
+
+static void oled_draw_bubble_fill(int cx, int cy, int r, uint8_t dir, uint8_t color)
+{
+    if (r <= 0) return;
+    u8g2_SetDrawColor(&s_u8g2, color);
+    int r2 = r * r;
+    if (dir == 0) { // UP (semicirculo virado para baixo na borda superior)
+        for (int dy = 0; dy <= r; dy++) {
+            int y = cy + dy;
+            if (y < 0 || y >= 64) continue;
+            int dx = (int)sqrtf((float)(r2 - dy * dy));
+            int x1 = cx - dx;
+            int x2 = cx + dx;
+            if (x1 < 0) x1 = 0;
+            if (x2 > 127) x2 = 127;
+            if (x2 >= x1) {
+                u8g2_DrawHLine(&s_u8g2, x1, y, x2 - x1 + 1);
+            }
+        }
+    } else if (dir == 1) { // DOWN (semicirculo virado para cima na borda inferior)
+        for (int dy = -r; dy <= 0; dy++) {
+            int y = cy + dy;
+            if (y < 0 || y >= 64) continue;
+            int dx = (int)sqrtf((float)(r2 - dy * dy));
+            int x1 = cx - dx;
+            int x2 = cx + dx;
+            if (x1 < 0) x1 = 0;
+            if (x2 > 127) x2 = 127;
+            if (x2 >= x1) {
+                u8g2_DrawHLine(&s_u8g2, x1, y, x2 - x1 + 1);
+            }
+        }
+    } else if (dir == 2) { // LEFT (semicirculo virado para direita na borda esquerda)
+        for (int dy = -r; dy <= r; dy++) {
+            int y = cy + dy;
+            if (y < 0 || y >= 64) continue;
+            int dx = (int)sqrtf((float)(r2 - dy * dy));
+            int x2 = cx + dx;
+            if (x2 > 127) x2 = 127;
+            if (x2 >= 0) {
+                u8g2_DrawHLine(&s_u8g2, 0, y, x2 + 1);
+            }
+        }
+    } else if (dir == 3) { // RIGHT (semicirculo virado para esquerda na borda direita)
+        for (int dy = -r; dy <= r; dy++) {
+            int y = cy + dy;
+            if (y < 0 || y >= 64) continue;
+            int dx = (int)sqrtf((float)(r2 - dy * dy));
+            int x1 = cx - dx;
+            if (x1 < 0) x1 = 0;
+            if (x1 <= 127) {
+                u8g2_DrawHLine(&s_u8g2, x1, y, 128 - x1);
+            }
+        }
+    }
+}
+
+static void oled_draw_bubble_outline(int cx, int cy, int r, uint8_t dir, uint8_t color)
+{
+    if (r <= 0) return;
+    u8g2_SetDrawColor(&s_u8g2, color);
+    
+    // Algoritmo de Bresenham (Midpoint Circle): garante contorno 100% solido e continuo sem buracos
+    int x = 0;
+    int y = r;
+    int d = 3 - 2 * r;
+    
+    while (y >= x) {
+        if (dir == 0) { // UP: arco inferior da bolha superior
+            int pts[4][2] = {
+                { cx + x, cy + y }, { cx - x, cy + y },
+                { cx + y, cy + x }, { cx - y, cy + x }
+            };
+            for (int i = 0; i < 4; i++) {
+                int px = pts[i][0];
+                int py = pts[i][1];
+                if (px >= 0 && px < 128 && py >= 0 && py < 64) {
+                    u8g2_DrawPixel(&s_u8g2, px, py);
+                }
+            }
+        } else if (dir == 1) { // DOWN: arco superior da bolha inferior
+            int pts[4][2] = {
+                { cx + x, cy - y }, { cx - x, cy - y },
+                { cx + y, cy - x }, { cx - y, cy - x }
+            };
+            for (int i = 0; i < 4; i++) {
+                int px = pts[i][0];
+                int py = pts[i][1];
+                if (px >= 0 && px < 128 && py >= 0 && py < 64) {
+                    u8g2_DrawPixel(&s_u8g2, px, py);
+                }
+            }
+        }
+        
+        x++;
+        if (d > 0) {
+            y--;
+            d = d + 4 * (x - y) + 10;
+        } else {
+            d = d + 4 * x + 6;
+        }
+    }
+}
+
+void oled_display_render_overlays(void)
+{
+    // 1. HUD de Bolhas Crescentes / Semi Abas Dinamicas (Chord HUD / Lateral Bubbles)
+    if (s_chord_hud_visible || s_drawer_mode != CHORD_DRAWER_NONE) {
+        const int cx_up = 64, cy_up = 0;
+        const int cx_dn = 64, cy_dn = 63;
+        const int cx_lf = 0, cy_lf = 31;
+        const int cx_rt = 127, cy_rt = 31;
+
+        const uint8_t opt_up = U8G2_DRAW_LOWER_LEFT | U8G2_DRAW_LOWER_RIGHT;
+        const uint8_t opt_dn = U8G2_DRAW_UPPER_LEFT | U8G2_DRAW_UPPER_RIGHT;
+        const uint8_t opt_lf = U8G2_DRAW_UPPER_RIGHT | U8G2_DRAW_LOWER_RIGHT;
+        const uint8_t opt_rt = U8G2_DRAW_UPPER_LEFT | U8G2_DRAW_LOWER_LEFT;
+
+        // Se uma Semi Aba (Drawer) estiver ativa:
+        if (s_drawer_mode == CHORD_DRAWER_PLAYLISTS) {
+            // Bolha da Esquerda expande para Semi Aba (r = 28 -> 74 px; em deep hold ate 135 px)
+            uint8_t r_draw = 28;
+            if (s_drawer_expand_pct <= 50) {
+                r_draw = 28 + (uint8_t)(((74 - 28) * s_drawer_expand_pct) / 50);
+            } else {
+                r_draw = 74 + (uint8_t)(((135 - 74) * (s_drawer_expand_pct - 50)) / 50);
+            }
+            if (r_draw > 135) r_draw = 135;
+
+            oled_draw_bubble_fill(cx_lf, cy_lf, r_draw, 2, 0); // Mascara circular preta solida
+            u8g2_SetDrawColor(&s_u8g2, 1);
+            u8g2_DrawCircle(&s_u8g2, cx_lf, cy_lf, r_draw, opt_lf);
+
+            // Conteudo interno renderizado exclusivamente dentro da bolha expandida quando em semi-aba (~50%)
+            if (r_draw >= 45 && s_drawer_expand_pct <= 60) {
+                u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
+
+                // Topo da gaveta: Inicia em X = 0!
+                u8g2_SetDrawColor(&s_u8g2, 1);
+                u8g2_DrawStr(&s_u8g2, 0, 9, "PLAYLISTS");
+
+                int total = s_drawer_item_count;
+                char count_str[32];
+                snprintf(count_str, sizeof(count_str), "%d/%d", s_drawer_cursor_idx + 1, total > 0 ? total : 1);
+                int cnt_w = u8g2_GetStrWidth(&s_u8g2, count_str);
+                int cnt_x = 68 - cnt_w;
+                u8g2_DrawStr(&s_u8g2, cnt_x, 9, count_str);
+                u8g2_DrawHLine(&s_u8g2, 0, 11, cnt_x - 3);
+
+                int start = (s_drawer_cursor_idx >= 3) ? (s_drawer_cursor_idx - 2) : 0;
+                if (start + 4 > total) start = total - 4;
+                if (start < 0) start = 0;
+
+                // Geometria do Arco Flutuante Circular de Rolagem:
+                // Espessura 2px acompanhando o raio r_thumb = r_draw - 3 (ex: 71 px) de Y = 13 a Y = 52
+                int r_thumb = (r_draw > 3) ? (r_draw - 3) : r_draw;
+                const int y_min_scroll = 13;
+                const int y_max_scroll = 52;
+                int total_scroll_span = y_max_scroll - y_min_scroll; // 39 px
+                int max_scroll = (total > 4) ? (total - 4) : 1;
+                int thumb_span = (total > 0) ? ((4 * total_scroll_span) / total) : total_scroll_span;
+                if (thumb_span < 8) thumb_span = 8;
+                if (thumb_span > total_scroll_span) thumb_span = total_scroll_span;
+                int thumb_y_start = y_min_scroll + (start * (total_scroll_span - thumb_span)) / max_scroll;
+                int thumb_y_end = thumb_y_start + thumb_span;
+
+                u8g2_SetDrawColor(&s_u8g2, 1);
+                for (int y = thumb_y_start; y <= thumb_y_end; y++) {
+                    int dy = y - cy_lf;
+                    if (abs(dy) <= r_thumb) {
+                        int dx = (int)round(sqrt((double)(r_thumb * r_thumb - dy * dy)));
+                        u8g2_DrawPixel(&s_u8g2, dx, y);
+                        u8g2_DrawPixel(&s_u8g2, dx - 1, y);
+                    }
+                }
+
+                // Indicadores de overflow nos extremos da curva
+                if (start > 0) {
+                    int dy_up = y_min_scroll - 2 - cy_lf;
+                    if (abs(dy_up) <= r_thumb) {
+                        int dx_up = (int)round(sqrt((double)(r_thumb * r_thumb - dy_up * dy_up)));
+                        u8g2_DrawPixel(&s_u8g2, dx_up, y_min_scroll - 2);
+                    }
+                }
+                if (start + 4 < total) {
+                    int dy_dn = y_max_scroll + 2 - cy_lf;
+                    if (abs(dy_dn) <= r_thumb) {
+                        int dx_dn = (int)round(sqrt((double)(r_thumb * r_thumb - dy_dn * dy_dn)));
+                        u8g2_DrawPixel(&s_u8g2, dx_dn, y_max_scroll + 2);
+                    }
+                }
+
+                // Renderizacao dos 4 itens da lista
+                const int item_h = 10;
+                const int list_top = 13;
+                for (int k = 0; k < 4; k++) {
+                    int idx = start + k;
+                    if (idx >= total) break;
+                    int y_box = list_top + k * item_h;
+                    int y_base = y_box + 7;
+                    bool is_cur = (idx == s_drawer_cursor_idx);
+                    bool is_act = (idx == s_drawer_active_idx);
+
+                    // Curvatura e limite direito da linha com 2px livres antes do arco
+                    int dy_mid = (y_box + 4) - cy_lf;
+                    int dx_thumb = (int)round(sqrt((double)(r_thumb * r_thumb - dy_mid * dy_mid)));
+                    int row_right_edge = dx_thumb - 3;
+                    int box_x0 = 0;
+                    int box_x1 = row_right_edge;
+
+                    uint8_t text_col = is_cur ? 0 : 1;
+
+                    if (is_cur) {
+                        // Caixa solida branca de X = 0 ate box_x1
+                        u8g2_SetDrawColor(&s_u8g2, 1);
+                        u8g2_DrawBox(&s_u8g2, box_x0, y_box, (box_x1 - box_x0 + 1), 9);
+                    }
+
+                    int tx = 0;
+
+                    // Posicao e protecao do icone diamante 7x7 para playlist ativa (padronizado com o equalizador)
+                    int text_clip_x2;
+                    if (is_act) {
+                        int icon_x = box_x1 - 7 - 1;
+                        oled_draw_bits(icon_x, y_box + 1, 7, 7, s_glyph_diamond_select_7x7, text_col);
+                        // Ponta da palavra para rigorosamente 2px antes do icone:
+                        text_clip_x2 = icon_x - 3;
+                    } else {
+                        // Sem icone: 2px de respiro antes do final da caixa
+                        text_clip_x2 = box_x1 - 2;
+                    }
+
+                    // Nome da playlist limpo (sem extensao .m3u)
+                    char clean_name[32];
+                    strlcpy(clean_name, s_drawer_items[idx], sizeof(clean_name));
+                    char *dot = strrchr(clean_name, '.');
+                    if (dot) *dot = '\0';
+
+                    // Item 0: Favoritos com icone de coracao grafico 7x6
+                    if (idx == 0) {
+                        oled_draw_bits(tx, y_box + 1, 7, 6, s_glyph_heart_7x6, text_col);
+                        tx += 8;
+                    }
+
+                    int text_clip_x1 = tx;
+                    int avail_w = text_clip_x2 - text_clip_x1 + 1;
+
+                    if (avail_w > 0) {
+                        u8g2_SetClipWindow(&s_u8g2, text_clip_x1, y_box, text_clip_x2, y_box + 8);
+                        u8g2_SetDrawColor(&s_u8g2, text_col);
+                        if (is_cur) {
+                            draw_drawer_marquee(&s_drawer_pl_marquee, clean_name, tx, avail_w, y_base, 600);
+                        } else {
+                            u8g2_DrawStr(&s_u8g2, tx, y_base, clean_name);
+                        }
+                        u8g2_SetMaxClipWindow(&s_u8g2);
+                    }
+                }
+                u8g2_SetDrawColor(&s_u8g2, 1);
+            }
+        } else if (s_drawer_mode == CHORD_DRAWER_EQUALIZER) {
+            // Bolha da Direita expande para Semi Aba (r = 28 -> 74 px; em deep hold ate 135 px)
+            uint8_t r_draw = 28;
+            if (s_drawer_expand_pct <= 50) {
+                r_draw = 28 + (uint8_t)(((74 - 28) * s_drawer_expand_pct) / 50);
+            } else {
+                r_draw = 74 + (uint8_t)(((135 - 74) * (s_drawer_expand_pct - 50)) / 50);
+            }
+            if (r_draw > 135) r_draw = 135;
+
+            oled_draw_bubble_fill(cx_rt, cy_rt, r_draw, 3, 0); // Mascara circular preta solida
+            u8g2_SetDrawColor(&s_u8g2, 1);
+            u8g2_DrawCircle(&s_u8g2, cx_rt, cy_rt, r_draw, opt_rt);
+
+            // Conteudo interno renderizado exclusivamente dentro da bolha expandida quando em semi-aba (~50%)
+            if (r_draw >= 45 && s_drawer_expand_pct <= 60) {
+                u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
+
+                // Topo da gaveta:
+                int total = s_drawer_item_count;
+                u8g2_SetDrawColor(&s_u8g2, 1);
+                int title_x = 60;
+                u8g2_DrawStr(&s_u8g2, title_x, 9, "EQUALIZADOR");
+                u8g2_DrawHLine(&s_u8g2, title_x, 11, 127 - title_x + 1);
+
+                int start = (s_drawer_cursor_idx >= 3) ? (s_drawer_cursor_idx - 2) : 0;
+                if (start + 4 > total) start = total - 4;
+                if (start < 0) start = 0;
+
+                // Geometria do Arco Flutuante Circular de Rolagem (lado esquerdo da bolha direita):
+                // Espessura 2px acompanhando o raio r_thumb = r_draw - 3 (ex: 71 px) de Y = 13 a Y = 52
+                int r_thumb = (r_draw > 3) ? (r_draw - 3) : r_draw;
+                const int y_min_scroll = 13;
+                const int y_max_scroll = 52;
+                int total_scroll_span = y_max_scroll - y_min_scroll; // 39 px
+                int max_scroll = (total > 4) ? (total - 4) : 1;
+                int thumb_span = (total > 0) ? ((4 * total_scroll_span) / total) : total_scroll_span;
+                if (thumb_span < 8) thumb_span = 8;
+                if (thumb_span > total_scroll_span) thumb_span = total_scroll_span;
+                int thumb_y_start = y_min_scroll + (start * (total_scroll_span - thumb_span)) / max_scroll;
+                int thumb_y_end = thumb_y_start + thumb_span;
+
+                u8g2_SetDrawColor(&s_u8g2, 1);
+                for (int y = thumb_y_start; y <= thumb_y_end; y++) {
+                    int dy = y - cy_rt;
+                    if (abs(dy) <= r_thumb) {
+                        int dx = (int)round(sqrt((double)(r_thumb * r_thumb - dy * dy)));
+                        int x = cx_rt - dx;
+                        u8g2_DrawPixel(&s_u8g2, x, y);
+                        u8g2_DrawPixel(&s_u8g2, x + 1, y);
+                    }
+                }
+
+                // Indicadores de overflow nos extremos da curva
+                if (start > 0) {
+                    int dy_up = y_min_scroll - 2 - cy_rt;
+                    if (abs(dy_up) <= r_thumb) {
+                        int dx_up = (int)round(sqrt((double)(r_thumb * r_thumb - dy_up * dy_up)));
+                        u8g2_DrawPixel(&s_u8g2, cx_rt - dx_up, y_min_scroll - 2);
+                    }
+                }
+                if (start + 4 < total) {
+                    int dy_dn = y_max_scroll + 2 - cy_rt;
+                    if (abs(dy_dn) <= r_thumb) {
+                        int dx_dn = (int)round(sqrt((double)(r_thumb * r_thumb - dy_dn * dy_dn)));
+                        u8g2_DrawPixel(&s_u8g2, cx_rt - dx_dn, y_max_scroll + 2);
+                    }
+                }
+
+                // Renderizacao dos 4 itens da lista
+                const int item_h = 10;
+                const int list_top = 13;
+                for (int k = 0; k < 4; k++) {
+                    int idx = start + k;
+                    if (idx >= total) break;
+                    int y_box = list_top + k * item_h;
+                    int y_base = y_box + 7;
+                    bool is_cur = (idx == s_drawer_cursor_idx);
+                    bool is_act = (idx == s_drawer_active_idx);
+
+                    // Curvatura e limite esquerdo da linha com 2px livres apos o arco
+                    int dy_mid = (y_box + 4) - cy_rt;
+                    int dx_thumb = (int)round(sqrt((double)(r_thumb * r_thumb - dy_mid * dy_mid)));
+                    int row_left_edge = cx_rt - dx_thumb + 3;
+                    int box_x0 = row_left_edge;
+                    int box_x1 = 127;
+
+                    uint8_t text_col = is_cur ? 0 : 1;
+
+                    if (is_cur) {
+                        // Caixa solida branca de box_x0 ate 127
+                        u8g2_SetDrawColor(&s_u8g2, 1);
+                        u8g2_DrawBox(&s_u8g2, box_x0, y_box, (box_x1 - box_x0 + 1), 9);
+                    }
+
+                    int tx = box_x0 + 1;
+
+                    // Posicao e protecao do icone diamante 7x7 para preset ativo
+                    int text_clip_x2;
+                    if (is_act) {
+                        int icon_x = box_x1 - 7 - 1; // 119
+                        oled_draw_bits(icon_x, y_box + 1, 7, 7, s_glyph_diamond_select_7x7, text_col);
+                        // Ponta da palavra para rigorosamente 2px antes do icone:
+                        text_clip_x2 = icon_x - 3;
+                    } else {
+                        // Sem icone: 2px de respiro antes do final da caixa
+                        text_clip_x2 = box_x1 - 2;
+                    }
+
+                    const char *item_name = (s_drawer_items[idx][0] != '\0') ? s_drawer_items[idx] : "Preset";
+                    int text_clip_x1 = tx;
+                    int avail_w = text_clip_x2 - text_clip_x1 + 1;
+
+                    if (avail_w > 0) {
+                        u8g2_SetClipWindow(&s_u8g2, text_clip_x1, y_box, text_clip_x2, y_box + 8);
+                        u8g2_SetDrawColor(&s_u8g2, text_col);
+                        if (is_cur) {
+                            draw_drawer_marquee(&s_drawer_eq_marquee, item_name, tx, avail_w, y_base, 600);
+                        } else {
+                            u8g2_DrawStr(&s_u8g2, tx, y_base, item_name);
+                        }
+                        u8g2_SetMaxClipWindow(&s_u8g2);
+                    }
+                }
+                u8g2_SetDrawColor(&s_u8g2, 1);
+            }
+        } else if (s_drawer_mode == CHORD_DRAWER_MODES) {
+            // Animacao de expansao temporal organica e fluida a 62.5 FPS
+            uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+            uint32_t elapsed = now - s_drawer_anim_start_ms;
+            uint8_t eff_pct = s_drawer_expand_pct;
+            const uint32_t anim_duration_ms = 180;
+            if (elapsed < anim_duration_ms) {
+                float t = (float)elapsed / (float)anim_duration_ms;
+                float ease = 1.0f - (1.0f - t) * (1.0f - t); // ease-out
+                eff_pct = (uint8_t)(s_drawer_expand_pct * ease);
+                s_fb_dirty_all = true;
+            }
+
+            // Bolha de Baixo expande para Semi Aba (r = 32 -> 55 px, centro transiciona suavemente de 76 para 63)
+            int cy_draw = 76 - (int)((13 * eff_pct) / 50);
+            if (cy_draw < 63) cy_draw = 63;
+            uint8_t r_draw = 32;
+            if (eff_pct <= 50) {
+                r_draw = 32 + (uint8_t)(((55 - 32) * eff_pct) / 50);
+            } else {
+                r_draw = 55 + (uint8_t)(((90 - 55) * (eff_pct - 50)) / 50);
+            }
+            if (r_draw > 90) r_draw = 90;
+
+            oled_draw_bubble_fill(cx_dn, cy_draw, r_draw, 1, 0); // Mascara circular preta solida
+            u8g2_SetDrawColor(&s_u8g2, 1);
+            oled_draw_bubble_outline(cx_dn, cy_draw, r_draw, 1, 1);
+
+            if (r_draw >= 38) {
+                u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
+                int tw = u8g2_GetStrWidth(&s_u8g2, "REPRODUCAO");
+                u8g2_DrawStr(&s_u8g2, (128 - tw) / 2, 30, "REPRODUCAO");
+                u8g2_DrawHLine(&s_u8g2, 16, 33, 96);
+
+                // Linha 0: Repetir
+                if (s_drawer_cursor_idx == 0) {
+                    u8g2_SetDrawColor(&s_u8g2, 1);
+                    u8g2_DrawBox(&s_u8g2, 14, 37, 100, 12);
+                    u8g2_SetDrawColor(&s_u8g2, 0);
+                } else {
+                    u8g2_SetDrawColor(&s_u8g2, 1);
+                }
+                u8g2_DrawStr(&s_u8g2, 18, 46, "Repetir:");
+                const char *lp_str = (s_drawer_item_count > 0 && s_drawer_items[0][0]) ? s_drawer_items[0] : "< Off >";
+                u8g2_DrawStr(&s_u8g2, 68, 46, lp_str);
+
+                // Linha 1: Aleatorio (base em y=62, exatamente a 1 px do fundo y=63!)
+                if (s_drawer_cursor_idx == 1) {
+                    u8g2_SetDrawColor(&s_u8g2, 1);
+                    u8g2_DrawBox(&s_u8g2, 14, 51, 100, 12);
+                    u8g2_SetDrawColor(&s_u8g2, 0);
+                } else {
+                    u8g2_SetDrawColor(&s_u8g2, 1);
+                }
+                u8g2_DrawStr(&s_u8g2, 18, 60, "Aleatorio:");
+                const char *sh_str = (s_drawer_item_count > 1 && s_drawer_items[1][0]) ? s_drawer_items[1] : "< Off >";
+                u8g2_DrawStr(&s_u8g2, 68, 60, sh_str);
+
+                u8g2_SetDrawColor(&s_u8g2, 1);
+            }
+        } else {
+            // Geometria pixel-perfect das bolhas baseada no mockup oficial (R=32):
+            // Cima (Like): Centro (64, -15), Raio 32 -> ápice inferior fecha exatamente em Y = 17 (-15 + 32)
+            int cy_up_cur = -(int)((15 * s_chord_hud_progress) / 100);
+            int r_up_cur = (int)((32 * s_chord_hud_progress) / 100);
+
+            // Baixo (Modos): Centro (64, 76), Raio 32 -> ápice superior atinge exatamente Y = 44 (76 - 32), deixando rigorosamente 2px de padding para os ícones
+            int cy_dn_cur = 63 + (int)((13 * s_chord_hud_progress) / 100);
+            int r_dn_cur = (int)((32 * s_chord_hud_progress) / 100);
+
+            // Laterais (PlayLists / EQ):
+            uint8_t r = (uint8_t)((28 * s_chord_hud_progress) / 100);
+            if (r > 28) r = 28;
+
+        if (r == 0) {
+            // No primeiro instante (0%), desenha exatamente 1 respectivo pixel na borda
+            u8g2_SetDrawColor(&s_u8g2, 1);
+            u8g2_DrawPixel(&s_u8g2, cx_up, 0);
+            u8g2_DrawPixel(&s_u8g2, cx_dn, 63);
+            u8g2_DrawPixel(&s_u8g2, cx_lf, cy_lf);
+            u8g2_DrawPixel(&s_u8g2, cx_rt, cy_rt);
+        } else if (r == 1) {
+            // Raio 1: broto tatil de 2 pixels em cada borda
+            u8g2_SetDrawColor(&s_u8g2, 1);
+            u8g2_DrawPixel(&s_u8g2, cx_up, 0);
+            u8g2_DrawPixel(&s_u8g2, cx_up, 1);
+            u8g2_DrawPixel(&s_u8g2, cx_dn, 63);
+            u8g2_DrawPixel(&s_u8g2, cx_dn, 62);
+            u8g2_DrawPixel(&s_u8g2, cx_lf, cy_lf);
+            u8g2_DrawPixel(&s_u8g2, cx_lf + 1, cy_lf);
+            u8g2_DrawPixel(&s_u8g2, cx_rt, cy_rt);
+            u8g2_DrawPixel(&s_u8g2, cx_rt - 1, cy_rt);
+        } else {
+            // 1.0 Preenche o interior das 4 bolhas diretamente na cor alvo (0=preto, 1=branco se selecionada)
+            uint8_t c_up = (s_chord_hud_selected_dir == 0) ? 1 : 0;
+            uint8_t c_dn = (s_chord_hud_selected_dir == 1) ? 1 : 0;
+            uint8_t c_lf = (s_chord_hud_selected_dir == 2) ? 1 : 0;
+            uint8_t c_rt = (s_chord_hud_selected_dir == 3) ? 1 : 0;
+
+            oled_draw_bubble_fill(cx_up, cy_up_cur, r_up_cur, 0, c_up);
+            oled_draw_bubble_fill(cx_dn, cy_dn_cur, r_dn_cur, 1, c_dn);
+            oled_draw_bubble_fill(cx_lf, cy_lf, r, 2, c_lf);
+            oled_draw_bubble_fill(cx_rt, cy_rt, r, 3, c_rt);
+
+            // 1.2 Desenha as bordas circulares apenas nas bolhas NAO selecionadas
+            u8g2_SetDrawColor(&s_u8g2, 1);
+            if (s_chord_hud_selected_dir != 0) {
+                oled_draw_bubble_outline(cx_up, cy_up_cur, r_up_cur, 0, 1);
+            }
+            if (s_chord_hud_selected_dir != 1) {
+                oled_draw_bubble_outline(cx_dn, cy_dn_cur, r_dn_cur, 1, 1);
+            }
+            if (s_chord_hud_selected_dir != 2) {
+                u8g2_DrawCircle(&s_u8g2, cx_lf, cy_lf, r, opt_lf);
+            }
+            if (s_chord_hud_selected_dir != 3) {
+                u8g2_DrawCircle(&s_u8g2, cx_rt, cy_rt, r, opt_rt);
+            }
+
+            // 1.3 Rotulos, Faixas e Icones internos com contraste invertido conforme selecao!
+            if (r >= 18) {
+                // Cima: Alterna dinamicamente entre Like e Deslike conforme o status da musica!
+                uint8_t col_up = (s_chord_hud_selected_dir == 0) ? 0 : 1;
+                u8g2_SetDrawColor(&s_u8g2, col_up);
+                u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
+                const char *like_str = s_chord_hud_is_liked ? "Deslike" : "Like";
+                int lw = u8g2_GetStrWidth(&s_u8g2, like_str);
+                u8g2_DrawStr(&s_u8g2, cx_up - lw / 2, 6, like_str);
+                if (s_chord_hud_is_liked) {
+                    u8g2_DrawXBM(&s_u8g2, cx_up - 4, 7, 9, 9, s_icon_heart_solid_9x9);
+                } else {
+                    u8g2_DrawXBM(&s_u8g2, cx_up - 4, 7, 9, 9, s_icon_heart_outline_9x9);
+                }
+
+                // Baixo: Modos de Reproducao (icones ativos lado a lado ou "Desligado")
+                uint8_t col_dn = (s_chord_hud_selected_dir == 1) ? 0 : 1;
+                u8g2_SetDrawColor(&s_u8g2, col_dn);
+
+                playback_state_t st;
+                audio_player_get_state(&st);
+
+                const uint8_t *shuf_icon = NULL;
+                if (st.shuffle_mode == AUDIO_SHUFFLE_FOLDER) {
+                    shuf_icon = s_icon_shuf_folder_9x9;
+                } else if (st.shuffle_mode == AUDIO_SHUFFLE_ALL) {
+                    shuf_icon = s_icon_shuf_all_9x9;
+                }
+
+                const uint8_t *loop_icon = NULL;
+                if (st.loop_mode == AUDIO_LOOP_ALL) {
+                    loop_icon = s_icon_loop_all_9x9;
+                } else if (st.loop_mode == AUDIO_LOOP_TRACK) {
+                    loop_icon = (st.loop_track_repeat_count > 0) ? s_icon_loop_one_9x9 : s_icon_loop_all_9x9;
+                }
+
+                if (shuf_icon && loop_icon) {
+                    u8g2_DrawXBM(&s_u8g2, cx_dn - 10, 47, 9, 9, shuf_icon);
+                    u8g2_DrawXBM(&s_u8g2, cx_dn + 1, 47, 9, 9, loop_icon);
+                } else if (shuf_icon) {
+                    u8g2_DrawXBM(&s_u8g2, cx_dn - 4, 47, 9, 9, shuf_icon);
+                } else if (loop_icon) {
+                    u8g2_DrawXBM(&s_u8g2, cx_dn - 4, 47, 9, 9, loop_icon);
+                } else {
+                    u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+                    int dw = u8g2_GetStrWidth(&s_u8g2, "Off");
+                    u8g2_DrawStr(&s_u8g2, cx_dn - dw / 2, 53, "Off");
+                }
+
+                u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
+                int mw = u8g2_GetStrWidth(&s_u8g2, "Modos");
+                u8g2_DrawStr(&s_u8g2, cx_dn - mw / 2, 62, "Modos");
+
+                // Esquerda: PlayLists com faixa invertida e icone de lista
+                bool sel_lf = (s_chord_hud_selected_dir == 2);
+                uint8_t col_lf_text = sel_lf ? 0 : 1;
+
+                u8g2_SetDrawColor(&s_u8g2, col_lf_text);
+                u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
+                u8g2_DrawStr(&s_u8g2, 0, 16, "Play");
+                u8g2_DrawStr(&s_u8g2, 0, 24, "Lists");
+
+                uint8_t banner_bg = sel_lf ? 0 : 1;
+                uint8_t banner_fg = sel_lf ? 1 : 0;
+                u8g2_SetDrawColor(&s_u8g2, banner_bg);
+                // Semi-caixa com acabamento chanfrado e 1px de respiro da borda da bolha
+                u8g2_DrawBox(&s_u8g2, 0, 26, 26, 9);
+                u8g2_DrawHLine(&s_u8g2, 0, 25, 25);
+                u8g2_DrawHLine(&s_u8g2, 0, 35, 25);
+
+                const char *pl_target = audio_player_get_target_playlist();
+                char clean_pl[32];
+                if (pl_target && pl_target[0]) {
+                    strlcpy(clean_pl, pl_target, sizeof(clean_pl));
+                    char *dot = strrchr(clean_pl, '.');
+                    if (dot) *dot = '\0';
+                } else {
+                    strlcpy(clean_pl, "Padrao", sizeof(clean_pl));
+                }
+
+                u8g2_SetDrawColor(&s_u8g2, banner_fg);
+                u8g2_SetClipWindow(&s_u8g2, 0, 25, 25, 35);
+                draw_marquee_delayed(&s_chord_pl_marquee, clean_pl, 1, 24, 33, 800);
+                u8g2_SetMaxClipWindow(&s_u8g2);
+
+                u8g2_SetDrawColor(&s_u8g2, col_lf_text);
+                u8g2_DrawXBM(&s_u8g2, 3, 38, 15, 13, s_bubble_playlist_icon_15x13);
+
+                // Direita: E.Q com faixa invertida do preset ativo e icone faders
+                bool sel_rt = (s_chord_hud_selected_dir == 3);
+                uint8_t col_rt_text = sel_rt ? 0 : 1;
+
+                u8g2_SetDrawColor(&s_u8g2, col_rt_text);
+                u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
+                int eqw = u8g2_GetStrWidth(&s_u8g2, "E.Q");
+                u8g2_DrawStr(&s_u8g2, 127 - 2 - eqw, 20, "E.Q");
+
+                uint8_t eq_banner_bg = sel_rt ? 0 : 1;
+                uint8_t eq_banner_fg = sel_rt ? 1 : 0;
+                u8g2_SetDrawColor(&s_u8g2, eq_banner_bg);
+                // Semi-caixa simetrica com acabamento chanfrado e 1px de respiro da borda da bolha
+                u8g2_DrawBox(&s_u8g2, 102, 26, 26, 9);
+                u8g2_DrawHLine(&s_u8g2, 103, 25, 25);
+                u8g2_DrawHLine(&s_u8g2, 103, 35, 25);
+
+                player_eq_config_t eq_cfg;
+                audio_player_get_eq_config(&eq_cfg);
+                const char *preset_name = "FLAT";
+                if (eq_cfg.active_preset_idx >= 0 && eq_cfg.active_preset_idx < PLAYER_EQ_MAX_PRESETS) {
+                    preset_name = eq_cfg.presets[eq_cfg.active_preset_idx].name;
+                }
+
+                u8g2_SetDrawColor(&s_u8g2, eq_banner_fg);
+                u8g2_SetClipWindow(&s_u8g2, 102, 25, 127, 35);
+                draw_marquee_delayed(&s_chord_eq_marquee, preset_name, 103, 24, 33, 800);
+                u8g2_SetMaxClipWindow(&s_u8g2);
+
+                u8g2_SetDrawColor(&s_u8g2, col_rt_text);
+                u8g2_DrawXBM(&s_u8g2, 111, 38, 15, 16, s_bubble_eq_icon_15x16);
+
+                u8g2_SetDrawColor(&s_u8g2, 1); // Restaura cor normal
+            }
+        }
+        }
+    }
+
+    // 2. Animacao de Transicao de Bloqueio / Desbloqueio (Iris Close / Open)
+    if (s_lock_anim_type != OLED_LOCK_ANIM_NONE) {
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        uint32_t elapsed = now - s_lock_anim_start_ms;
+        if (elapsed >= LOCK_ANIM_DURATION_MS) {
+            s_lock_anim_type = OLED_LOCK_ANIM_NONE;
+        } else {
+            uint8_t r_lock = 0;
+            if (s_lock_anim_type == OLED_LOCK_ANIM_CLOSING) {
+                // Bloqueio: circulo cresce do centro (0 -> 74 px) tampando tudo
+                r_lock = (uint8_t)((74UL * elapsed) / LOCK_ANIM_DURATION_MS);
+            } else {
+                // Desbloqueio (o inverso): circulo encolhe ate o centro (74 -> 0 px) revelando a tela!
+                r_lock = (uint8_t)(74UL - ((74UL * elapsed) / LOCK_ANIM_DURATION_MS));
+            }
+
+            if (r_lock > 0) {
+                // Tampa com preto solido usando scanlines com clipping seguro
+                u8g2_SetDrawColor(&s_u8g2, 0);
+                for (int dy = -r_lock; dy <= r_lock; dy++) {
+                    int y = 32 + dy;
+                    if (y < 0 || y >= 64) continue;
+                    int dx = (int)sqrtf((float)(r_lock * r_lock - dy * dy));
+                    int x1 = 64 - dx;
+                    int x2 = 64 + dx;
+                    if (x1 < 0) x1 = 0;
+                    if (x2 > 127) x2 = 127;
+                    if (x2 >= x1) {
+                        u8g2_DrawHLine(&s_u8g2, x1, y, x2 - x1 + 1);
+                    }
+                }
+
+                // Borda branca brilhante do circulo
+                u8g2_SetDrawColor(&s_u8g2, 1);
+                for (int dy = -r_lock; dy <= r_lock; dy++) {
+                    int y = 32 + dy;
+                    if (y < 0 || y >= 64) continue;
+                    int dx = (int)sqrtf((float)(r_lock * r_lock - dy * dy));
+                    int x1 = 64 - dx;
+                    int x2 = 64 + dx;
+                    if (x1 >= 0 && x1 < 128) u8g2_DrawPixel(&s_u8g2, x1, y);
+                    if (x2 >= 0 && x2 < 128) u8g2_DrawPixel(&s_u8g2, x2, y);
+                }
+            }
+        }
+    }
+
+    // 3. Animacao de Expansao de Bolha (Full Screen Toast com alta taxa de atualizacao)
+    if (s_expand_toast_active) {
+        s_fb_dirty_all = true; // Forca flush a 62.5 FPS durante toda a duracao do toast
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        uint32_t elapsed = now - s_expand_start_ms;
+        const uint32_t expand_anim_ms = 180;
+        const uint32_t total_toast_ms = 700;
+
+        if (elapsed >= total_toast_ms) {
+            s_expand_toast_active = false;
+        } else {
+            if (elapsed < expand_anim_ms) {
+                // Ease-out quadratico para transicao organica e suave
+                float t = (float)elapsed / (float)expand_anim_ms;
+                float ease = 1.0f - (1.0f - t) * (1.0f - t);
+                uint8_t r_exp = 24 + (uint8_t)(((140 - 24) * ease));
+                
+                // Mascara preta circular preenchida
+                u8g2_SetDrawColor(&s_u8g2, 0);
+                for (int dy = -r_exp; dy <= r_exp; dy++) {
+                    int y = s_expand_cy + dy;
+                    if (y < 0 || y >= 64) continue;
+                    int dx = (int)sqrtf((float)(r_exp * r_exp - dy * dy));
+                    int x1 = s_expand_cx - dx;
+                    int x2 = s_expand_cx + dx;
+                    if (x1 < 0) x1 = 0;
+                    if (x2 > 127) x2 = 127;
+                    if (x2 >= x1) {
+                        u8g2_DrawHLine(&s_u8g2, x1, y, x2 - x1 + 1);
+                    }
+                }
+                // Borda branca brilhante da onda (traço duplo para nitidez maxima)
+                u8g2_SetDrawColor(&s_u8g2, 1);
+                for (int dy = -r_exp; dy <= r_exp; dy++) {
+                    int y = s_expand_cy + dy;
+                    if (y < 0 || y >= 64) continue;
+                    int dx = (int)sqrtf((float)(r_exp * r_exp - dy * dy));
+                    int x1 = s_expand_cx - dx;
+                    int x2 = s_expand_cx + dx;
+                    if (x1 >= 0 && x1 < 128) {
+                        u8g2_DrawPixel(&s_u8g2, x1, y);
+                        if (x1 + 1 < 128) u8g2_DrawPixel(&s_u8g2, x1 + 1, y);
+                    }
+                    if (x2 >= 0 && x2 < 128) {
+                        u8g2_DrawPixel(&s_u8g2, x2, y);
+                        if (x2 - 1 >= 0) u8g2_DrawPixel(&s_u8g2, x2 - 1, y);
+                    }
+                }
+            } else {
+                // Tela totalmente coberta pela bolha expandida (preto total)
+                u8g2_SetDrawColor(&s_u8g2, 0);
+                u8g2_DrawBox(&s_u8g2, 0, 0, 128, 64);
+            }
+
+            // Exibe o conteudo de confirmacao/anuncio em alto contraste
+            if (elapsed >= 60) {
+                u8g2_SetDrawColor(&s_u8g2, 1);
+                if (s_expand_icon) {
+                    u8g2_DrawXBM(&s_u8g2, 64 - 8, 8, 16, 16, s_expand_icon);
+                    u8g2_SetFont(&s_u8g2, u8g2_font_helvB08_tr);
+                    if (s_expand_line1[0]) {
+                        int w1 = u8g2_GetStrWidth(&s_u8g2, s_expand_line1);
+                        u8g2_DrawStr(&s_u8g2, 64 - (w1 / 2), 36, s_expand_line1);
+                    }
+                    if (s_expand_line2[0]) {
+                        u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tf);
+                        int w2 = u8g2_GetStrWidth(&s_u8g2, s_expand_line2);
+                        u8g2_DrawStr(&s_u8g2, 64 - (w2 / 2), 50, s_expand_line2);
+                    }
+                } else {
+                    u8g2_SetFont(&s_u8g2, u8g2_font_helvB08_tr);
+                    if (s_expand_line1[0]) {
+                        int w1 = u8g2_GetStrWidth(&s_u8g2, s_expand_line1);
+                        u8g2_DrawStr(&s_u8g2, 64 - (w1 / 2), 26, s_expand_line1);
+                    }
+                    // Linha sutil separadora para estetica refinada
+                    u8g2_DrawHLine(&s_u8g2, 44, 32, 40);
+                    if (s_expand_line2[0]) {
+                        u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tf);
+                        int w2 = u8g2_GetStrWidth(&s_u8g2, s_expand_line2);
+                        u8g2_DrawStr(&s_u8g2, 64 - (w2 / 2), 47, s_expand_line2);
+                    }
+                }
+            }
+        }
+    }
+}
+
 static void oled_flush_buffer(void)
 {
+    oled_display_render_overlays();
     uint8_t *fb = u8g2_GetBufferPtr(&s_u8g2);
     if (!fb || s_fb_dirty_all) {
         u8g2_SendBuffer(&s_u8g2);
@@ -90,13 +1116,44 @@ static void oled_flush_buffer(void)
         return;
     }
 
-    // Dirty-Page Update: verifica cada uma das 8 paginas horizontais (128 bytes por pagina)
-    // e transmite via I2C apenas as paginas cujo conteudo mudou em relacao ao frame anterior.
+    // Dirty-Page Update Otimizado: agrupa paginas contiguas modificadas em um unico lote I2C
+    // e usa u8g2_SendBuffer direto se todas as 8 paginas forem dirty (ex: animacao de bolhas / drawers).
+    uint8_t dirty_mask = 0;
     for (uint8_t page = 0; page < 8; page++) {
         size_t offset = (size_t)page * 128;
         if (memcmp(fb + offset, s_prev_fb + offset, 128) != 0) {
-            u8g2_UpdateDisplayArea(&s_u8g2, 0, page, 16, 1);
-            memcpy(s_prev_fb + offset, fb + offset, 128);
+            dirty_mask |= (1 << page);
+        }
+    }
+
+    if (dirty_mask == 0) {
+        return; // Nada mudou neste frame
+    }
+
+    if (dirty_mask == 0xFF) {
+        u8g2_SendBuffer(&s_u8g2);
+        memcpy(s_prev_fb, fb, 1024);
+        return;
+    }
+
+    uint8_t page = 0;
+    static bool s_first_frame_rendered = false;
+    if (!s_first_frame_rendered) {
+        s_first_frame_rendered = true;
+        printf("\n@METRIC: PRIMEIRO FRAME NA TELA OLED: %u ms\n", (unsigned)(esp_timer_get_time() / 1000ULL)); fflush(stdout);
+    }
+
+    while (page < 8) {
+        if (dirty_mask & (1 << page)) {
+            uint8_t start = page;
+            while (page < 8 && (dirty_mask & (1 << page))) {
+                page++;
+            }
+            uint8_t count = page - start;
+            u8g2_UpdateDisplayArea(&s_u8g2, 0, start, 16, count);
+            memcpy(s_prev_fb + (size_t)start * 128, fb + (size_t)start * 128, (size_t)count * 128);
+        } else {
+            page++;
         }
     }
 }
@@ -104,6 +1161,8 @@ static void oled_flush_buffer(void)
 // Modos de visualizacao na tela Now Playing
 static oled_display_viz_mode_t s_viz_mode = VIZ_MODE_CLASSIC;
 static uint32_t s_overlay_until_ms = 0;
+static uint32_t s_seek_overlay_until_ms = 0;
+static uint32_t s_last_drawn_elapsed_sec = 0;
 static char s_last_track_title[128] = {0};
 
 void oled_display_set_viz_mode(oled_display_viz_mode_t mode)
@@ -299,6 +1358,15 @@ static marquee_t s_album_marquee = {0};
 static marquee_t s_list_cursor_marquee = {0};
 static marquee_t s_transfer_name_marquee = {0};
 
+static char s_az_hud_letter = 0;
+static uint32_t s_az_hud_until_ms = 0;
+
+void oled_display_trigger_az_hud(char letter)
+{
+    s_az_hud_letter = letter;
+    s_az_hud_until_ms = (uint32_t)(esp_timer_get_time() / 1000ULL) + 1100;
+}
+
 
 // =========================================================================
 // Icone de play/pause, desenhado por primitivas (sem bitmap) - triangulo
@@ -448,9 +1516,9 @@ static void draw_progress_bar_with_time(int bar_x, int bar_y, int bar_w, int bar
     }
     u8g2_SetDrawColor(&s_u8g2, 1);
 }
-static void draw_battery_icon(int y, int percent)
+static int draw_battery_icon(int y, int percent)
 {
-    if (percent < 0) return;
+    if (percent < 0) return 128;
     if (percent > 100) percent = 100;
 
     battery_status_t status = battery_get_status();
@@ -460,7 +1528,7 @@ static void draw_battery_icon(int y, int percent)
     // Se bateria critica (< 10%) e descarregando, pisca o icone a cada 500ms
     if (percent < 10 && !is_charging && !is_full) {
         if (((esp_timer_get_time() / 500000) % 2) == 0) {
-            return; // Ciclo apagado do piscar
+            return 128; // Ciclo apagado do piscar
         }
     }
 
@@ -500,6 +1568,8 @@ static void draw_battery_icon(int y, int percent)
         u8g2_DrawPixel(&s_u8g2, rx + 1, y + 5);
         u8g2_DrawPixel(&s_u8g2, rx + 0, y + 6);
     }
+
+    return (x - 1);
 }
 
 // format_line vem pronto como UMA string (ex: ".Flac   16 Bits  44Khz",
@@ -520,7 +1590,37 @@ static void draw_viz_dynamic_overlay(const playback_state_t *state)
     u8g2_DrawHLine(&s_u8g2, 0, 10, 128);
 
     draw_play_pause_icon(state->playing && !state->paused);
-    draw_battery_icon(1, battery_get_percent());
+    int bat_left = draw_battery_icon(1, battery_get_percent());
+
+    // Coração permanente ao lado do play (preenchido quando curtida, vazio quando descurtida)
+    int icon_offset_x = 8;
+    if (state->is_favorite) {
+        u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_heart_solid_9x9);
+    } else {
+        u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_heart_outline_9x9);
+    }
+    icon_offset_x += 11;
+
+    // Badges / Glifos de Loop e Shuffle arrastados para a direita do coração
+    if (state->loop_mode == AUDIO_LOOP_ALL) {
+        u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_loop_all_9x9);
+        icon_offset_x += 11;
+    } else if (state->loop_mode == AUDIO_LOOP_TRACK) {
+        if (state->loop_track_repeat_count > 0) {
+            u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_loop_one_9x9);
+        } else {
+            u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_loop_all_9x9);
+        }
+        icon_offset_x += 11;
+    }
+
+    if (state->shuffle_mode == AUDIO_SHUFFLE_FOLDER) {
+        u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_shuf_folder_9x9);
+        icon_offset_x += 11;
+    } else if (state->shuffle_mode == AUDIO_SHUFFLE_ALL) {
+        u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_shuf_all_9x9);
+        icon_offset_x += 11;
+    }
 
     // Tempo decorrido / total
     char el_str[8], tot_str[8], time_buf[20];
@@ -530,13 +1630,13 @@ static void draw_viz_dynamic_overlay(const playback_state_t *state)
 
     u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
     int time_w = u8g2_GetStrWidth(&s_u8g2, time_buf);
-    int time_x = 113 - time_w;
+    int time_x = (bat_left > 15) ? (bat_left - 3 - time_w) : (128 - time_w - 2);
     u8g2_DrawStr(&s_u8g2, time_x, 8, time_buf);
 
     // Titulo com marquee no espaco entre icone e tempo
     char safe_title[128];
     sanitize_for_display(state->title, safe_title, sizeof(safe_title));
-    int title_x0 = 14;
+    int title_x0 = (icon_offset_x > 12) ? (icon_offset_x + 2) : 14;
     int title_x1 = time_x - 3;
     int avail_w = title_x1 - title_x0;
     if (avail_w > 15) {
@@ -549,13 +1649,52 @@ static void draw_viz_dynamic_overlay(const playback_state_t *state)
         }
         u8g2_SetMaxClipWindow(&s_u8g2);
     }
+
+    // Durante um seek nos modos de tela cheia (Spectrum / Analog), exibe a barra
+    // de progresso completa com tempo navegado para feedback visual imediato.
+    if (now_ms < s_seek_overlay_until_ms) {
+        u8g2_SetDrawColor(&s_u8g2, 0);
+        u8g2_DrawBox(&s_u8g2, 0, 31, 128, 15);
+        u8g2_SetDrawColor(&s_u8g2, 1);
+        draw_progress_bar_with_time(0, 33, 128, 11, state->elapsed_sec, state->total_sec, state->duration_is_estimate);
+    }
 }
 
-static void oled_display_show_now_playing_classic(const playback_state_t *state)
+static void draw_now_playing_topbar(const playback_state_t *state)
 {
-    // --- Topo: play/pause, artista dinamico, bateria ---
+    // --- Topo: play/pause, coracao, loop, shuffle, artista dinamico, bateria ---
     draw_play_pause_icon(state->playing && !state->paused);
-    draw_battery_icon(1, battery_get_percent());
+    int bat_left = draw_battery_icon(1, battery_get_percent());
+
+    // Coração permanente ao lado do play (preenchido quando curtida, vazio quando descurtida)
+    int icon_offset_x = 8;
+    if (state->is_favorite) {
+        u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_heart_solid_9x9);
+    } else {
+        u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_heart_outline_9x9);
+    }
+    icon_offset_x += 11;
+
+    // Badges / Glifos de Loop e Shuffle (9x9 pixels) arrastados para a direita do coração
+    if (state->loop_mode == AUDIO_LOOP_ALL) {
+        u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_loop_all_9x9);
+        icon_offset_x += 11;
+    } else if (state->loop_mode == AUDIO_LOOP_TRACK) {
+        if (state->loop_track_repeat_count > 0) {
+            u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_loop_one_9x9);
+        } else {
+            u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_loop_all_9x9);
+        }
+        icon_offset_x += 11;
+    }
+
+    if (state->shuffle_mode == AUDIO_SHUFFLE_FOLDER) {
+        u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_shuf_folder_9x9);
+        icon_offset_x += 11;
+    } else if (state->shuffle_mode == AUDIO_SHUFFLE_ALL) {
+        u8g2_DrawXBM(&s_u8g2, icon_offset_x, 1, 9, 9, s_icon_shuf_all_9x9);
+        icon_offset_x += 11;
+    }
     
     if (state->artist[0] != '\0') {
         char safe_artist[64];
@@ -563,34 +1702,63 @@ static void oled_display_show_now_playing_classic(const playback_state_t *state)
         u8g2_SetFont(&s_u8g2, u8g2_font_helvB08_tr);
         int aw = u8g2_GetStrWidth(&s_u8g2, safe_artist);
         
-        int max_left = 12;
-        int max_right = 113;
-        int center_x = 64;
+        int min_left = icon_offset_x;
+        int max_right = (bat_left > 15) ? (bat_left - 3) : 125;
+        int max_avail_w = max_right - min_left + 1;
         
-        int br_left = center_x - aw/2 - 3;
-        int br_right = center_x + aw/2 + 3;
-        
+        int card_w = aw + 6; // 3px de respiro interno em cada lateral
+        int br_left, br_right;
         bool needs_marquee = false;
-        if (br_left < max_left || br_right > max_right) {
-            br_left = max_left;
+        
+        if (card_w > max_avail_w) {
+            // Nao cabe mesmo deslocando: ocupa todo o espaco util e ativa marquee
+            br_left = min_left;
             br_right = max_right;
             needs_marquee = true;
+        } else {
+            // Cabe! Centraliza perfeitamente na tela (centro em X=64)
+            br_left = 64 - card_w / 2;
+            br_right = br_left + card_w - 1;
+            
+            // Se colidir com os icones da esquerda, desloca mantendo estritamente 2px de distancia do icone
+            if (br_left < min_left) {
+                int shift = min_left - br_left;
+                br_left += shift;
+                br_right += shift;
+            }
+            
+            // Se colidir com a bateria da direita, desloca para a esquerda
+            if (br_right > max_right) {
+                int shift = br_right - max_right;
+                br_left -= shift;
+                br_right -= shift;
+            }
         }
         
-        // Linhas decorativas (brackets) no topo
-        u8g2_DrawLine(&s_u8g2, br_left, 11, br_right, 11);
+        // Card em forma de bracket no topo (aberto em cima para otimizar espaço)
+        u8g2_DrawLine(&s_u8g2, br_left, 10, br_right, 10);
         u8g2_DrawLine(&s_u8g2, br_left, 10, br_left, 0);
-        u8g2_DrawLine(&s_u8g2, br_right, 11, br_right, 0);
+        u8g2_DrawLine(&s_u8g2, br_right, 10, br_right, 0);
         
-        // Texto
+        int avail_w = (br_right - 1) - (br_left + 2) + 1;
+        if (avail_w < 10) avail_w = 10;
+
+        // Texto do artista alinhado ao topo (usa Y=0 na última linha de pixels e 1px de padding até Y=10)
         if (!needs_marquee) {
-            u8g2_DrawStr(&s_u8g2, center_x - aw/2, 9, safe_artist);
+            int text_x = br_left + ((br_right - br_left + 1) - aw) / 2;
+            u8g2_DrawStr(&s_u8g2, text_x, 8, safe_artist);
         } else {
-            u8g2_SetClipWindow(&s_u8g2, br_left + 2, 0, br_right - 1, 10);
-            draw_marquee(&s_artist_marquee, safe_artist, br_left + 2, 9, 1);
+            u8g2_SetClipWindow(&s_u8g2, br_left + 2, 0, br_right - 1, 9);
+            draw_marquee_width(&s_artist_marquee, safe_artist, br_left + 2, avail_w, 8, 1);
             u8g2_SetMaxClipWindow(&s_u8g2);
         }
     }
+}
+
+static void oled_display_show_now_playing_classic(const playback_state_t *state)
+{
+    // --- Topo: play/pause, artista dinamico, bateria, loop, shuffle, favorito ---
+    draw_now_playing_topbar(state);
 
     // --- Titulo da musica ---
     char safe_title[128];
@@ -700,10 +1868,10 @@ static void oled_display_show_now_playing_classic(const playback_state_t *state)
         
         #define DRAW_BRACKET(bw, ctext) \
             u8g2_SetDrawColor(&s_u8g2, 1); \
-            u8g2_DrawLine(&s_u8g2, x, 63, x, 57); \
-            u8g2_DrawLine(&s_u8g2, x+1, 57, x+bw-1, 57); \
-            u8g2_DrawLine(&s_u8g2, x+bw-1, 63, x+bw-1, 58); \
-            u8g2_DrawStr(&s_u8g2, x + 1 + (bw - 2 - u8g2_GetStrWidth(&s_u8g2, ctext))/2, 64, ctext); \
+            u8g2_DrawLine(&s_u8g2, x, 62, x, 56); \
+            u8g2_DrawLine(&s_u8g2, x+1, 56, x+bw-1, 56); \
+            u8g2_DrawLine(&s_u8g2, x+bw-1, 62, x+bw-1, 56); \
+            u8g2_DrawStr(&s_u8g2, x + 1 + (bw - 2 - u8g2_GetStrWidth(&s_u8g2, ctext))/2, 63, ctext); \
             x += bw + gap_w;
             
         DRAW_BRACKET(bw_fmt, card_fmt);
@@ -717,34 +1885,8 @@ static void oled_display_show_now_playing_classic(const playback_state_t *state)
 
 static void oled_display_show_now_playing_hybrid(const playback_state_t *state)
 {
-    // 1. Topo: Play/Pause, Artista com brackets, Bateria
-    draw_play_pause_icon(state->playing && !state->paused);
-    draw_battery_icon(1, battery_get_percent());
-    
-    if (state->artist[0] != '\0') {
-        char safe_artist[64];
-        sanitize_for_display(state->artist, safe_artist, sizeof(safe_artist));
-        u8g2_SetFont(&s_u8g2, u8g2_font_helvB08_tr);
-        int aw = u8g2_GetStrWidth(&s_u8g2, safe_artist);
-        int max_left = 12, max_right = 113, center_x = 64;
-        int br_left = center_x - aw/2 - 3, br_right = center_x + aw/2 + 3;
-        bool needs_marquee = false;
-        if (br_left < max_left || br_right > max_right) {
-            br_left = max_left;
-            br_right = max_right;
-            needs_marquee = true;
-        }
-        u8g2_DrawLine(&s_u8g2, br_left, 11, br_right, 11);
-        u8g2_DrawLine(&s_u8g2, br_left, 10, br_left, 0);
-        u8g2_DrawLine(&s_u8g2, br_right, 11, br_right, 0);
-        if (!needs_marquee) {
-            u8g2_DrawStr(&s_u8g2, center_x - aw/2, 9, safe_artist);
-        } else {
-            u8g2_SetClipWindow(&s_u8g2, br_left + 2, 0, br_right - 1, 10);
-            draw_marquee(&s_artist_marquee, safe_artist, br_left + 2, 9, 1);
-            u8g2_SetMaxClipWindow(&s_u8g2);
-        }
-    }
+    // 1. Topo unificado: Play/Pause, Loop, Shuffle, Favorito, Artista com brackets, Bateria
+    draw_now_playing_topbar(state);
 
     // 2. Titulo da musica (22px)
     char safe_title[128];
@@ -759,7 +1901,7 @@ static void oled_display_show_now_playing_hybrid(const playback_state_t *state)
         u8g2_SetMaxClipWindow(&s_u8g2);
     }
 
-    // 3. Barra de progresso com tempo embutido (Y=33..43)
+    // 3. Barra de progresso com tempo embutido
     draw_progress_bar_with_time(0, 33, 128, 11, state->elapsed_sec, state->total_sec, state->duration_is_estimate);
 
     // 4. Album compacto (Y=44..51)
@@ -922,15 +2064,28 @@ void oled_display_show_now_playing(const playback_state_t *state)
 {
     if (!s_ready || !state) return;
 
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
     // Detecta troca de musica para engatilhar overlay dinamico de 3s
     if (strncmp(state->title, s_last_track_title, sizeof(s_last_track_title)) != 0) {
         strncpy(s_last_track_title, state->title, sizeof(s_last_track_title) - 1);
         s_last_track_title[sizeof(s_last_track_title) - 1] = '\0';
+        s_last_drawn_elapsed_sec = state->elapsed_sec;
         oled_display_trigger_viz_overlay();
+    } else {
+        int32_t diff_sec = (int32_t)state->elapsed_sec - (int32_t)s_last_drawn_elapsed_sec;
+        if (audio_player_is_seeking() || diff_sec > 2 || diff_sec < -1) {
+            s_seek_overlay_until_ms = now_ms + 1200;
+            if (s_overlay_until_ms < s_seek_overlay_until_ms) {
+                s_overlay_until_ms = s_seek_overlay_until_ms;
+            }
+        }
+        s_last_drawn_elapsed_sec = state->elapsed_sec;
     }
 
     u8g2_ClearBuffer(&s_u8g2);
     u8g2_SetDrawColor(&s_u8g2, 1);
+
+
 
     switch (s_viz_mode) {
         case VIZ_MODE_HYBRID:
@@ -960,6 +2115,8 @@ void oled_display_show_list(const char **names, int count, int cursor, const pla
 
     u8g2_ClearBuffer(&s_u8g2);
     u8g2_SetDrawColor(&s_u8g2, 1);
+
+
     
     bool show_topbar = now_playing && now_playing->track_loaded;
     const int list_top = show_topbar ? 10 : 0;
@@ -1088,6 +2245,22 @@ void oled_display_show_list(const char **names, int count, int cursor, const pla
             u8g2_DrawStr(&s_u8g2, 1, y_text, safe_name);
             u8g2_SetMaxClipWindow(&s_u8g2);
         }
+    }
+
+    uint32_t now_az_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    if (s_az_hud_letter != 0 && now_az_ms < s_az_hud_until_ms) {
+        char badge[16];
+        snprintf(badge, sizeof(badge), "A-Z: %c", s_az_hud_letter);
+        u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+        int bw = u8g2_GetStrWidth(&s_u8g2, badge) + 10;
+        int bh = 14;
+        int bx = (OLED_WIDTH - bw) / 2;
+        int by = (OLED_HEIGHT - bh) / 2;
+        u8g2_SetDrawColor(&s_u8g2, 0);
+        u8g2_DrawBox(&s_u8g2, bx - 1, by - 1, bw + 2, bh + 2);
+        u8g2_SetDrawColor(&s_u8g2, 1);
+        u8g2_DrawFrame(&s_u8g2, bx, by, bw, bh);
+        u8g2_DrawStr(&s_u8g2, bx + 5, by + 10, badge);
     }
     
     apply_brightness_if_needed();
@@ -2190,6 +3363,7 @@ void oled_display_show_main_menu(int cursor, const playback_state_t *now_playing
     u8g2_SetBitmapMode(&s_u8g2, 1);
     u8g2_SetDrawColor(&s_u8g2, 1);
 
+
     bool show_topbar = now_playing && (now_playing->track_loaded || now_playing->playing);
     if (show_topbar) {
         draw_main_menu_topbar(now_playing);
@@ -2298,13 +3472,16 @@ void oled_display_show_wifi_idle(const char *ip, const char *mdns_host, bool dns
 
     // Mensagem de busca centralizada
     u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
-    const char *msg = "Buscando rede...";
-    int mw = u8g2_GetStrWidth(&s_u8g2, msg);
-    u8g2_DrawStr(&s_u8g2, (128 - mw) / 2, 33, msg);
+    const char *msg = (mdns_host && mdns_host[0] && strcmp(mdns_host, "mps3.local") != 0)
+                      ? mdns_host : "Buscando rede...";
+    char safe_msg[24];
+    sanitize_for_display(msg, safe_msg, sizeof(safe_msg));
+    int mw = u8g2_GetStrWidth(&s_u8g2, safe_msg);
+    u8g2_DrawStr(&s_u8g2, (mw < 128) ? ((128 - mw) / 2) : 2, 33, safe_msg);
 
     // Subtexto inferior
     u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
-    const char *sub = "Aguardando IP da rede...";
+    const char *sub = "Aguardando IP da rede... [Esq:Sair]";
     int sw = u8g2_GetStrWidth(&s_u8g2, sub);
     u8g2_DrawStr(&s_u8g2, (128 - sw) / 2, 50, sub);
 
@@ -2376,94 +3553,179 @@ void oled_display_show_wifi_transfer(const char *filename, int file_pct, int ove
     u8g2_SetBitmapMode(&s_u8g2, 1);
     u8g2_SetFontMode(&s_u8g2, 1);
 
-    // Frame superior (mockup: rect 9: (0,0,65,12))
-    u8g2_DrawFrame(&s_u8g2, 0, 0, 65, 12);
+    // 1. Frame superior: RSSI na esquerda, Velocidade na direita
+    u8g2_DrawFrame(&s_u8g2, 0, 0, 50, 11);
     u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
-
-        // Exibe RSSI real se disponÃ­vel, senÃ£o "-40db" (fallback)
     if (rssi != -1) {
-        char db_str[8];
+        char db_str[10];
         snprintf(db_str, sizeof(db_str), "%d dBm", rssi);
-        u8g2_DrawStr(&s_u8g2, 2, 9, db_str);   // PosiÃ§Ã£o ajustada para caber
+        u8g2_DrawStr(&s_u8g2, 3, 8, db_str);
     } else {
-        u8g2_DrawStr(&s_u8g2, 17, 9, "-0db");  // fallback
+        u8g2_DrawStr(&s_u8g2, 12, 8, "-0 dB");
     }
 
-    // --- Nome do arquivo (com rolagem se necessÃ¡rio) ---
-    u8g2_SetFont(&s_u8g2, u8g2_font_profont15_tr);
-    const int name_x = 1;
-    const int name_y = 25;
-    const int name_max_w = 100;   // Largura mÃ¡xima antes de colidir com ETA
+    // Velocidade alinhada a direita no topo
+    char speed_str[16];
+    if (kbps >= 1024.0f) {
+        snprintf(speed_str, sizeof(speed_str), "%.1f MB/s", kbps / 1024.0f);
+    } else if (kbps > 0.05f) {
+        snprintf(speed_str, sizeof(speed_str), "%.0f KB/s", kbps);
+    } else {
+        snprintf(speed_str, sizeof(speed_str), "--- KB/s");
+    }
+    int speed_w = u8g2_GetStrWidth(&s_u8g2, speed_str);
+    u8g2_DrawStr(&s_u8g2, 127 - speed_w, 8, speed_str);
 
-    // Prepara string segura (sanitizaÃ§Ã£o)
+    // 2. ETA do arquivo (a direita)
+    char eta_str[16] = "";
+    int eta_w = 0;
+    if (eta_sec >= 0) {
+        snprintf(eta_str, sizeof(eta_str), "%ds", eta_sec);
+        eta_w = u8g2_GetStrWidth(&s_u8g2, eta_str);
+        u8g2_DrawStr(&s_u8g2, 127 - eta_w, 23, eta_str);
+    }
+
+    // Nome do arquivo (a esquerda, com rolagem se necessario)
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont11_tr);
+    const int name_x = 0;
+    const int name_y = 23;
+    const int name_max_w = (eta_w > 0) ? (127 - eta_w - 4) : 127;
+
     char safe_name[64];
     sanitize_for_display(filename && filename[0] ? filename : "---", safe_name, sizeof(safe_name));
-
-    // Verifica largura do texto
     int text_w = u8g2_GetStrWidth(&s_u8g2, safe_name);
     if (text_w <= name_max_w) {
-        // Cabe: desenha normalmente
         u8g2_DrawStr(&s_u8g2, name_x, name_y, safe_name);
     } else {
-        // NÃ£o cabe: aplica rolagem com clipping
-        u8g2_SetClipWindow(&s_u8g2, name_x, name_y - 10, name_x + name_max_w, name_y + 5);
+        u8g2_SetClipWindow(&s_u8g2, name_x, 13, name_x + name_max_w, 25);
         draw_marquee(&s_transfer_name_marquee, safe_name, name_x, name_y, 2);
         u8g2_SetMaxClipWindow(&s_u8g2);
     }
 
-
-    // Velocidade (mockup: (66,11) -> "987Kbps/s")
-    char speed_str[16];
-    if (kbps >= 1024) snprintf(speed_str, sizeof(speed_str), "%.1fMB/s", kbps/1024);
-    else snprintf(speed_str, sizeof(speed_str), "%.0fKB/s", kbps);
-    u8g2_DrawStr(&s_u8g2, 66, 11, speed_str);
-
-    // ETA do arquivo (mockup: (108,27) -> "67s")
-    if (eta_sec >= 0) {
-        char eta_str[16];
-        snprintf(eta_str, sizeof(eta_str), "%ds", eta_sec);
-        u8g2_DrawStr(&s_u8g2, 108, 27, eta_str);
-    }
-
-    // Barra de progresso do arquivo (mockup: rect 1 copy 2: (0,29,128,11))
-    u8g2_DrawFrame(&s_u8g2, 0, 29, 128, 11);
+    // 3. Barra 1: Progresso do arquivo atual (Y=27..36)
+    const int bar1_y = 27;
+    const int bar1_h = 10;
+    u8g2_DrawFrame(&s_u8g2, 0, bar1_y, 128, bar1_h);
     if (file_pct > 0) {
         int fill_w = (128 - 2) * file_pct / 100;
-        u8g2_DrawBox(&s_u8g2, 1, 30, fill_w, 9);
+        if (fill_w > 128 - 2) fill_w = 128 - 2;
+        u8g2_DrawBox(&s_u8g2, 1, bar1_y + 1, fill_w, bar1_h - 2);
     }
-    // Porcentagem dentro da barra (mockup: (59,38) -> "1%" com draw color 2)
-    u8g2_SetDrawColor(&s_u8g2, 2);
+    // Porcentagem dentro da barra (XOR)
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
     char pct_str[8];
     snprintf(pct_str, sizeof(pct_str), "%d%%", file_pct);
-    u8g2_DrawStr(&s_u8g2, 59, 39, pct_str);
+    int pw = u8g2_GetStrWidth(&s_u8g2, pct_str);
+    u8g2_SetDrawColor(&s_u8g2, 2);
+    u8g2_DrawStr(&s_u8g2, (128 - pw) / 2, bar1_y + bar1_h - 2, pct_str);
     u8g2_SetDrawColor(&s_u8g2, 1);
 
-    // Linha "Total:" e Ã­ndice (mockup: (0,51) "Total:", (47,51) "|1/9|")
-    u8g2_DrawStr(&s_u8g2, 0, 51, "Total:");
+    // 4. Linha Total e ETA geral (Y=47)
+    u8g2_DrawStr(&s_u8g2, 0, 47, "Total:");
     char idx_str[12];
     snprintf(idx_str, sizeof(idx_str), "|%d/%d|", idx, count);
-    u8g2_DrawStr(&s_u8g2, 47, 52, idx_str);
+    u8g2_DrawStr(&s_u8g2, 34, 47, idx_str);
 
-    // ETA total (mockup: (94,51) -> "2m65s")
     if (total_eta >= 0) {
         char total_eta_str[16];
         if (total_eta >= 60) snprintf(total_eta_str, sizeof(total_eta_str), "%dm%ds", total_eta/60, total_eta%60);
         else snprintf(total_eta_str, sizeof(total_eta_str), "%ds", total_eta);
-        u8g2_DrawStr(&s_u8g2, 94, 51, total_eta_str);
+        int tw = u8g2_GetStrWidth(&s_u8g2, total_eta_str);
+        u8g2_DrawStr(&s_u8g2, 127 - tw, 47, total_eta_str);
     }
 
-    // Barra de progresso geral (mockup: rect 1 copy 1: (0,53,128,11))
-    u8g2_DrawFrame(&s_u8g2, 0, 53, 128, 11);
+    // 5. Barra 2: Progresso geral do lote (Y=51..60)
+    const int bar2_y = 51;
+    const int bar2_h = 10;
+    u8g2_DrawFrame(&s_u8g2, 0, bar2_y, 128, bar2_h);
     if (overall_pct > 0) {
-        int fill_w = (128 - 2) * overall_pct / 100;
-        u8g2_DrawBox(&s_u8g2, 1, 54, fill_w, 9);
+        int fill_w2 = (128 - 2) * overall_pct / 100;
+        if (fill_w2 > 128 - 2) fill_w2 = 128 - 2;
+        u8g2_DrawBox(&s_u8g2, 1, bar2_y + 1, fill_w2, bar2_h - 2);
     }
-    // Porcentagem geral (mockup: (57,62) -> "60%")
-    u8g2_SetDrawColor(&s_u8g2, 2);
     char overall_str[8];
     snprintf(overall_str, sizeof(overall_str), "%d%%", overall_pct);
-    u8g2_DrawStr(&s_u8g2, 57, 62, overall_str);
+    int opw = u8g2_GetStrWidth(&s_u8g2, overall_str);
+    u8g2_SetDrawColor(&s_u8g2, 2);
+    u8g2_DrawStr(&s_u8g2, (128 - opw) / 2, bar2_y + bar2_h - 2, overall_str);
     u8g2_SetDrawColor(&s_u8g2, 1);
+
+    apply_brightness_if_needed();
+    oled_flush_buffer();
+}
+
+void oled_display_show_wifi_streaming(const char *filename, int buffer_pct, float kbps, int rssi)
+{
+    if (!s_ready) return;
+
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_SetBitmapMode(&s_u8g2, 1);
+    u8g2_SetFontMode(&s_u8g2, 1);
+
+    // 1. Frame superior: RSSI na esquerda, Banner no centro, Velocidade na direita
+    u8g2_DrawFrame(&s_u8g2, 0, 0, 42, 11);
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    if (rssi != -1) {
+        char db_str[10];
+        snprintf(db_str, sizeof(db_str), "%d dBm", rssi);
+        u8g2_DrawStr(&s_u8g2, 2, 8, db_str);
+    } else {
+        u8g2_DrawStr(&s_u8g2, 8, 8, "-0 dB");
+    }
+
+    // Banner central "STREAM"
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    u8g2_DrawStr(&s_u8g2, 46, 9, "STREAM");
+
+    // Velocidade alinhada a direita
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    char speed_str[16];
+    if (kbps >= 1024.0f) {
+        snprintf(speed_str, sizeof(speed_str), "%.1f MB/s", kbps / 1024.0f);
+    } else if (kbps > 0.05f) {
+        snprintf(speed_str, sizeof(speed_str), "%.0f KB/s", kbps);
+    } else {
+        snprintf(speed_str, sizeof(speed_str), "Buffer OK");
+    }
+    int speed_w = u8g2_GetStrWidth(&s_u8g2, speed_str);
+    u8g2_DrawStr(&s_u8g2, 127 - speed_w, 8, speed_str);
+
+    // 2. Nome da faixa com Marquee (Y=24)
+    u8g2_SetFont(&s_u8g2, u8g2_font_profont11_tr);
+    char safe_name[64];
+    sanitize_for_display(filename && filename[0] ? filename : "Streaming Web", safe_name, sizeof(safe_name));
+    int text_w = u8g2_GetStrWidth(&s_u8g2, safe_name);
+    if (text_w <= 127) {
+        u8g2_DrawStr(&s_u8g2, 0, 24, safe_name);
+    } else {
+        u8g2_SetClipWindow(&s_u8g2, 0, 13, 127, 26);
+        draw_marquee(&s_transfer_name_marquee, safe_name, 0, 24, 2);
+        u8g2_SetMaxClipWindow(&s_u8g2);
+    }
+
+    // 3. Barra de buffer da faixa (Y=30..41)
+    const int bar_y = 30;
+    const int bar_h = 12;
+    u8g2_DrawFrame(&s_u8g2, 0, bar_y, 128, bar_h);
+    if (buffer_pct > 0) {
+        int fill_w = (128 - 2) * buffer_pct / 100;
+        if (fill_w > 128 - 2) fill_w = 128 - 2;
+        u8g2_DrawBox(&s_u8g2, 1, bar_y + 1, fill_w, bar_h - 2);
+    }
+    // Texto de porcentagem centralizado na barra (modo XOR)
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    char pct_str[16];
+    snprintf(pct_str, sizeof(pct_str), "Buffer %d%%", buffer_pct);
+    int pw = u8g2_GetStrWidth(&s_u8g2, pct_str);
+    u8g2_SetDrawColor(&s_u8g2, 2);
+    u8g2_DrawStr(&s_u8g2, (128 - pw) / 2, bar_y + bar_h - 3, pct_str);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // 4. Rodapé informativo (Y=56)
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    u8g2_DrawStr(&s_u8g2, 0, 56, "mps3.local | Web Player");
+    u8g2_DrawStr(&s_u8g2, 100, 56, "[Play]");
 
     apply_brightness_if_needed();
     oled_flush_buffer();
@@ -2571,6 +3833,299 @@ void oled_display_show_eq(const float gains[11], int selected_band, bool eq_enab
     apply_brightness_if_needed();
     oled_flush_buffer();
 }
+
+// =========================================================================
+// Telas Avancadas de Gerenciamento Wi-Fi e Teclado Virtual 1-Bit
+// =========================================================================
+
+void oled_display_show_wifi_submenu(int cursor)
+{
+    if (!s_ready) return;
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Barra de Cabecalho (Y=0..11)
+    u8g2_DrawBox(&s_u8g2, 0, 0, 128, 11);
+    u8g2_SetDrawColor(&s_u8g2, 0);
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    u8g2_DrawStr(&s_u8g2, 4, 8, "WI-FI & REDES");
+    u8g2_DrawStr(&s_u8g2, 86, 8, "[ESQ: Sair]");
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    const char *opts[] = {
+        "1. Abrir Hotspot (AP)",
+        "2. Conectar Wi-Fi (STA)",
+        "3. Buscar Redes (Scan)",
+        "4. Redes Salvas (NVS)"
+    };
+
+    for (int i = 0; i < 4; i++) {
+        int y = 14 + i * 12;
+        if (i == cursor) {
+            u8g2_DrawBox(&s_u8g2, 2, y, 124, 11);
+            u8g2_SetDrawColor(&s_u8g2, 0);
+            u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+            u8g2_DrawStr(&s_u8g2, 6, y + 8, opts[i]);
+            u8g2_SetDrawColor(&s_u8g2, 1);
+        } else {
+            u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+            u8g2_DrawStr(&s_u8g2, 6, y + 8, opts[i]);
+        }
+    }
+
+    apply_brightness_if_needed();
+    oled_flush_buffer();
+}
+
+void oled_display_show_wifi_scan(const wifi_scan_display_ap_t *aps, int count, int cursor, int top_idx, bool is_scanning)
+{
+    if (!s_ready) return;
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Header
+    u8g2_DrawBox(&s_u8g2, 0, 0, 128, 11);
+    u8g2_SetDrawColor(&s_u8g2, 0);
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    if (is_scanning) {
+        u8g2_DrawStr(&s_u8g2, 4, 8, "VARRENDO REDES 2.4G...");
+    } else {
+        char hbuf[32];
+        snprintf(hbuf, sizeof(hbuf), "REDES (%d)  [ESQ: Voltar]", count);
+        u8g2_DrawStr(&s_u8g2, 4, 8, hbuf);
+    }
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    if (is_scanning) {
+        u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+        u8g2_DrawStr(&s_u8g2, 18, 34, "Buscando SSIDs...");
+        u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+        u8g2_DrawStr(&s_u8g2, 16, 48, "Aguarde um instante...");
+        apply_brightness_if_needed();
+        oled_flush_buffer();
+        return;
+    }
+
+    if (count == 0) {
+        u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+        u8g2_DrawStr(&s_u8g2, 12, 34, "Nenhuma rede achada");
+        u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+        u8g2_DrawStr(&s_u8g2, 16, 48, "[OK] Tentar novamente");
+        apply_brightness_if_needed();
+        oled_flush_buffer();
+        return;
+    }
+
+    int visible = 4;
+    for (int i = 0; i < visible && (top_idx + i) < count; i++) {
+        int idx = top_idx + i;
+        int y = 14 + i * 12;
+        bool sel = (idx == cursor);
+
+        if (sel) {
+            u8g2_DrawBox(&s_u8g2, 2, y, 124, 11);
+            u8g2_SetDrawColor(&s_u8g2, 0);
+        }
+
+        u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+        
+        char s_trunc[15];
+        strncpy(s_trunc, aps[idx].ssid, 14);
+        s_trunc[14] = '\0';
+        u8g2_DrawStr(&s_u8g2, 6, y + 8, s_trunc);
+
+        char rssi_str[12];
+        snprintf(rssi_str, sizeof(rssi_str), "%ddB %s", aps[idx].rssi, (aps[idx].authmode > 0) ? "[L]" : "   ");
+        int rw = u8g2_GetStrWidth(&s_u8g2, rssi_str);
+        u8g2_DrawStr(&s_u8g2, 122 - rw, y + 8, rssi_str);
+
+        if (sel) {
+            u8g2_SetDrawColor(&s_u8g2, 1);
+        }
+    }
+
+    apply_brightness_if_needed();
+    oled_flush_buffer();
+}
+
+void oled_display_show_wifi_keyboard(const char *ssid, const char *input_buf, int cur_r, int cur_c, int shift_mode)
+{
+    if (!s_ready) return;
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // 1. Linha superior: SSID alvo truncado + indicador de modo (Y=0..9)
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    char title_buf[32];
+    snprintf(title_buf, sizeof(title_buf), "SENHA: %.12s", (ssid && ssid[0]) ? ssid : "WIFI");
+    u8g2_DrawStr(&s_u8g2, 2, 8, title_buf);
+
+    const char *sm_tag = (shift_mode == 1) ? "[ABC]" : ((shift_mode == 2) ? "[SYM]" : "[abc]");
+    u8g2_DrawStr(&s_u8g2, 126 - u8g2_GetStrWidth(&s_u8g2, sm_tag), 8, sm_tag);
+
+    // 2. Caixa de visualizacao da senha digitada (Y=10..21)
+    u8g2_DrawFrame(&s_u8g2, 2, 10, 124, 12);
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    char show_buf[32];
+    int in_len = input_buf ? strlen(input_buf) : 0;
+    if (in_len <= 18) {
+        snprintf(show_buf, sizeof(show_buf), "%s_", input_buf ? input_buf : "");
+    } else {
+        snprintf(show_buf, sizeof(show_buf), "..%s_", input_buf + in_len - 16);
+    }
+    u8g2_DrawStr(&s_u8g2, 6, 19, show_buf);
+
+    // 3. Matriz do Teclado Virtual (4 linhas x 10 colunas em Y=24..63)
+    static const char *kb_lower[4][10] = {
+        {"1","2","3","4","5","6","7","8","9","0"},
+        {"q","w","e","r","t","y","u","i","o","p"},
+        {"a","s","d","f","g","h","j","k","l","_"},
+        {"z","x","c","v","b","n","m","^","<","OK"}
+    };
+    static const char *kb_upper[4][10] = {
+        {"1","2","3","4","5","6","7","8","9","0"},
+        {"Q","W","E","R","T","Y","U","I","O","P"},
+        {"A","S","D","F","G","H","J","K","L","_"},
+        {"Z","X","C","V","B","N","M","^","<","OK"}
+    };
+    static const char *kb_sym[4][10] = {
+        {"!","@","#","$","%","&","*","-","+","="},
+        {"/","?","<",">","(",")","[","]","{","}"},
+        {"~","^",":",";",",",".","'","\"","|","_"},
+        {"\\","`","$","?","!","#","*","^","<","OK"}
+    };
+
+    const char *(*active_kb)[10] = (shift_mode == 1) ? kb_upper : ((shift_mode == 2) ? kb_sym : kb_lower);
+
+    int start_y = 24;
+    int key_h = 9;
+    int key_w = 12;
+    int start_x = 4;
+
+    for (int r = 0; r < 4; r++) {
+        int y = start_y + r * 10;
+        for (int c_idx = 0; c_idx < 10; c_idx++) {
+            const char *label = active_kb[r][c_idx];
+            int x = start_x + c_idx * key_w;
+            bool sel = (r == cur_r && c_idx == cur_c);
+
+            if (sel) {
+                u8g2_DrawBox(&s_u8g2, x, y, key_w - 1, key_h);
+                u8g2_SetDrawColor(&s_u8g2, 0);
+            }
+
+            u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+            int lw = u8g2_GetStrWidth(&s_u8g2, label);
+            int tx = x + (key_w - 1 - lw) / 2;
+            u8g2_DrawStr(&s_u8g2, tx, y + key_h - 2, label);
+
+            if (sel) {
+                u8g2_SetDrawColor(&s_u8g2, 1);
+            }
+        }
+    }
+
+    apply_brightness_if_needed();
+    oled_flush_buffer();
+}
+
+void oled_display_show_wifi_manage(const char (*ssids)[33], const char (*passes)[65], int count, int cursor, int top_idx)
+{
+    if (!s_ready) return;
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Header
+    u8g2_DrawBox(&s_u8g2, 0, 0, 128, 11);
+    u8g2_SetDrawColor(&s_u8g2, 0);
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    char hbuf[32];
+    snprintf(hbuf, sizeof(hbuf), "REDES SALVAS (%d/8)", count);
+    u8g2_DrawStr(&s_u8g2, 4, 8, hbuf);
+    u8g2_DrawStr(&s_u8g2, 86, 8, "[ESQ: Sair]");
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    if (count == 0) {
+        u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+        u8g2_DrawStr(&s_u8g2, 12, 34, "Nenhuma rede salva");
+        u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+        u8g2_DrawStr(&s_u8g2, 14, 48, "Use 'Buscar Redes' p/ add");
+        apply_brightness_if_needed();
+        oled_flush_buffer();
+        return;
+    }
+
+    int visible = 4;
+    for (int i = 0; i < visible && (top_idx + i) < count; i++) {
+        int idx = top_idx + i;
+        int y = 14 + i * 12;
+        bool sel = (idx == cursor);
+
+        if (sel) {
+            u8g2_DrawBox(&s_u8g2, 2, y, 124, 11);
+            u8g2_SetDrawColor(&s_u8g2, 0);
+        }
+
+        u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+        char s_line[48];
+        snprintf(s_line, sizeof(s_line), "%d. %.16s", idx + 1, ssids[idx]);
+        u8g2_DrawStr(&s_u8g2, 6, y + 8, s_line);
+
+        if (sel) {
+            u8g2_SetDrawColor(&s_u8g2, 1);
+        }
+    }
+
+    apply_brightness_if_needed();
+    oled_flush_buffer();
+}
+
+void oled_display_show_wifi_network_action(const char *ssid, const char *pass, int action_cursor)
+{
+    if (!s_ready) return;
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    // Header com o nome da rede selecionada
+    u8g2_DrawBox(&s_u8g2, 0, 0, 128, 11);
+    u8g2_SetDrawColor(&s_u8g2, 0);
+    u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+    char hbuf[32];
+    snprintf(hbuf, sizeof(hbuf), "REDE: %.14s", ssid ? ssid : "");
+    u8g2_DrawStr(&s_u8g2, 4, 8, hbuf);
+    u8g2_SetDrawColor(&s_u8g2, 1);
+
+    const char *actions[] = {
+        "1. Conectar Agora",
+        "2. Ver Senha Gravada",
+        "3. Mover para o Topo",
+        "4. APAGAR REDE (Esquecer)"
+    };
+
+    for (int i = 0; i < 4; i++) {
+        int y = 14 + i * 12;
+        if (i == action_cursor) {
+            u8g2_DrawBox(&s_u8g2, 2, y, 124, 11);
+            u8g2_SetDrawColor(&s_u8g2, 0);
+            u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+            if (i == 1 && action_cursor == 1) {
+                char pbuf[48];
+                snprintf(pbuf, sizeof(pbuf), "Senha: %.14s", (pass && pass[0]) ? pass : "(aberta)");
+                u8g2_DrawStr(&s_u8g2, 6, y + 8, pbuf);
+            } else {
+                u8g2_DrawStr(&s_u8g2, 6, y + 8, actions[i]);
+            }
+            u8g2_SetDrawColor(&s_u8g2, 1);
+        } else {
+            u8g2_SetFont(&s_u8g2, u8g2_font_haxrcorp4089_tr);
+            u8g2_DrawStr(&s_u8g2, 6, y + 8, actions[i]);
+        }
+    }
+
+    apply_brightness_if_needed();
+    oled_flush_buffer();
+}
+
 
 
 static const uint8_t image_Speaker_bits[] = {0x00,0x00,0x60,0x00,0x60,0x01,0x6e,0x03,0xef,0x06,0xef,0x04,0xef,0x0c,0xef,0x0c,0xef,0x0c,0xef,0x04,0xef,0x06,0x6e,0x03,0x60,0x01,0x60,0x00,0x00,0x00,0x00,0x00};
@@ -3276,42 +4831,108 @@ void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx, int
     apply_brightness_if_needed();
     oled_flush_buffer();
 }
-void oled_display_show_unsupported(const char *filename)
+void oled_display_show_unsupported_ex(const char *filename, const char *reason)
 {
     if (!s_ready) return;
     u8g2_ClearBuffer(&s_u8g2);
     u8g2_SetDrawColor(&s_u8g2, 1);
     
-    // rect 6
-    u8g2_DrawBox(&s_u8g2, 6, 25, 29, 15);
-    // seele
+    // 1. Monolito SEELE 01 a direita (X=46..127, Y=0..63)
     u8g2_DrawXBM(&s_u8g2, 46, 0, 82, 64, image_seele_bits);
     
-    // extract extension
-    const char *ext = (filename != NULL) ? strrchr(filename, '.') : NULL;
-    if (!ext) ext = "arquivo";
+    // 2. Extrai extensao do arquivo para o badge (ex: FLAC, WAV, AAC, MP3)
+    char badge[8] = {0};
+    const char *dot = (filename != NULL) ? strrchr(filename, '.') : NULL;
+    if (dot != NULL && dot[1] != '\0') {
+        size_t i = 0;
+        for (; i < sizeof(badge) - 1 && dot[1 + i] != '\0'; i++) {
+            badge[i] = (char)toupper((unsigned char)dot[1 + i]);
+        }
+        badge[i] = '\0';
+    } else if (reason != NULL) {
+        if (strstr(reason, "FLAC") || strstr(reason, "flac")) {
+            strncpy(badge, "FLAC", sizeof(badge) - 1);
+        } else if (strstr(reason, "WAV") || strstr(reason, "wav")) {
+            strncpy(badge, "WAV", sizeof(badge) - 1);
+        } else if (strstr(reason, "MP3") || strstr(reason, "mp3")) {
+            strncpy(badge, "MP3", sizeof(badge) - 1);
+        }
+    }
+    if (badge[0] == '\0') {
+        strncpy(badge, "ARQ", sizeof(badge) - 1);
+    }
 
-    // string 2
-    u8g2_SetFont(&s_u8g2, u8g2_font_helvB08_tr); // A fonte certa para caber
-    u8g2_DrawStr(&s_u8g2, 1, 12, "Formato");
+    // 3. Verifica se e' limite excedido ou formato nao suportado
+    bool is_limit = false;
+    if (reason != NULL) {
+        if (strstr(reason, "max") != NULL || strstr(reason, "Max") != NULL ||
+            strstr(reason, "limite") != NULL || strstr(reason, "Limite") != NULL ||
+            strstr(reason, "excede") != NULL) {
+            is_limit = true;
+        }
+    }
+
+    // 4. Desenha Titulo no topo (Y baseline = 11)
+    const char *title = is_limit ? "LIMITE" : "FORMATO";
+    u8g2_SetFont(&s_u8g2, u8g2_font_helvB08_tr);
+    int tw = u8g2_GetStrWidth(&s_u8g2, title);
+    int tx = (46 - tw) / 2;
+    if (tx < 0) tx = 0;
+    u8g2_DrawStr(&s_u8g2, tx, 11, title);
+
+    // 5. Badge invertido (X=0..45, Y=14..26)
+    int bw = u8g2_GetStrWidth(&s_u8g2, badge) + 8;
+    if (bw > 42) bw = 42;
+    int bx = (46 - bw) / 2;
+    if (bx < 1) bx = 1;
+    u8g2_DrawBox(&s_u8g2, bx, 14, bw, 13);
     
-    // string 3
-    u8g2_SetDrawColor(&s_u8g2, 0); // Texto invertido na caixa preenchida
-    int ext_w = u8g2_GetStrWidth(&s_u8g2, ext);
-    u8g2_DrawStr(&s_u8g2, 6 + (29 - ext_w)/2, 36, ext);
-    
-    // string 4
+    u8g2_SetDrawColor(&s_u8g2, 0); // Inverte cor para texto no interior da caixa preenchida
+    int text_x = bx + (bw - u8g2_GetStrWidth(&s_u8g2, badge)) / 2;
+    u8g2_DrawStr(&s_u8g2, text_x, 24, badge);
+
+    // 6. Mensagens inferiores
     u8g2_SetDrawColor(&s_u8g2, 1);
-    u8g2_DrawStr(&s_u8g2, 0, 62, "Nao");
-    
-    // string 5
-    u8g2_DrawStr(&s_u8g2, 21, 62, "Suportado!");
-    
+    if (is_limit) {
+        u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+        
+        const char *l1 = "EXCEDIDO!";
+        int w1 = u8g2_GetStrWidth(&s_u8g2, l1);
+        u8g2_DrawStr(&s_u8g2, (46 - w1) / 2, 38, l1);
+
+        const char *l2 = "MAX 24-BIT";
+        const char *l3 = "192 KHZ";
+        if (reason != NULL && (strstr(reason, "32b") != NULL || strstr(reason, "384k") != NULL)) {
+            l2 = "MAX 32-BIT";
+            l3 = "384 KHZ";
+        } else if (reason != NULL && strstr(reason, "24b") != NULL) {
+            l2 = "MAX 24-BIT";
+            l3 = "192 KHZ";
+        }
+        int w2 = u8g2_GetStrWidth(&s_u8g2, l2);
+        u8g2_DrawStr(&s_u8g2, (46 - w2) / 2, 48, l2);
+
+        int w3 = u8g2_GetStrWidth(&s_u8g2, l3);
+        u8g2_DrawStr(&s_u8g2, (46 - w3) / 2, 58, l3);
+    } else {
+        u8g2_SetFont(&s_u8g2, u8g2_font_helvB08_tr);
+        int w_nao = u8g2_GetStrWidth(&s_u8g2, "Nao");
+        u8g2_DrawStr(&s_u8g2, (46 - w_nao) / 2, 43, "Nao");
+
+        u8g2_SetFont(&s_u8g2, u8g2_font_4x6_tr);
+        const char *l_sup = "SUPORTADO!";
+        int w_sup = u8g2_GetStrWidth(&s_u8g2, l_sup);
+        u8g2_DrawStr(&s_u8g2, (46 - w_sup) / 2, 56, l_sup);
+    }
+
     apply_brightness_if_needed();
     oled_flush_buffer();
 }
 
-
+void oled_display_show_unsupported(const char *filename)
+{
+    oled_display_show_unsupported_ex(filename, NULL);
+}
 
 void oled_display_show_eq_preset_list(int cursor, int active_preset, bool eq_enabled, const void *eq_cfg)
 {

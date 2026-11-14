@@ -1,6 +1,7 @@
 #include "uart_ctrl.h"
 
 #include "driver/uart.h"
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -112,7 +113,7 @@ static void rx_task(void *arg)
                         s_cfg.rx_cb((uart_ctrl_cmd_t)cmd, payload, len, s_cfg.user_ctx);
                     }
                 } else {
-                    ESP_LOGW(TAG, "CRC invalido (cmd=0x%02x len=%d) - quadro descartado", cmd, len);
+                    ESP_LOGD(TAG, "CRC invalido (cmd=0x%02x len=%d) - quadro descartado", cmd, len);
                 }
                 state = WAIT_SYNC;
                 break;
@@ -142,6 +143,10 @@ int uart_ctrl_init(const uart_ctrl_config_t *cfg)
                         UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (err != ESP_OK) return -1;
 
+    if (cfg->rx_gpio >= 0) {
+        gpio_set_pull_mode((gpio_num_t)cfg->rx_gpio, GPIO_PULLUP_ONLY);
+    }
+
     err = uart_driver_install(cfg->uart_num, UART_RX_BUF_SIZE, UART_TX_BUF_SIZE, 0, NULL, 0);
     if (err != ESP_OK) return -1;
 
@@ -150,7 +155,7 @@ int uart_ctrl_init(const uart_ctrl_config_t *cfg)
 
     s_initialized = true;
 
-    BaseType_t ok = xTaskCreate(rx_task, "uart_ctrl_rx", 4096, NULL, 10, NULL);
+    BaseType_t ok = xTaskCreatePinnedToCore(rx_task, "uart_ctrl_rx", 4096, NULL, 2, NULL, 0);
     if (ok != pdPASS) {
         s_initialized = false;
         return -1;

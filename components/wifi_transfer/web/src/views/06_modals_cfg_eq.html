@@ -1,0 +1,105 @@
+<!-- ========================================================================
+     VIEW 06: Modais de Configuração (Redes Wi-Fi / Tema) e Equalizador 10 Bandas
+     ======================================================================== -->
+    <!-- MODAL DE CONFIGURAÇÃO -->
+    <div id='configModal' style='display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg-card);color:var(--text-regular);border:1px solid var(--border-color);border-radius:10px;padding:20px;box-shadow:var(--card-shadow);z-index:2000;max-width:320px;width:90%'>
+        <h3 style='margin-top:0'>Redes WiFi conhecidas</h3>
+        <ul id='netList' style='list-style:none;margin:.4em 0;padding:0;max-height:140px;overflow-y:auto;border:1px solid var(--border-color);border-radius:4px;background:var(--bg-subtle)'></ul>
+        <div id='netEmpty' style='display:none;color:var(--text-muted);font-size:.85em;padding:.4em 0'>Nenhuma rede salva ainda.</div>
+        <label style='font-size:0.9em;color:var(--text-muted)'>Adicionar rede:</label><br>
+        <input type='text' id='cfgSSID' placeholder='Nome da rede (SSID)' style='width:100%;padding:6px;margin:4px 0;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:4px'><br>
+        <input type='password' id='cfgPass' placeholder='Senha' style='width:100%;padding:6px;margin:4px 0;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:4px'><br>
+        
+        <hr style='border:none;border-top:1px solid var(--border-color);margin:14px 0;'>
+        <div style="margin-bottom:8px;">
+            <label style="font-weight:bold;font-size:0.9em;display:block;margin-bottom:6px;">Tema da Interface:</label>
+            <div style="display:flex;gap:6px;">
+                <button type="button" id="themeBtnAuto" class="btn-secondary" style="flex:1;padding:6px;font-size:0.82em;" onclick="setTheme('auto')">🌓 Auto</button>
+                <button type="button" id="themeBtnDark" class="btn-secondary" style="flex:1;padding:6px;font-size:0.82em;" onclick="setTheme('dark')">🌙 Escuro</button>
+                <button type="button" id="themeBtnLight" class="btn-secondary" style="flex:1;padding:6px;font-size:0.82em;" onclick="setTheme('light')">☀️ Claro</button>
+            </div>
+        </div>
+        <div style="margin-bottom:8px;">
+            <label style="font-weight:bold;font-size:0.9em;display:block;margin-bottom:6px;">Cor do Display OLED 128×64:</label>
+            <div style="display:flex;gap:5px;flex-wrap:wrap;">
+                <button type="button" class="btn-secondary" style="flex:1;padding:5px;font-size:0.76em;" onclick="setOledColor('white')">⚪ Branco</button>
+                <button type="button" class="btn-secondary" style="flex:1;padding:5px;font-size:0.76em;" onclick="setOledColor('blue')">🔵 Azul</button>
+                <button type="button" class="btn-secondary" style="flex:1;padding:5px;font-size:0.76em;" onclick="setOledColor('yellow')">🟡 Amarelo</button>
+                <button type="button" class="btn-secondary" style="flex:1;padding:5px;font-size:0.76em;" onclick="setOledColor('green')">🟢 Verde</button>
+                <button type="button" class="btn-secondary" style="flex:1;padding:5px;font-size:0.76em;" onclick="setOledColor('dual')">🌗 Dual</button>
+            </div>
+        </div>
+        <hr style='border:none;border-top:1px solid var(--border-color);margin:12px 0;'>
+        <div style="margin-bottom:8px;">
+            <label style="font-weight:bold;font-size:0.86em;display:block;margin-bottom:4px;">☁️ Central Web &amp; Cloud Sync (GitHub Pages):</label>
+            <div id="cloudSyncStatusBadge" style="font-size:0.75em;color:var(--text-muted);background:var(--bg-subtle);border:1px solid var(--border-color);padding:5px 8px;border-radius:4px;margin-bottom:6px;word-break:break-all;">⚡ Flash Embarcada</div>
+            <div style="display:flex;gap:6px;">
+                <button type="button" id="btnCloudCheckUpdate" class="btn-secondary" style="flex:1;padding:5px;font-size:0.76em;" onclick="checkCloudWebUpdate(true)">🔄 Checar Nuvem</button>
+                <button type="button" id="btnCloudResetCache" class="btn-secondary" style="flex:1;padding:5px;font-size:0.76em;" onclick="resetCloudWebCache()">⚡ Usar Flash</button>
+            </div>
+        </div>
+        <div class='btn-row' style='display:flex;justify-content:space-between;margin-top:12px'>
+            <button id='btnSaveCfg' class='btn-secondary'>+ Adicionar</button>
+            <button id='btnCloseCfg' class='btn-secondary'>Fechar</button>
+        </div>
+        <div id='cfgStatus' style='margin-top:8px;font-size:.85em;color:#2a7'></div>
+    </div>
+
+
+    <!-- MODAL DE EQUALIZADOR (10 BANDAS) -->
+    <div id='eqModal' style='display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg-card);color:var(--text-regular);border:1px solid var(--border-color);border-radius:12px;padding:20px;box-shadow:var(--card-shadow);z-index:2000;max-width:560px;width:95%;max-height:90vh;overflow-y:auto;'>
+        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:10px;margin-bottom:14px;">
+            <h3 style="margin:0;display:flex;align-items:center;gap:8px;">🎚️ Equalizador de 10 Bandas</h3>
+            <div style="display:flex;align-items:center;gap:12px;">
+                <label style="cursor:pointer;display:flex;align-items:center;gap:5px;font-size:0.9em;font-weight:bold;">
+                    <input type="checkbox" id="eqMasterEnable" style="cursor:pointer;width:16px;height:16px;accent-color:var(--accent-color);"> EQ Ativado
+                </label>
+                <button id="btnCloseEq" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:var(--text-muted);padding:0 4px;">✕</button>
+            </div>
+        </div>
+
+        <!-- Seleção de Preset e Nome -->
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;background:var(--bg-subtle);border:1px solid var(--border-color);padding:10px;border-radius:8px;">
+            <label style="font-size:0.85em;font-weight:bold;color:var(--text-primary);">Preset:</label>
+            <select id="eqPresetSelect" style="padding:6px 8px;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:6px;font-weight:bold;"></select>
+            <input type="text" id="eqPresetName" placeholder="Nome do Preset" maxlength="15" style="flex:1;min-width:110px;padding:6px 10px;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:6px;">
+            <button id="btnActivatePreset" class="btn-primary" style="padding:6px 12px;font-size:0.85em;font-weight:bold;">Ativar no MPS3</button>
+        </div>
+
+        <!-- Curvas Rápidas (Templates) -->
+        <div style="margin-bottom:14px;">
+            <div style="font-size:0.8em;color:var(--text-muted);margin-bottom:6px;font-weight:bold;">Carregar Curva Pronta:</div>
+            <div style="display:flex;flex-wrap:wrap;gap:5px;">
+                <button class="eq-curve-btn" onclick="applyEqCurve('flat')">Flat</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('rock')">Rock / Metal</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('pop')">Pop</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('dance')">Dance</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('jazz')">Jazz / Blues</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('classica')">Clássica</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('vocal')">Vocal</button>
+                <button class="eq-curve-btn" onclick="applyEqCurve('bass')">Bass Boost</button>
+            </div>
+        </div>
+
+        <!-- Equalizador no Eixo Y (Mesa de Som) -->
+        <div class="eq-faders-wrapper">
+            <!-- Preamp (Ganho Geral) -->
+            <div class="eq-fader-col eq-preamp-col">
+                <span class="eq-fader-val" id="eqOverallVal">0.0 dB</span>
+                <div class="eq-fader-track-wrap">
+                    <div class="eq-fader-zero-line"></div>
+                    <input type="range" id="eqOverallSlider" class="v-fader" min="-30" max="30" step="0.5" value="0">
+                </div>
+                <span class="eq-fader-freq">PREAMP</span>
+            </div>
+
+            <!-- 10 Faders de Frequência -->
+            <div id="eqBandsContainer" style="display:flex;flex:1;justify-content:space-between;align-items:center;"></div>
+        </div>
+
+        <!-- Rodapé do Modal -->
+        <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border-color);padding-top:12px;">
+            <div id="eqStatusMsg" style="font-size:0.85em;color:#28a745;font-weight:bold;"></div>
+            <button id="btnSaveEq" class="btn-primary" style="padding:8px 18px;background:#28a745;font-weight:bold;">💾 Salvar no MPS3</button>
+        </div>
+    </div>

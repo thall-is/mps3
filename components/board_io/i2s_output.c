@@ -8,6 +8,7 @@
 #include "driver/gpio.h"
 #include "esp_rom_sys.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 static const char *TAG = "i2s_output";
 #include <string.h>
@@ -28,30 +29,22 @@ void i2s_output_set_rate_change_cb(void (*cb)(uint32_t sample_rate))
     }
 }
 
-esp_err_t i2s_output_init(void)
+static esp_err_t i2s_output_init_locked(void)
 {
-    if (!s_i2s_mutex) {
-        s_i2s_mutex = xSemaphoreCreateMutex();
+    if (s_tx_handle != NULL) {
+        return ESP_OK;
     }
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    // Buffer DMA calibrado para o limite de hardware do GDMA (max 4092 B por descritor).
-    // 256 frames stereo de 32 bits = 2048 bytes (alinhamento perfeito de 2 descritores por bloco DSP de 512 frames).
-    // 48 descritores x 256 frames = 12.288 frames (96 KB / 64 ms a 192 kHz), evitando fragmentação e underruns.
-    chan_cfg.dma_desc_num = 48;
-    chan_cfg.dma_frame_num = 256;
-    chan_cfg.auto_clear = true;
-    chan_cfg.auto_clear_after_cb = true;
-    esp_err_t ret = i2s_new_channel(&chan_cfg, &s_tx_handle, NULL);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao criar canal I2S: %s", esp_err_to_name(ret));
-        return ret;
-    }
+
+    uint32_t init_rate = (s_current_rate > 0) ? s_current_rate : 44100;
+    i2s_mclk_multiple_t mult = (init_rate >= 176400) ?
+                                I2S_MCLK_MULTIPLE_128 :
+                                I2S_MCLK_MULTIPLE_256;
 
     i2s_std_config_t std_cfg = {
         .clk_cfg = {
-            .sample_rate_hz = 44100,
+            .sample_rate_hz = init_rate,
             .clk_src        = I2S_CLK_SRC_PLL_240M,
-            .mclk_multiple  = I2S_MCLK_MULTIPLE_256,
+            .mclk_multiple  = mult,
         },
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT,
                                                          I2S_SLOT_MODE_STEREO),
@@ -71,29 +64,106 @@ esp_err_t i2s_output_init(void)
         },
     };
 
-    ret = i2s_channel_init_std_mode(s_tx_handle, &std_cfg);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao configurar modo std I2S: %s", esp_err_to_name(ret));
-        return ret;
+    // Buffer DMA calibrado para o limite de hardware do GDMA (max 4092 B por descritor).
+    // Tenta 48 descritores (96 KB / 64 ms a 192 kHz); sob fragmentacao pos-WiFi, recua para 32, 24 ou 16.
+    const uint32_t desc_candidates[] = {48, 32, 24, 16};
+    esp_err_t ret = ESP_FAIL;
+
+    for (size_t d = 0; d < sizeof(desc_candidates) / sizeof(desc_candidates[0]); d++) {
+        uint32_t num_desc = desc_candidates[d];
+        i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+        chan_cfg.dma_desc_num = num_desc;
+        chan_cfg.dma_frame_num = 256;
+        chan_cfg.auto_clear = true;
+        chan_cfg.auto_clear_after_cb = true;
+
+        ret = i2s_new_channel(&chan_cfg, &s_tx_handle, NULL);
+        if (ret != ESP_OK) {
+            continue;
+        }
+
+        ret = i2s_channel_init_std_mode(s_tx_handle, &std_cfg);
+        if (ret != ESP_OK) {
+            i2s_del_channel(s_tx_handle);
+            s_tx_handle = NULL;
+            continue;
+        }
+
+        ret = i2s_channel_enable(s_tx_handle);
+        if (ret != ESP_OK) {
+            i2s_del_channel(s_tx_handle);
+            s_tx_handle = NULL;
+            continue;
+        }
+
+        s_current_rate = init_rate;
+        s_channel_enabled = true;
+        ESP_LOGI(TAG, "Canal I2S inicializado (Taxa=%u Hz, %ux256 frames DMA, ~%u KB)",
+                 (unsigned)init_rate, (unsigned)num_desc, (unsigned)(num_desc * 256 * 8 / 1024));
+        return ESP_OK;
     }
 
-    ret = i2s_channel_enable(s_tx_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao habilitar canal I2S: %s", esp_err_to_name(ret));
-        return ret;
-    }
+    ESP_LOGE(TAG, "Falha ao inicializar canal I2S em todos os tamanhos de descritor: %s", esp_err_to_name(ret));
+    return ret;
+}
 
-    s_current_rate = 44100;
-    s_channel_enabled = true;
-    return ESP_OK;
+esp_err_t i2s_output_init(void)
+{
+    if (!s_i2s_mutex) {
+        s_i2s_mutex = xSemaphoreCreateMutex();
+    }
+    xSemaphoreTake(s_i2s_mutex, portMAX_DELAY);
+    esp_err_t ret = i2s_output_init_locked();
+    xSemaphoreGive(s_i2s_mutex);
+    return ret;
+}
+
+esp_err_t i2s_output_deinit(void)
+{
+    if (!s_i2s_mutex) {
+        return ESP_OK;
+    }
+    xSemaphoreTake(s_i2s_mutex, portMAX_DELAY);
+    if (!s_tx_handle) {
+        xSemaphoreGive(s_i2s_mutex);
+        return ESP_OK;
+    }
+    if (s_channel_enabled) {
+        i2s_channel_disable(s_tx_handle);
+        s_channel_enabled = false;
+    }
+    esp_err_t ret = i2s_del_channel(s_tx_handle);
+    if (ret == ESP_OK) {
+        s_tx_handle = NULL;
+        ESP_LOGI(TAG, "Canal I2S desinicializado e buffers DMA liberados (~96 KB DRAM).");
+    } else {
+        ESP_LOGE(TAG, "Falha ao deletar canal I2S: %s", esp_err_to_name(ret));
+    }
+    xSemaphoreGive(s_i2s_mutex);
+    return ret;
+}
+
+bool i2s_output_is_initialized(void)
+{
+    if (!s_i2s_mutex) {
+        return false;
+    }
+    xSemaphoreTake(s_i2s_mutex, portMAX_DELAY);
+    bool init = (s_tx_handle != NULL);
+    xSemaphoreGive(s_i2s_mutex);
+    return init;
 }
 
 esp_err_t i2s_output_set_rate(uint32_t sample_rate)
 {
     if (s_i2s_mutex) xSemaphoreTake(s_i2s_mutex, portMAX_DELAY);
     if (!s_tx_handle) {
+        s_current_rate = sample_rate;
         if (s_i2s_mutex) xSemaphoreGive(s_i2s_mutex);
-        return ESP_ERR_INVALID_STATE;
+        if (s_rate_change_cb) {
+            s_rate_change_cb(sample_rate);
+        }
+        return ESP_OK;
     }
     if (sample_rate == s_current_rate) {
         if (s_i2s_mutex) xSemaphoreGive(s_i2s_mutex);
@@ -166,9 +236,13 @@ esp_err_t i2s_output_write(const int32_t *samples, size_t sample_count, size_t *
 {
     if (s_i2s_mutex) xSemaphoreTake(s_i2s_mutex, portMAX_DELAY);
     if (!s_tx_handle) {
-        if (s_i2s_mutex) xSemaphoreGive(s_i2s_mutex);
-        if (samples_written) *samples_written = 0;
-        return ESP_ERR_INVALID_STATE;
+        ESP_LOGI(TAG, "Auto-inicializando canal I2S sob demanda para reproducao de audio...");
+        esp_err_t init_err = i2s_output_init_locked();
+        if (init_err != ESP_OK) {
+            if (s_i2s_mutex) xSemaphoreGive(s_i2s_mutex);
+            if (samples_written) *samples_written = 0;
+            return init_err;
+        }
     }
     if (!s_channel_enabled) {
         esp_err_t en_err = i2s_channel_enable(s_tx_handle);
@@ -187,6 +261,12 @@ esp_err_t i2s_output_write(const int32_t *samples, size_t sample_count, size_t *
     esp_err_t ret = i2s_channel_write(s_tx_handle, samples, bytes_to_write,
                                        &bytes_written, pdMS_TO_TICKS(1000));
     if (s_i2s_mutex) xSemaphoreGive(s_i2s_mutex);
+
+    static bool s_first_audio_transmitted = false;
+    if (!s_first_audio_transmitted && bytes_written > 0) {
+        s_first_audio_transmitted = true;
+        printf("\n@METRIC: PRIMEIRO PACOTE DE AUDIO I2S: %u ms\n", (unsigned)(esp_timer_get_time() / 1000ULL)); fflush(stdout);
+    }
 
     if (g_radio_pcm_hook && sample_count > 0) {
         // Converter int32_t para int16_t para streaming WAV/PCM
@@ -244,8 +324,9 @@ esp_err_t i2s_output_enable(void)
 {
     if (s_i2s_mutex) xSemaphoreTake(s_i2s_mutex, portMAX_DELAY);
     if (!s_tx_handle) {
+        esp_err_t init_err = i2s_output_init_locked();
         if (s_i2s_mutex) xSemaphoreGive(s_i2s_mutex);
-        return ESP_ERR_INVALID_STATE;
+        return init_err;
     }
     if (s_channel_enabled) {
         if (s_i2s_mutex) xSemaphoreGive(s_i2s_mutex);

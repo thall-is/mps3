@@ -1,0 +1,198 @@
+/* ==========================================================================
+ * MÓDULO CSS 01: Variáveis de Tema (Claro/Escuro), Reset Global e Tipografia
+ * ========================================================================== */
+        /* --- Sistema de Temas Claro / Escuro --- */
+        :root {
+            --bg-page: #f4f6f9;
+            --bg-card: #ffffff;
+            --bg-card-hover: #fbfcfd;
+            --bg-subtle: #f0f4f8;
+            --border-color: #e8ecef;
+            --border-input: #d0d7de;
+            --text-primary: #1a1a1a;
+            --text-regular: #2a323c;
+            --text-muted: #606d7b;
+            --accent-color: #0077ff;
+            --accent-hover: #0066dd;
+            --card-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+
+        body.dark-theme, html.dark-theme body {
+            --bg-page: #0a0d12;
+            --bg-card: #10151e;
+            --bg-card-hover: #171f2c;
+            --bg-subtle: #151c28;
+            --border-color: #222d3f;
+            --border-input: #2e3d54;
+            --text-primary: #f0f6fc;
+            --text-regular: #d4e0ed;
+            --text-muted: #8b9eb7;
+            --accent-color: #00e5ff;
+            --accent-hover: #00b8d4;
+            --card-shadow: 0 4px 18px rgba(0,0,0,0.55);
+        }
+
+        /* Variantes Comerciais do Fósforo OLED SSD1306 128x64 */
+        html[data-oled-color="white"] body, body[data-oled-color="white"] {
+            --oled-on: #f4f9ff;
+            --oled-top: #f4f9ff;
+            --oled-glow: rgba(244, 249, 255, 0.28);
+            --oled-off: #141923;
+            --oled-pill-text: #06090e;
+        }
+        html[data-oled-color="blue"] body, body[data-oled-color="blue"], :root {
+            --oled-on: #00e5ff;
+            --oled-top: #00e5ff;
+            --oled-glow: rgba(0, 229, 255, 0.28);
+            --oled-off: #091624;
+            --oled-pill-text: #040b12;
+        }
+        html[data-oled-color="yellow"] body, body[data-oled-color="yellow"] {
+            --oled-on: #ffd600;
+            --oled-top: #ffd600;
+            --oled-glow: rgba(255, 214, 0, 0.28);
+            --oled-off: #1d1806;
+            --oled-pill-text: #120e02;
+        }
+        html[data-oled-color="green"] body, body[data-oled-color="green"] {
+            --oled-on: #00ff66;
+            --oled-top: #00ff66;
+            --oled-glow: rgba(0, 255, 102, 0.28);
+            --oled-off: #071c10;
+            --oled-pill-text: #031108;
+        }
+        html[data-oled-color="dual"] body, body[data-oled-color="dual"] {
+            --oled-on: #00e5ff;
+            --oled-top: #ffd600;
+            --oled-glow: rgba(0, 229, 255, 0.28);
+            --oled-off: #091624;
+            --oled-pill-text: #040b12;
+        }
+
+        body.dark-theme[data-oled-color="white"], html.dark-theme[data-oled-color="white"] body {
+            --accent-color: #e2eefc;
+            --accent-hover: #c5d9f2;
+        }
+        body.dark-theme[data-oled-color="blue"], html.dark-theme[data-oled-color="blue"] body {
+            --accent-color: #00e5ff;
+            --accent-hover: #00b8d4;
+        }
+        body.dark-theme[data-oled-color="yellow"], html.dark-theme[data-oled-color="yellow"] body {
+            --accent-color: #ffd600;
+            --accent-hover: #e5c000;
+        }
+        body.dark-theme[data-oled-color="green"], html.dark-theme[data-oled-color="green"] body {
+            --accent-color: #00ff66;
+            --accent-hover: #00d656;
+        }
+        body.dark-theme[data-oled-color="dual"], html.dark-theme[data-oled-color="dual"] body {
+            --accent-color: #00e5ff;
+            --accent-hover: #ffd600;
+        }
+
+        /* Seletor Rápido de Cor OLED (Branco, Azul, Amarelo, Verde, Dual-Zone) */
+        .oled-color-bar {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            background: #070b10;
+            border: 1px solid var(--border-color);
+            border-radius: 999px;
+            padding: 3px 8px;
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+            font-size: 0.72em;
+            color: #cbd5e1;
+        }
+        .oled-swatch {
+            width: 15px;
+            height: 15px;
+            border-radius: 4px;
+            border: 1.5px solid rgba(255,255,255,0.28);
+            cursor: pointer;
+            padding: 0;
+            transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+        }
+        .oled-swatch:hover {
+            transform: scale(1.16);
+        }
+        .oled-swatch.active {
+            border-color: #ffffff;
+            box-shadow: 0 0 8px var(--oled-on);
+            transform: scale(1.15);
+        }
+        .oled-swatch-white  { background: #f4f9ff; }
+        .oled-swatch-blue   { background: #00e5ff; }
+        .oled-swatch-yellow { background: #ffd600; }
+        .oled-swatch-green  { background: #00ff66; }
+        .oled-swatch-dual   { background: linear-gradient(180deg, #ffd600 36%, #00e5ff 36%); }
+
+        /* Moldura do Mini-OLED 128x64 ao vivo no topo da Central Web */
+        .oled-live-bezel {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+            background: #06090f;
+            border: 1.5px solid var(--oled-on);
+            border-radius: 10px;
+            padding: 8px 12px;
+            box-shadow: 0 0 18px var(--oled-glow), inset 0 0 12px rgba(0,0,0,0.8);
+        }
+        #headerOledCanvas {
+            width: 256px;
+            height: 128px;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            border-radius: 4px;
+            border: 1px solid rgba(255,255,255,0.14);
+            background: #03060a;
+            display: block;
+            flex-shrink: 0;
+        }
+        @media (max-width: 560px) {
+            #headerOledCanvas {
+                width: 192px;
+                height: 96px;
+            }
+        }
+
+        body {
+            background: var(--bg-page);
+            color: var(--text-regular);
+            transition: background 0.3s, color 0.3s;
+        }
+
+        h2, h3, h4 { color: var(--text-primary); }
+
+        #header-status, table, .modal-card, #configModal, #eqModal, #player-bar, #dropzone {
+            background: var(--bg-card);
+            border-color: var(--border-color);
+            box-shadow: var(--card-shadow);
+            color: var(--text-regular);
+        }
+
+        tr:hover td { background: var(--bg-card-hover); }
+        td { border-bottom-color: var(--border-color); }
+        .file .name { color: var(--text-regular); }
+        .dir .name { color: var(--accent-color); }
+
+        .search-box, input[type="text"], input[type="password"] {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border-color: var(--border-input);
+        }
+
+        .btn-secondary, .upload-btns button, .toolbar button, .tool-btn {
+            background: var(--bg-subtle);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-secondary:hover, .upload-btns button:hover, .toolbar button:hover, .tool-btn:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--accent-color);
+        }

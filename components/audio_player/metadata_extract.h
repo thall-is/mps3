@@ -25,6 +25,8 @@ typedef struct {
     char title[128];            /**< Título da música (tag TIT2/TITLE ou vazio). */
     char artist[64];            /**< Nome do artista (tag TPE1/ARTIST ou vazio). */
     char album[64];             /**< Nome do álbum (tag TALB/ALBUM ou vazio). */
+    char genre[32];             /**< Gênero musical (tag TCON/GENRE/©gen ou vazio). */
+    uint16_t release_year;      /**< Ano de lançamento (tag TYER/TDRC/DATE/©day ou 0). */
     char format_name[16];       /**< Formato do arquivo (ex.: "FLAC", "MP3", "WAV", "OGG"). */
     uint32_t total_sec;         /**< Duração total em segundos (0 = desconhecida). */
     bool duration_is_estimate;  /**< true se a duração foi estimada por tamanho/bitrate. */
@@ -38,6 +40,11 @@ typedef struct {
      */
     uint64_t audio_data_offset; /**< Posição do primeiro frame de áudio útil no arquivo. */
     uint32_t avg_byte_rate;     /**< Taxa média de bytes por segundo (0 = indisponível). */
+
+    float replaygain_track_db;  /**< Ganho ReplayGain da faixa em dB (ex: -6.5f). */
+    float replaygain_album_db;  /**< Ganho ReplayGain do álbum em dB (ex: -5.2f). */
+    bool has_replaygain_track;  /**< true se tag REPLAYGAIN_TRACK_GAIN foi extraída. */
+    bool has_replaygain_album;  /**< true se tag REPLAYGAIN_ALBUM_GAIN foi extraída. */
 } track_metadata_t;
 
 /**

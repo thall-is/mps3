@@ -88,3 +88,9 @@ void menu_nav_select_active(void)
     const menu_item_t *item = find_active();
     if (item && item->nav_select) item->nav_select();
 }
+
+void menu_nav_left_active(void)
+{
+    const menu_item_t *item = find_active();
+    if (item && item->nav_left) item->nav_left();
+}

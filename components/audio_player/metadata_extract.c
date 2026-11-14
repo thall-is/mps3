@@ -32,6 +32,110 @@ static void copy_trim(char *dst, size_t dst_len, const char *src, size_t src_len
     }
 }
 
+static uint16_t parse_release_year_str(const char *s)
+{
+    if (!s) return 0;
+    for (size_t i = 0; s[i] != '\0'; i++) {
+        if (isdigit((unsigned char)s[i]) &&
+            isdigit((unsigned char)s[i + 1]) &&
+            isdigit((unsigned char)s[i + 2]) &&
+            isdigit((unsigned char)s[i + 3])) {
+            bool prev_digit = (i > 0) && isdigit((unsigned char)s[i - 1]);
+            bool next_digit = isdigit((unsigned char)s[i + 4]);
+            if (!prev_digit && !next_digit) {
+                int y = (s[i] - '0') * 1000 + (s[i + 1] - '0') * 100 +
+                        (s[i + 2] - '0') * 10 + (s[i + 3] - '0');
+                if (y >= 1900 && y <= 2099) {
+                    return (uint16_t)y;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static const char *id3v1_genre_lookup(int idx)
+{
+    static const char * const k_genres[80] = {
+        "Blues", "Classic Rock", "Country", "Dance", "Disco", "Funk", "Grunge", "Hip-Hop",
+        "Jazz", "Metal", "New Age", "Oldies", "Other", "Pop", "R&B", "Rap",
+        "Reggae", "Rock", "Techno", "Industrial", "Alternative", "Ska", "Death Metal", "Pranks",
+        "Soundtrack", "Euro-Techno", "Ambient", "Trip-Hop", "Vocal", "Jazz+Funk", "Fusion", "Trance",
+        "Classical", "Instrumental", "Acid", "House", "Game", "Sound Clip", "Gospel", "Noise",
+        "Alt. Rock", "Bass", "Soul", "Punk", "Space", "Meditative", "Instrumental Pop", "Instrumental Rock",
+        "Ethnic", "Gothic", "Darkwave", "Techno-Industrial", "Electronic", "Pop-Folk", "Eurodance", "Dream",
+        "Southern Rock", "Comedy", "Cult", "Gangsta", "Top 40", "Christian Rap", "Pop/Funk", "Jungle",
+        "Native American", "Cabaret", "New Wave", "Psychedelic", "Rave", "Showtunes", "Trailer", "Lo-Fi",
+        "Tribal", "Acid Punk", "Acid Jazz", "Polka", "Retro", "Musical", "Rock & Roll", "Hard Rock"
+    };
+    if (idx >= 0 && idx < 80) return k_genres[idx];
+    if (idx == 85) return "Latin";
+    if (idx == 86 || idx == 114) return "Samba";
+    if (idx == 131) return "Indie";
+    if (idx == 186) return "Podcast";
+    return NULL;
+}
+
+static void normalize_genre_str(char *genre, size_t max_len)
+{
+    if (!genre || genre[0] == '\0') return;
+    if (genre[0] == '(' && isdigit((unsigned char)genre[1])) {
+        const char *close = strchr(genre + 1, ')');
+        if (close) {
+            if (close[1] != '\0' && close[1] != '(') {
+                char tmp[32];
+                copy_trim(tmp, sizeof(tmp), close + 1, strlen(close + 1));
+                copy_trim(genre, max_len, tmp, strlen(tmp));
+                return;
+            }
+            int idx = atoi(genre + 1);
+            const char *mapped = id3v1_genre_lookup(idx);
+            if (mapped) {
+                copy_trim(genre, max_len, mapped, strlen(mapped));
+            }
+            return;
+        }
+    }
+    bool all_digits = true;
+    for (size_t i = 0; genre[i] != '\0'; i++) {
+        if (!isdigit((unsigned char)genre[i])) {
+            all_digits = false;
+            break;
+        }
+    }
+    if (all_digits) {
+        int idx = atoi(genre);
+        const char *mapped = id3v1_genre_lookup(idx);
+        if (mapped) {
+            copy_trim(genre, max_len, mapped, strlen(mapped));
+        }
+    }
+}
+
+static void extract_id3v1_fallback(FILE *fp, uint64_t file_size, track_metadata_t *out)
+{
+    if (file_size < 128) return;
+    if (out->title[0] && out->artist[0] && out->album[0] && out->genre[0] && out->release_year > 0) return;
+    long saved = ftell(fp);
+    if (fseek(fp, (long)(file_size - 128), SEEK_SET) == 0) {
+        uint8_t tag[128];
+        if (fread(tag, 1, 128, fp) == 128 && memcmp(tag, "TAG", 3) == 0) {
+            if (out->title[0] == '\0') copy_trim(out->title, sizeof(out->title), (const char *)(tag + 3), 30);
+            if (out->artist[0] == '\0') copy_trim(out->artist, sizeof(out->artist), (const char *)(tag + 33), 30);
+            if (out->album[0] == '\0') copy_trim(out->album, sizeof(out->album), (const char *)(tag + 63), 30);
+            if (out->release_year == 0) {
+                char ystr[5] = { (char)tag[93], (char)tag[94], (char)tag[95], (char)tag[96], '\0' };
+                out->release_year = parse_release_year_str(ystr);
+            }
+            if (out->genre[0] == '\0') {
+                const char *g = id3v1_genre_lookup((int)tag[127]);
+                if (g) copy_trim(out->genre, sizeof(out->genre), g, strlen(g));
+            }
+        }
+    }
+    if (saved >= 0) fseek(fp, saved, SEEK_SET);
+}
+
 // --- ID3v2 (MP3) -----------------------------------------------------------
 
 static uint32_t syncsafe32(const uint8_t *b)
@@ -79,6 +183,75 @@ static void decode_id3_text(const uint8_t *data, uint32_t len, char *out, size_t
     while (o > 0 && out[o - 1] == ' ') out[--o] = '\0';
 }
 
+static bool parse_replaygain_db_str(const char *str, float *out_db)
+{
+    if (!str || !out_db) return false;
+    while (*str == ' ' || *str == '\t') str++;
+    if (*str == '\0') return false;
+    char *endptr = NULL;
+    float val = strtof(str, &endptr);
+    if (endptr == str) return false;
+    if (val < -24.0f) val = -24.0f;
+    if (val > 12.0f) val = 12.0f;
+    *out_db = val;
+    return true;
+}
+
+static void parse_id3_txxx_replaygain(const uint8_t *payload, uint32_t plen, track_metadata_t *out)
+{
+    if (!payload || plen < 4 || !out) return;
+    uint8_t enc = payload[0];
+    const uint8_t *p = payload + 1;
+    uint32_t rem = plen - 1;
+
+    char desc[64] = {0};
+    char val[64] = {0};
+
+    if (enc == 0 || enc == 3) {
+        uint32_t sep = 0;
+        while (sep < rem && p[sep] != 0) sep++;
+        if (sep >= rem) return;
+        copy_trim(desc, sizeof(desc), (const char *)p, sep);
+        const uint8_t *vp = p + sep + 1;
+        uint32_t vrem = rem - (sep + 1);
+        copy_trim(val, sizeof(val), (const char *)vp, vrem);
+    } else if (enc == 1 || enc == 2) {
+        uint32_t sep = 0;
+        while (sep + 1 < rem && !(p[sep] == 0 && p[sep + 1] == 0)) sep += 2;
+        if (sep + 1 >= rem) return;
+        uint8_t tmp_d[128];
+        uint32_t d_len = (sep < sizeof(tmp_d) - 1) ? sep : (sizeof(tmp_d) - 1);
+        tmp_d[0] = enc;
+        memcpy(tmp_d + 1, p, d_len);
+        decode_id3_text(tmp_d, d_len + 1, desc, sizeof(desc));
+
+        const uint8_t *vp = p + sep + 2;
+        uint32_t vrem = (rem > sep + 2) ? (rem - (sep + 2)) : 0;
+        if (vrem > 0) {
+            uint8_t tmp_v[128];
+            uint32_t v_len = (vrem < sizeof(tmp_v) - 1) ? vrem : (sizeof(tmp_v) - 1);
+            tmp_v[0] = enc;
+            memcpy(tmp_v + 1, vp, v_len);
+            decode_id3_text(tmp_v, v_len + 1, val, sizeof(val));
+        }
+    } else {
+        return;
+    }
+
+    float db = 0.0f;
+    if (strcasecmp(desc, "REPLAYGAIN_TRACK_GAIN") == 0 && !out->has_replaygain_track) {
+        if (parse_replaygain_db_str(val, &db)) {
+            out->replaygain_track_db = db;
+            out->has_replaygain_track = true;
+        }
+    } else if (strcasecmp(desc, "REPLAYGAIN_ALBUM_GAIN") == 0 && !out->has_replaygain_album) {
+        if (parse_replaygain_db_str(val, &db)) {
+            out->replaygain_album_db = db;
+            out->has_replaygain_album = true;
+        }
+    }
+}
+
 static void extract_id3v2(FILE *fp, track_metadata_t *out)
 {
     uint8_t hdr[10];
@@ -122,21 +295,36 @@ static void extract_id3v2(FILE *fp, track_metadata_t *out)
 
         if (frame_size == 0 || frame_size > remaining) break;
 
+        bool want_year = (strcmp(frame_id, "TYER") == 0 || strcmp(frame_id, "TDRC") == 0 || strcmp(frame_id, "TORY") == 0) && out->release_year == 0;
+        bool want_txxx = (strcmp(frame_id, "TXXX") == 0) && (!out->has_replaygain_track || !out->has_replaygain_album);
         bool want = (strcmp(frame_id, "TIT2") == 0 && out->title[0] == '\0') ||
                     (strcmp(frame_id, "TPE1") == 0 && out->artist[0] == '\0') ||
-                    (strcmp(frame_id, "TALB") == 0 && out->album[0] == '\0');
+                    (strcmp(frame_id, "TALB") == 0 && out->album[0] == '\0') ||
+                    (strcmp(frame_id, "TCON") == 0 && out->genre[0] == '\0') ||
+                    want_year || want_txxx;
 
         if (want && frame_size <= 4096) {
             if (fread(buf, 1, frame_size, fp) != frame_size) break;
             if (strcmp(frame_id, "TIT2") == 0) decode_id3_text(buf, frame_size, out->title, sizeof(out->title));
             else if (strcmp(frame_id, "TPE1") == 0) decode_id3_text(buf, frame_size, out->artist, sizeof(out->artist));
-            else decode_id3_text(buf, frame_size, out->album, sizeof(out->album));
+            else if (strcmp(frame_id, "TALB") == 0) decode_id3_text(buf, frame_size, out->album, sizeof(out->album));
+            else if (strcmp(frame_id, "TCON") == 0) {
+                decode_id3_text(buf, frame_size, out->genre, sizeof(out->genre));
+                normalize_genre_str(out->genre, sizeof(out->genre));
+            } else if (want_year) {
+                char ybuf[32];
+                decode_id3_text(buf, frame_size, ybuf, sizeof(ybuf));
+                out->release_year = parse_release_year_str(ybuf);
+            } else if (want_txxx) {
+                parse_id3_txxx_replaygain(buf, frame_size, out);
+            }
         } else {
             fseek(fp, frame_size, SEEK_CUR);
         }
         remaining -= frame_size;
 
-        if (out->title[0] && out->artist[0] && out->album[0]) break; // achou tudo, nao precisa continuar
+        if (out->title[0] && out->artist[0] && out->album[0] && out->genre[0] && out->release_year > 0 &&
+            out->has_replaygain_track && out->has_replaygain_album) break; // achou tudo, nao precisa continuar
     }
 
     free(buf);
@@ -186,6 +374,25 @@ static void extract_vorbis_comment_block(FILE *fp, uint32_t block_len, track_met
             copy_trim(out->artist, sizeof(out->artist), value, strlen(value));
         } else if (strcasecmp(key, "ALBUM") == 0 && out->album[0] == '\0') {
             copy_trim(out->album, sizeof(out->album), value, strlen(value));
+        } else if (strcasecmp(key, "GENRE") == 0 && out->genre[0] == '\0') {
+            copy_trim(out->genre, sizeof(out->genre), value, strlen(value));
+            normalize_genre_str(out->genre, sizeof(out->genre));
+        } else if ((strcasecmp(key, "DATE") == 0 || strcasecmp(key, "YEAR") == 0 ||
+                    strcasecmp(key, "ORIGINALDATE") == 0 || strcasecmp(key, "ORIGINALYEAR") == 0) &&
+                   out->release_year == 0) {
+            out->release_year = parse_release_year_str(value);
+        } else if (strcasecmp(key, "REPLAYGAIN_TRACK_GAIN") == 0 && !out->has_replaygain_track) {
+            float db = 0.0f;
+            if (parse_replaygain_db_str(value, &db)) {
+                out->replaygain_track_db = db;
+                out->has_replaygain_track = true;
+            }
+        } else if (strcasecmp(key, "REPLAYGAIN_ALBUM_GAIN") == 0 && !out->has_replaygain_album) {
+            float db = 0.0f;
+            if (parse_replaygain_db_str(value, &db)) {
+                out->replaygain_album_db = db;
+                out->has_replaygain_album = true;
+            }
         }
     }
 }
@@ -628,18 +835,26 @@ static void extract_m4a(FILE *fp, uint64_t file_size, track_metadata_t *out)
         if (out->bits_per_sample == 0) out->bits_per_sample = 16;
     }
 
-    // 3. Extrai tags ilst (©nam, ©ART, ©alb)
+    // 3. Extrai tags ilst (©nam, ©ART, ©alb, ©gen, gnre, ©day)
+    char m4a_day_buf[32] = {0};
     for (uint32_t i = 0; i + 24 <= to_read; i++) {
         char *target = NULL;
         size_t max_len = 0;
+        bool is_gnre_bin = false;
         if (memcmp(moov + i, "\xa9" "nam", 4) == 0 && out->title[0] == '\0') {
             target = out->title; max_len = sizeof(out->title);
         } else if (memcmp(moov + i, "\xa9" "ART", 4) == 0 && out->artist[0] == '\0') {
             target = out->artist; max_len = sizeof(out->artist);
         } else if (memcmp(moov + i, "\xa9" "alb", 4) == 0 && out->album[0] == '\0') {
             target = out->album; max_len = sizeof(out->album);
+        } else if (memcmp(moov + i, "\xa9" "gen", 4) == 0 && out->genre[0] == '\0') {
+            target = out->genre; max_len = sizeof(out->genre);
+        } else if (memcmp(moov + i, "\xa9" "day", 4) == 0 && out->release_year == 0) {
+            target = m4a_day_buf; max_len = sizeof(m4a_day_buf);
+        } else if (memcmp(moov + i, "gnre", 4) == 0 && out->genre[0] == '\0') {
+            is_gnre_bin = true;
         }
-        if (target && i >= 4) {
+        if ((target || is_gnre_bin) && i >= 4) {
             uint32_t atom_sz = ((uint32_t)moov[i-4] << 24) | ((uint32_t)moov[i-3] << 16) |
                                ((uint32_t)moov[i-2] << 8)  | (uint32_t)moov[i-1];
             if (atom_sz >= 16 && i + atom_sz <= to_read) {
@@ -647,9 +862,15 @@ static void extract_m4a(FILE *fp, uint64_t file_size, track_metadata_t *out)
                     if (memcmp(moov + d, "data", 4) == 0 && d >= 4) {
                         uint32_t data_sz = ((uint32_t)moov[d-4] << 24) | ((uint32_t)moov[d-3] << 16) |
                                            ((uint32_t)moov[d-2] << 8)  | (uint32_t)moov[d-1];
-                        if (data_sz > 16 && d + data_sz - 4 <= to_read) {
+                        if (is_gnre_bin && data_sz >= 18 && d + data_sz - 4 <= to_read) {
+                            int g_idx = (((int)moov[d + 12] << 8) | (int)moov[d + 13]) - 1;
+                            const char *gm = id3v1_genre_lookup(g_idx);
+                            if (gm) copy_trim(out->genre, sizeof(out->genre), gm, strlen(gm));
+                        } else if (target && data_sz > 16 && d + data_sz - 4 <= to_read) {
                             uint32_t txt_len = data_sz - 16;
                             copy_trim(target, max_len, (const char *)(moov + d + 12), txt_len);
+                            if (target == out->genre) normalize_genre_str(out->genre, sizeof(out->genre));
+                            if (target == m4a_day_buf) out->release_year = parse_release_year_str(m4a_day_buf);
                         }
                         break;
                     }
@@ -801,6 +1022,7 @@ void metadata_extract(const char *abs_path, track_metadata_t *out)
     if (strcasecmp(ext, ".mp3") == 0) {
         snprintf(out->format_name, sizeof(out->format_name), "MP3");
         extract_id3v2(fp, out);
+        extract_id3v1_fallback(fp, file_size, out);
         compute_mp3_duration(fp, file_size, out);
         out->audio_data_offset = id3v2_total_tag_size(fp);
     } else if (strcasecmp(ext, ".flac") == 0) {

@@ -1,20 +1,22 @@
-# mps3 — Player de Áudio Digital Hi-Res (DAP) Dual-MCU com DAC 24-bit / 192 kHz e Transmissão Sony LDAC 24-bit / 96 kHz
+# mps3 v2.5 — Player de Áudio Digital Hi-Res (DAP) Dual-MCU com DAC 32-bit / 384 kHz, FastSeek e Transmissão Sony LDAC 24-bit / 96 kHz
 
-[![Dispositivo](https://img.shields.io/badge/Dispositivo-mps3-blue.svg)](#visao-geral)
+[![Dispositivo](https://img.shields.io/badge/Dispositivo-mps3%20v2.5-blue.svg)](#visao-geral)
 [![Hardware](https://img.shields.io/badge/Hardware-ESP32--S3%20%2B%20ESP32-darkblue.svg)](docs/WIRING.md)
-[![Hi-Res Audio DAC](https://img.shields.io/badge/DAC%20PCM5102A-24--bit%20%2F%20192kHz%20(4--Fios)-gold.svg)](#o-que-funciona-muito-bem)
+[![Hi-Res Audio DAC](https://img.shields.io/badge/DAC%20PCM5102A-32--bit%20%2F%20384kHz%20(4--Fios)-gold.svg)](#o-que-funciona-muito-bem)
+[![FastSeek](https://img.shields.io/badge/FLAC%20FastSeek-24b%2F192k-blueviolet.svg)](#o-que-funciona-muito-bem)
+[![Central Web](https://img.shields.io/badge/Central%20Web-Modular%20%7C%20Scraper%20%7C%20Player-cyan.svg)](#o-que-funciona-muito-bem)
 [![Bluetooth](https://img.shields.io/badge/Bluetooth-Sony%20LDAC%20(24b%2F96k%20%7C%20990kbps)%20%7C%20SBC-purple.svg)](#o-que-funciona-muito-bem)
 [![Power DFS](https://img.shields.io/badge/Power-DFS%20(40--240MHz)%20%7C%20Deep%20Sleep-brightgreen.svg)](#o-que-funciona-muito-bem)
 [![Licença](https://img.shields.io/badge/Licenca-MIT%20%2F%20Apache%202.0-green.svg)](LICENSE)
 
-O **mps3** é um player de áudio digital portátil de alta fidelidade (**Hi-Res Digital Audio Player / DAP**) de arquitetura aberta, construído em torno de **dois microcontroladores (Dual-MCU)** e um pipeline interno **Dual-Core assimétrico**. O projeto foi projetado para entregar uma experiência sonora pura e sem perdas, reproduzindo músicas do cartão micro SD com resolução de estúdio tanto pela saída analógica cabeada via DAC dedicado TI PCM5102A em até **24-bit / 192 kHz reais** (modo 4-fios com MCLK dedicado), quanto sem fio pelo Bluetooth com o codec audiófilo **Sony LDAC em 24-bit / 96 kHz**.
+O **mps3** é um player de áudio digital portátil de alta fidelidade (**Hi-Res Digital Audio Player / DAP**) de arquitetura aberta, construído em torno de **dois microcontroladores (Dual-MCU)** e um pipeline interno **Dual-Core assimétrico**. O projeto foi projetado para entregar uma experiência sonora pura e sem perdas, reproduzindo músicas do cartão micro SD com resolução de estúdio tanto pela saída analógica cabeada via DAC dedicado TI PCM5102A em até **32-bit / 384 kHz reais** (modo 4-fios com MCLK dedicado), quanto sem fio pelo Bluetooth com o codec audiófilo **Sony LDAC em 24-bit / 96 kHz**.
 
 A divisão de trabalho entre processadores e núcleos independentes evita gargalos de desempenho e garante áudio fluido sem qualquer engasgo:
 
 1. **Placa Principal (ESP32-S3 N16R8 — Dual-Core Xtensa LX7 @ 240 MHz)**:
-   * **Core 1 (Player & I/O Task)**: Leitura de alta velocidade do micro SD (SDMMC 4 vias a 40 MHz) e decodificação contínua de formatos Hi-Res (**FLAC 24-bit até 192 kHz nativo**, MP3, WAV, AAC, M4A, OGG) com janela deslizante de cópias reduzidas e busca rápida por syncwords.
-   * **Core 0 (DSP, Áudio DMA & Interface)**: Tarefa dedicada de processamento de áudio (`audio_dsp_task`) gerenciando volume logarítmico, balanço estéreo, equalizador de 10 bandas com compensação *Auto Pre-cut*, entrega contínua nos descritores DMA do I2S, interface gráfica OLED SSD1306 a 25.0 FPS cravados e leitura de joystick sem latência.
-   * Conta também com subsistema **USB TinyUSB nativo** em modos exclusivos (Serial CDC, USB DAC UAC2 e USB Mass Storage).
+   * **Core 1 (Player & I/O Task)**: Leitura de alta velocidade do micro SD (SDMMC 4 vias a 40 MHz), pipeline assíncrono com ring buffer de 1 MB em PSRAM Octal e decodificação contínua de formatos Hi-Res (**WAV até 32-bit / 384 kHz nativo**, **FLAC 24-bit até 192 kHz com FastSeek**, MP3, AAC, M4A, OGG) com janela deslizante de cópias reduzidas e gatekeeper multinível anti-brick.
+   * **Core 0 (DSP, Áudio DMA & Interface)**: Tarefa dedicada de processamento de áudio (`audio_dsp_task`) gerenciando volume logarítmico com Fast-Path, balanço estéreo, equalizador de 10 bandas com compensação *Auto Pre-cut*, VU meter balístico estéreo decimado (stride 8x), entrega contínua nos descritores DMA do I2S, interface gráfica OLED SSD1306 fluida até 62.5 FPS e leitura de joystick/expansor I2C PCF8574 sem latência.
+   * Conta também com subsistema **USB TinyUSB nativo** em modos exclusivos (Serial CDC, USB DAC UAC2 e USB Mass Storage) e Central Web embarcada modular com player web, raspador de podcasts no navegador e analytics.
 
 2. **Co-Processador de Bluetooth (`bt_companion` — ESP32 Clássico)**:
    Dedicado exclusivamente ao rádio sem fio. Recebe o áudio PCM digital vindo do S3 via I2S, processa a codificação em tempo real com **Sony LDAC 24-bit / 96 kHz** (com taxa dinâmica adaptativa entre 330 e 990 kbps) ou **SBC** de alta qualidade, além de sincronizar o volume absoluto do fone via AVRCP.
@@ -30,16 +32,25 @@ Este projeto preza pela honestidade técnica e relata com clareza o estado real 
 
 ### ✅ O Que Funciona Muito Bem
 
-* **Saída Cabeada Hi-Res de Estúdio (PCM5102A em até 24-bit / 192 kHz)**: DAC Texas Instruments PCM5102A operando em modo **4-fios com Master Clock (MCLK) dedicado no GPIO 8** e clock base `PLL_240M` (multiplicadores inteligentes de 128fs e 256fs). Reproduz arquivos até 192 kHz / 24-bit sem reamostragem, com baixíssimo jitter e relação sinal-ruído superior a 112 dB.
+* **Saída Cabeada Hi-Res Extrema (PCM5102A até 32-bit / 384 kHz e FLAC 24-bit / 192 kHz)**: DAC Texas Instruments PCM5102A operando em modo **4-fios com Master Clock (MCLK) dedicado no GPIO 8** e clock base `PLL_240M` (multiplicadores de clock até 49.152 MHz para 384 kHz). Reproduz linearmente arquivos WAV PCM até **32-bit / 384 kHz** e FLAC comprimido sem perdas até **24-bit / 192 kHz**, sustentado por um ring buffer de I/O assíncrono de **1 MB em PSRAM Octal** com taxa de leitura de mais de 3.0 MB/s.
+* **Busca Veloz e Responsiva (FastSeek)**: Algoritmo de busca rápida por syncwords e quadros de metadados em faixas FLAC e WAV, permitindo pular trechos de áudio sem travamentos e com cancelamento imediato de prefetch.
+* **Gatekeeper Multinível Anti-Brick & Safe Resume em NVS**: Proteção de hardware ativa contra arquivos fora de especificação (ex: FLAC 32-bit ou taxas acima de 384 kHz). O player rejeita a faixa antes da alocação de buffers, cancela prefetch em andamento, limpa chaves de boot-loop na NVS e exibe tela de diagnóstico visual com indicação clara dos limites físicos de reprodução.
+* **Modos de Reprodução Shuffle & Repeat / Loop**:
+  * **Shuffle**: Desativado (`OFF`), Pasta (`FOLDER` com permutação pseudoaleatória Fisher-Yates alocada em PSRAM Octal sem repetições até esgotar a pasta) e Global (`ALL` em todo o acervo do cartão SD).
+  * **Repeat**: Desativado (`NONE`), Repetir Lista (`ALL`) e Repetir Faixa 1x (`ONE` com liberação automática de loop ao avançar manualmente).
+  * Status e modo ativos exibidos dinamicamente na tela Now Playing e no menu de contexto.
+* **Display OLED Fluido a até 62.5 FPS com VU Meter Decimado**: Interface gráfica SSD1306 operando a alta taxa de quadros (tempo de quadro entre 1.3 ms e 17.4 ms via barramento I2C acelerado a 800 kHz). Conta com VU meter estéreo balístico com decimação dinâmica de 8x para frequências >192 kHz, mantendo o consumo de CPU do Core 0 estável.
 * **Áudio Hi-Res Sem Fio em 24-bit / 96 kHz via Sony LDAC**: Arquivos FLAC de 24 bits e 96.000 Hz são lidos do micro SD e transmitidos via I2S para o co-processador Bluetooth, que codifica pelo encoder Sony LDAC nativamente em 24-bit / 96 kHz com até **990 kbps**, chegando ao fone sem perda de resolução.
 * **Sony LDAC com Bitrate Adaptativo (ABR)**: Opera em até **990 kbps (qualidade máxima)**. Se houver interferência no sinal sem fio, o sistema ajusta temporariamente a taxa para 660 ou 330 kbps para manter o som contínuo sem estalos, retornando aos 990 kbps assim que o enlace estabilizar.
 * **SBC de Alta Fidelidade**: Garante compatibilidade imediata com qualquer fone ou caixa Bluetooth do mercado em 44.1 ou 48 kHz (Bitpool 53, estéreo de alta qualidade).
-* **Decodificação de Múltiplos Formatos no S3**: Suporte completo a **FLAC** (16 e 24 bits, até 192 kHz na saída cabeada e 96 kHz no Bluetooth), **MP3** (CBR/VBR até 320 kbps), **WAV** (PCM 16 e 24 bits até 192 kHz), **AAC / M4A** e **OGG Vorbis**.
+* **Decodificação de Múltiplos Formatos no S3**: Suporte completo a **FLAC** (16 e 24 bits, até 192 kHz na saída cabeada e 96 kHz no Bluetooth), **WAV** (PCM 16, 24 e 32 bits até 384 kHz), **MP3** (CBR/VBR até 320 kbps), **AAC / M4A** e **OGG Vorbis**.
 * **Leitura Rápida do Cartão SD (SDMMC 4-Bit 40 MHz)**: Barramento nativo de 4 vias a 40 MHz, permitindo navegar ágil pelas pastas e carregar arquivos pesados sem esvaziamento de buffer.
-* **Equalizador Paramétrico de 10 Bandas com Auto Pre-cut**: Filtros IIR biquad com ganho de -12 dB a +12 dB e cálculo automático de compensação de ganho (*Auto Pre-cut*) para prevenir ceifamento digital (*hard clipping*). Alocado em SRAM interna rápida com **bypass automático Bit-Perfect acima de 48 kHz**.
-* **Interface Monocromática Fluida no OLED SSD1306**: Navegação intuitiva com joystick de 5 direções, menus em carrossel, visualização da biblioteca por pastas e arquivos, além da tela "Now Playing" com dados da faixa, formato, taxa de amostragem, profundidade de bits e tempo decorrido.
-* **Persistência de Estado (NVS)**: Grava e recupera automaticamente a última música tocada, o ponto exato onde a reprodução foi pausada, o volume atual, a preferência de codec e o modo de ordenação das faixas.
+* **Equalizador Paramétrico de 10 Bandas com Auto Pre-cut**: Filtros IIR biquad com ganho de -12 dB a +12 dB e cálculo automático de compensação de ganho (*Auto Pre-cut*) para prevenir ceifamento digital (*hard clipping*). Alocado em SRAM interna rápida com **bypass automático Bit-Perfect acima de 48 kHz** e Fast-Path de volume sem branches pesados.
+* **Interface Monocromática Fluida no OLED SSD1306**: Navegação intuitiva com joystick de 5 direções ou expansor PCF8574, menus em carrossel, visualização da biblioteca por pastas e arquivos, além da tela "Now Playing" com dados da faixa, formato, taxa de amostragem, profundidade de bits, tempo decorrido e modos de loop/shuffle.
+* **Persistência de Estado Segura (Safe NVS)**: Grava e recupera automaticamente a última música tocada, o ponto exato onde a reprodução foi pausada, o volume atual, a preferência de codec e o modo de ordenação das faixas, validando o cabeçalho antes de persistir para evitar boot-loops.
 * **Ordenação Flexível de Faixas (Nome A-Z vs Data / Tracklist Original)**: Configurado diretamente no menu **"Conf" (Opção 6 — "Ordenar")**. Permite alternar instantaneamente entre a ordem alfabética clássica e a ordem por data de modificação (`mtime` do cartão SD), preservando a sequência original de faixas das gravações/álbuns. A preferência é gravada na NVS e a pasta ativa é reordenada imediatamente.
+* **Expansor I2C PCF8574 para Controle de Volume e Entradas**: Suporte ao expansor de 8 portas I2C PCF8574 compartilhando o barramento SDA/SCL, viabilizando leitura de joystick e botões dedicados de volume (`VOL+` / `VOL-`) economizando pinos valiosos de GPIO.
+* **Ferramenta de Resgate e Recuperação de SD Card (`tools/recover_mps3_sd.py`)**: Utilitário Python para recuperação de cartões FAT32 corrompidos após desconexão sem ejeção segura, identificando automaticamente arquivos `.CHK`, extraindo tags Vorbis Comments/ID3 e reconstruindo as pastas originais (`/Musicas`, `/Podcasts`).
 * **Governador Dinâmico de Clock e Gerenciamento de Energia (DFS)**:
   * **Escalonamento Inteligente de Frequência**: Ajusta a CPU Xtensa LX7 dinamicamente entre **240 MHz**, **160 MHz**, **80 MHz** e **40 MHz** conforme a demanda de carga em tempo real.
   * **240 MHz**: Operações intensivas de I/O e rede (transferência Wi-Fi, upload OTA, busca/seek veloz, decodificação Hi-Res extrema >96 kHz e USB MSC).
@@ -69,10 +80,18 @@ Este projeto preza pela honestidade técnica e relata com clareza o estado real 
   * **Auto-Descoberta Inteligente por MAC de Hardware (`28:84:85:52:35:84`)**: Os scripts CLI localizam o MPS3 na rede local combinando leitura de cache ARP do sistema operacional, varredura rápida de rede (ping sweep multithread), mDNS e rotas de contingência, eliminando a necessidade de descobrir o IP atribuído via DHCP.
   * **Interface Web Amigável (`/api/ota`)**: Modal visual no gerenciador web (`http://mps3.local/`) com leitura de partição ativa, versão, nível de bateria (< 15% bloqueia gravação com alerta de segurança), barra de progresso em tempo real e contagem regressiva de reconexão.
   * **Feedback Visual em Tempo Real no OLED**: Renderização com barra de progresso proporcional em modo XOR (`u8g2_SetDrawColor(..., 2)`), percentual dinâmico e aviso de segurança anti-desligamento ("NAO DESLIGUE O MPS3!").
-* **Gerenciador de Músicas via Wi-Fi (`mps3.local`)**: Ao ativar o modo Wi-Fi, o mps3 cria um servidor web acessível na rede local para gerenciamento e upload de álbuns e faixas diretamente pelo navegador:
-  * **Explorador de Arquivos Web Completo**: Navegação multinível por subpastas dentro do modal "Mover para...", permitindo organizar a biblioteca sem remover o cartão.
-  * **Proteção contra Movimentação Circular**: Validação no front-end e no back-end (`/api/move` e `/api/rename`) impedindo mover uma pasta para dentro de si mesma ou de suas subpastas, garantindo a integridade da tabela FatFS.
-  * **Invalidação Inteligente de Cache**: O cache do navegador é atualizado imediatamente após qualquer operação de criação, renomeação, exclusão ou movimentação de pastas/arquivos.
+* **Central Web Embarcada Modular (`http://mps3.local`)**: Servida diretamente da Flash SPI do ESP32-S3 em um único payload Gzip nível 9 (`index_html_gz.h`, apenas 142 KB compactado) consumindo 0 bytes de RAM dinâmica e apenas 1 socket TCP no LwIP:
+  * **Arquitetura 100% Modular (`components/wifi_transfer/web/src/`)**: Estruturada em templates HTML5, folhas de estilo CSS temáticas e scripts JS isolados, montada deterministicamente via `tools/pack_web.py`.
+  * **Explorador e Gerenciador de Arquivos MicroSD**: Upload recursivo de pastas, downloads diretos, criação de pastas, movimentação e cópia com proteção rigorosa contra movimentação circular. Extração automática de metadados ID3/Vorbis e geração de miniaturas `.cover.jpg` de alta velocidade.
+  * **Player de Áudio Web Integrado**: Mini Player inferior responsivo e Fullscreen Player no navegador com equalizador de 3 bandas local e analisador de espectro FFT em tempo real via Web Audio API.
+  * **Motor Híbrido de Podcasts v3.0 no Navegador**:
+    - *Descoberta Apple Podcasts*: Integração direta com a API pública de busca do Apple Podcasts para preenchimento de feeds RSS oficiais.
+    - *Extrator de Transmissões YouTube*: Parser isolado para transmissões e lives (`/streams`), filtrando membros de canais e selecionando o stream de áudio com melhor taxa de bits sem necessidade de servidor intermediário.
+    - *Planejador Determinístico*: Retenção automática dos 3 episódios mais recentes de cada programa e de todos os não ouvidos, com reserva preventiva de 32 MB livres no cartão SD.
+  * **Painel Analítico "MPS3 Wrapped"**:
+    - Histórico e estatísticas de escuta (tempo total, faixas mais ouvidas, artistas favoritos e distribuição por resolução Hi-Res).
+    - Renderizador gráfico via Canvas 1080p para geração de Stories e cards sociais prontos para compartilhamento.
+    - Ponte móvel instantânea para smartphone via escaneamento de QR Code ISO-18004.
 * **Controle de Volume Bidirecional (AVRCP)**: Modificar o volume no joystick do mps3 atualiza o volume no fone, e os botões físicos do próprio fone também refletem instantaneamente no mps3 via UART.
 * **Modos USB Exclusivos (TinyUSB Device)**: Chaveamento limpo e isolado de perfis USB sem sobreposição de descritores:
   * **Detecção Automática e Menu de Seleção (Estilo Android)**: Ao conectar o cabo na porta USB de dados (GPIO 19/20), o mps3 detecta o evento de conexão e abre instantaneamente um menu interativo no OLED:
@@ -174,13 +193,13 @@ O projeto adota o **ESP-IDF v6.0.1 puro** como *Single Source of Truth* para com
 | Diretório / Arquivo | Finalidade |
 |---|---|
 | **[`espidf/`](espidf/)** | **Ponto de entrada oficial ESP-IDF (ESP32-S3)**: `CMakeLists.txt`, `main/`, `sdkconfig.defaults` (configuração de 8KB USB MSC, PSRAM Octal 8MB, Flash 16MB QIO, Rollback OTA). |
-| **[`components/`](components/)** | Componentes modulares independentes: `audio_player`, `board_io` (RTC DS3231 & Power Governor), `usb_manager`, `sd_card`, `oled_display` (com QR Code), `touch_input`, `eq`, `i2s_output`, `wifi_transfer` (servidor web + OTA backend), `podcast_sync`, etc. |
+| **[`components/`](components/)** | Componentes modulares independentes: `audio_player`, `board_io` (RTC DS3231, PCF8574 & Power Governor), `usb_manager`, `sd_card`, `oled_display` (com QR Code), `touch_input`, `eq`, `i2s_output`, `wifi_transfer` (servidor web modular + OTA backend), `podcast_sync`, etc. |
 | **[`versionamento/`](versionamento/)** | **Scripts de Versionamento e Upload**: `mps3_version.ps1` (PowerShell), `mps3_version.sh` (Bash) e `ota_upload.py` (upload OTA com auto-descoberta inteligente por MAC de hardware). |
 | **[`bt_companion/`](bt_companion/)** | **Firmware do Co-Processador Bluetooth (ESP32)**: Transmissor de áudio Sony LDAC 24-bit / 96 kHz e SBC de alta qualidade com controle de volume AVRCP. |
 | **[`bt_audio_sink/`](bt_audio_sink/)** | **Firmware Receptor de Teste (ESP32)**: Receptor Bluetooth A2DP Sink para validação e auditoria em bancada do áudio transmitido pelo mps3. |
-| **[`tests/`](tests/)** | Scripts de bancada e automação: benchmark Win32 unbuffered de MSC (`benchmark_msc.py`), verificadores de áudio e testes de descoberta OTA. |
-| **[`docs/`](docs/)** | Diagramas de ligação elétrica ([WIRING.md](docs/WIRING.md)) e especificação do protocolo binário UART ([PROTOCOL.md](docs/PROTOCOL.md)). |
-| **[`tools/`](tools/)** | Utilitários de empacotamento web (`pack_web.py`), relay móvel para podcasts (`mobile_relay/`) e servidor local de sincronização (`podcast_server/`). |
+| **[`tests/`](tests/)** | Scripts de bancada e automação: testes unitários da Central Web modular, scraper do navegador, MPS3 Wrapped, suítes de playlists/shuffle/repeat e benchmark de velocidade. |
+| **[`docs/`](docs/)** | Diagramas de ligação elétrica ([WIRING.md](docs/WIRING.md)), arquitetura do sistema ([ARCHITECTURE.md](docs/ARCHITECTURE.md)), procedimento de recuperação FAT32 ([PROCEDIMENTO_RECUPERACAO_SDCARD.md](docs/PROCEDIMENTO_RECUPERACAO_SDCARD.md)), controle de documentação de funções e protocolo UART ([PROTOCOL.md](docs/PROTOCOL.md)). |
+| **[`tools/`](tools/)** | Utilitários de empacotamento web (`pack_web.py`), recuperação de SD (`recover_mps3_sd.py`), simulador de desenvolvimento web (`web_dev_simulator.py`), extrator YouTube CLI (`yt_scraper_core.py`), relay móvel para podcasts (`mobile_relay/`) e servidor local (`podcast_server/`). |
 | **[`partitions.csv`](partitions.csv)** | Tabela de partições dual-bank (`otadata` @ 0x10000, `ota_0` de 4MB @ 0x20000, `ota_1` de 4MB @ 0x420000). |
 
 ---

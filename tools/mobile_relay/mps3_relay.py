@@ -2,7 +2,7 @@
 """
 MPS3 Mobile Relay Proxy
 Permite que o reprodutor MPS3 (ESP32-S3), conectado ao Hotspot Wi-Fi do smartphone,
-acesse o servidor Radxa Rock 3E na VPN Tailscale (100.120.93.115:8088).
+acesse o servidor na VPN Tailscale (ex: 100.64.0.1:8088).
 
 Como funciona:
 O Android cria uma rede NAT para o Hotspot (ex: 192.168.43.0/24), onde o celular
@@ -13,7 +13,7 @@ diretamente pela interface Tailscale do celular para o servidor.
 Uso no Termux:
     python mps3_relay.py
     ou
-    python mps3_relay.py --target http://100.120.93.115:8088 --port 8088
+    python mps3_relay.py --target http://100.64.0.1:8088 --port 8088
 """
 
 import sys
@@ -25,7 +25,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import socketserver
 import time
 
-DEFAULT_TARGET = "http://100.120.93.115:8088"
+DEFAULT_TARGET = "http://100.64.0.1:8088"
 DEFAULT_PORT = 8088
 BUFFER_SIZE = 64 * 1024  # 64 KB por bloco de streaming
 

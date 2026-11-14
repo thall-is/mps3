@@ -5,6 +5,7 @@
 #include "esp_audio_simple_dec.h"
 #include "esp_audio_simple_dec_default.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
 #include "esp_log.h"
 #include <cstdio>
 #include <cstring>
@@ -65,7 +66,13 @@ public:
         if (!scratch_) {
             scratch_capacity_ = INITIAL_SCRATCH_BYTES;
             scratch_ = (uint8_t *)heap_caps_malloc(scratch_capacity_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (!scratch_) {
+                scratch_ = (uint8_t *)heap_caps_malloc(scratch_capacity_, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            }
             if (!scratch_) return DecodeStatus::Error;
+            ESP_LOGI(kTag, "Scratch buffer alocado: %u bytes (%s)",
+                     (unsigned)scratch_capacity_,
+                     esp_ptr_internal(scratch_) ? "DRAM interno" : "PSRAM");
         }
 
         esp_audio_simple_dec_raw_t raw = {};
@@ -127,6 +134,29 @@ public:
         if (!info_ready_) {
             esp_audio_simple_dec_info_t info = {};
             if (esp_audio_simple_dec_get_info(handle_, &info) == ESP_AUDIO_ERR_OK && info.sample_rate > 0) {
+                bool dec_unsupported = false;
+                const char *limit_reason = "192 kHz / 24 bits";
+                if (type_ == ESP_AUDIO_SIMPLE_DEC_TYPE_FLAC) {
+                    if (info.bits_per_sample > 24 || info.sample_rate > 192000) {
+                        dec_unsupported = true;
+                        limit_reason = "FLAC max 24b/192k";
+                    }
+                } else if (type_ == ESP_AUDIO_SIMPLE_DEC_TYPE_WAV) {
+                    if (info.bits_per_sample > 32 || info.sample_rate > 384000) {
+                        dec_unsupported = true;
+                        limit_reason = "WAV max 32b/384k";
+                    }
+                } else {
+                    if (info.bits_per_sample > 24 || info.sample_rate > 192000) {
+                        dec_unsupported = true;
+                        limit_reason = "Max 192kHz/24b";
+                    }
+                }
+                if (dec_unsupported) {
+                    ESP_LOGE(kTag, "Taxa ou bits do stream (%s) excedem limites suportados: %u Hz / %u bits (%s)",
+                             label_, (unsigned)info.sample_rate, (unsigned)info.bits_per_sample, limit_reason);
+                    return DecodeStatus::Error;
+                }
                 sample_rate_ = info.sample_rate;
                 channels_ = info.channel;
                 bits_per_sample_ = info.bits_per_sample;
@@ -220,24 +250,74 @@ private:
         const uint8_t *src = scratch_ + pending_offset_;
         switch (bytes_per_sample) {
             case 2: {
-                const int16_t *s16 = reinterpret_cast<const int16_t *>(src);
-                for (size_t i = 0; i < n; i++) output[i] = ((int32_t)s16[i]) << shift;
+                // Tiling em stack interna (SRAM DRAM) para leitura e escrita em rajada via memcpy
+                constexpr size_t TILE_SAMPLES = 512;
+                int16_t tile_in[TILE_SAMPLES];
+                int32_t tile_out[TILE_SAMPLES];
+                size_t remaining = n;
+                size_t offset_in = 0;
+                size_t offset_out = 0;
+                while (remaining > 0) {
+                    size_t chunk = (remaining > TILE_SAMPLES) ? TILE_SAMPLES : remaining;
+                    memcpy(tile_in, src + offset_in, chunk * sizeof(int16_t));
+                    for (size_t i = 0; i < chunk; i++) {
+                        tile_out[i] = ((int32_t)tile_in[i]) << shift;
+                    }
+                    memcpy(output + offset_out, tile_out, chunk * sizeof(int32_t));
+                    offset_in += chunk * sizeof(int16_t);
+                    offset_out += chunk;
+                    remaining -= chunk;
+                }
                 break;
             }
             case 3: {
-                // Little-endian, 3 bytes por amostra, sem alinhamento -
-                // NAO da' pra' fazer reinterpret_cast direto (desalinhado
-                // e largura errada), monta byte a byte.
-                for (size_t i = 0; i < n; i++) {
-                    const uint8_t *s = src + i * 3;
-                    uint32_t raw24 = (uint32_t)s[0] | ((uint32_t)s[1] << 8) | ((uint32_t)s[2] << 16);
-                    output[i] = (int32_t)(raw24 << 8); // shift=8 fixo pra 24 bits - desloca e da' o sinal certo via two's complement
+                // Little-endian 24 bits packed (3 bytes por amostra).
+                // Tiling em stack interna (SRAM DRAM) com leitura e escrita em rajada via memcpy.
+                // Isso elimina transacoes lentas e desalinhadas na PSRAM.
+                // Converte cada amostra diretamente a partir de bytes individuais (sem chamadas memcpy),
+                // reduzindo a zero a sobrecarga de funcao por amostra e blindando contra desalinhamento.
+                constexpr size_t TILE_SAMPLES = 512;
+                uint8_t tile_in[TILE_SAMPLES * 3];
+                int32_t tile_out[TILE_SAMPLES];
+                size_t remaining = n;
+                size_t offset_in = 0;
+                size_t offset_out = 0;
+                while (remaining > 0) {
+                    size_t chunk = (remaining > TILE_SAMPLES) ? TILE_SAMPLES : remaining;
+                    memcpy(tile_in, src + offset_in, chunk * 3);
+                    for (size_t i = 0; i < chunk; i++) {
+                        const uint8_t *s = tile_in + i * 3;
+                        tile_out[i] = (int32_t)(((uint32_t)s[0] << 8) | ((uint32_t)s[1] << 16) | ((uint32_t)s[2] << 24));
+                    }
+                    memcpy(output + offset_out, tile_out, chunk * sizeof(int32_t));
+                    offset_in += chunk * 3;
+                    offset_out += chunk;
+                    remaining -= chunk;
                 }
                 break;
             }
             default: { // 4 bytes (32 bits)
-                const int32_t *s32 = reinterpret_cast<const int32_t *>(src);
-                for (size_t i = 0; i < n; i++) output[i] = (shift > 0) ? (s32[i] << shift) : s32[i];
+                if (shift > 0) {
+                    constexpr size_t TILE_SAMPLES = 512;
+                    int32_t tile_in[TILE_SAMPLES];
+                    int32_t tile_out[TILE_SAMPLES];
+                    size_t remaining = n;
+                    size_t offset_in = 0;
+                    size_t offset_out = 0;
+                    while (remaining > 0) {
+                        size_t chunk = (remaining > TILE_SAMPLES) ? TILE_SAMPLES : remaining;
+                        memcpy(tile_in, src + offset_in, chunk * sizeof(int32_t));
+                        for (size_t i = 0; i < chunk; i++) {
+                            tile_out[i] = tile_in[i] << shift;
+                        }
+                        memcpy(output + offset_out, tile_out, chunk * sizeof(int32_t));
+                        offset_in += chunk * sizeof(int32_t);
+                        offset_out += chunk;
+                        remaining -= chunk;
+                    }
+                } else {
+                    memcpy(output, src, n * sizeof(int32_t));
+                }
                 break;
             }
         }

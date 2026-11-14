@@ -1,0 +1,20 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/oled_display/u8g2_hal.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/board_io/rtc_ds3231.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/board_io/pcf8574.c"
+    INCLUDE_DIRS
+        "."
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/board_io/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/oled_display/include"
+    REQUIRES
+        u8g2
+        esp_driver_i2c
+        esp_driver_gpio
+        esp_driver_sdmmc
+        sdmmc
+        fatfs
+        esp_timer
+        nvs_flash
+)

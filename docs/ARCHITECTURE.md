@@ -8,8 +8,8 @@ O **mps3** adota uma topologia de co-processamento distribuído (**Dual-MCU**) p
 
 * **ESP32-S3 (Placa Principal / Player):**
   - **Processador:** Xtensa Dual-Core 32-bit LX7 @ 240 MHz com instruções SIMD vetoriais.
-  - **Memória:** 16 MB Flash Quad-SPI + 8 MB Octal-SPI PSRAM a 80 MHz (largura de banda superior para descompressão FLAC e heaps de rede).
-  - **Periféricos:** Host SDMMC nativo de 4 bits operando a 40 MHz, barramento I2S Master DMA com saída estéreo PCM, display OLED I2C em 400 kHz, USB nativo (TinyUSB MSC).
+  - **Memória:** 16 MB Flash Quad-SPI + 8 MB Octal-SPI PSRAM a 80 MHz (largura de banda superior para descompressão FLAC, ring buffer de 1024 KB para WAV 384 kHz / 32-bit e heaps de rede).
+  - **Periféricos:** Host SDMMC nativo de 4 bits operando a 40 MHz, barramento I2S Master DMA com saída estéreo PCM, display OLED I2C acelerado a 800 kHz (até 62.5 FPS), expansor I2C PCF8574 para botões dedicados de volume e joystick, USB nativo (TinyUSB CDC/DAC/MSC).
   - **Limitação Física do Silício:** O rádio 2.4 GHz do ESP32-S3 suporta **apenas Bluetooth Low Energy (BLE 5.0)**. O perfil padrão de transmissão de áudio sem fio em alta resolução, **A2DP (Advanced Audio Distribution Profile)**, opera estritamente sobre **Bluetooth Clássico (BR/EDR)**.
 * **ESP32 Clássico (Co-Processador bt_companion):**
   - **Processador:** Xtensa Dual-Core 32-bit LX6 @ 240 MHz.
@@ -26,45 +26,52 @@ O **mps3** adota uma topologia de co-processamento distribuído (**Dual-MCU**) p
 |                                                                                         |
 |  +--------------------+        +-----------------------+        +--------------------+  |
 |  | MicroSD (SDMMC 4b) | -----> |  Decodificador Hi-Res | -----> |   Equalizador IIR  |  |
-|  |  FLAC / MP3 / WAV  |        |  (Core 1 - 24b/96kHz) |        |   10 Bandas Biquad |  |
+|  |  FLAC / MP3 / WAV  |        | (WAV 384k/32b, FLAC)  |        |   10 Bandas Biquad |  |
 |  +--------------------+        +-----------------------+        +--------------------+  |
-|                                                                            |            |
-|  +--------------------+        +-----------------------+                   v            |
-|  | Display OLED I2C   | <..... | Menu / GUI / Joystick |        +--------------------+  |
-|  | (SSD1306 128x64)   |        | (Core 0 - Interface)  |        |  Driver I2S Master |  |
-|  +--------------------+        +-----------------------+        |  DMA 32-bit Stereo |  |
-|                                            :                    +--------------------+  |
-|                                            : UART                          | I2S        |
-+--------------------------------------------:-------------------------------:------------+
-                                             : (115200 8N1)                  |            |
-                                             v                               |            |
-+--------------------------------------------------------------------+       |            |
-|                     ESP32 Clássico (Co-Processador)                |       |            |
-|                                                                    |       |            |
-|  +--------------------+   +--------------------+   +-------------+ |       |            |
-|  | Controle UART Link |   |  Reamostrador 32.32|   |  I2S Slave  | <-------+            |
-|  | (Core 0 - Estado)  |   | (96k/48k -> 44.1k) |   | (PIN 26/25) | |       |            |
-|  +--------------------+   +--------------------+   +-------------+ |       |            |
-|             |                         |                            |       |            |
-|             v                         v                            |       |            |
-|  +--------------------+   +--------------------+                   |       |            |
-|  |  AVRCP Controller  |   | Multi-Codec Engine |                   |       |            |
-|  |  (Absolute Volume) |   | LDAC/aptX-HD/aptX  |                   |       |            |
-|  +--------------------+   +--------------------+                   |       |            |
-|             |                         |                            |       |            |
-|             +------------+------------+                            |       |            |
-|                          v                                         |       |            |
-|             +--------------------------+                           |       |            |
-|             |  Pilha Bluedroid BT A2DP |                           |       |            |
-|             |  Multi-SEP (4 SEIDs)     |                           |       |            |
-|             +--------------------------+                           |       |            |
-|                          |                                         |       |            |
-+--------------------------:-----------------------------------------+       |            |
-                           : Bluetooth A2DP / AVRCP                          v            |
-                           v                                        +-------------------+ |
-               +-----------------------+                            |   DAC PCM5102A    | |
-               | Fone de Ouvido / Sink |                            | (Saída P2 Fones)  | <+
-               | Bluetooth Sem Fio     |                            +-------------------+
+|                                            |                               |            |
+|                                [RingBuffer 1MB PSRAM]                      v            |
+|                                            |                    +--------------------+  |
+|  +--------------------+        +-----------+-----------+        |  Driver I2S Master |  |
+|  | Display OLED I2C   | <..... | Menu / GUI / Joystick |        |  DMA 32-bit Stereo |  |
+|  | (SSD1306 a 62.5FPS)|        | + Expansor PCF8574    |        +---------+----------+  |
+|  +--------------------+        +-----------------------+                  |             |
+|                                            :                              | I2S 4-Fios  |
++--------------------------------------------:------------------------------:-------------+
+                                             : (115200 8N1)                 | (MCLK 49M)  |
+                                             v                              |             |
++--------------------------------------------------------------------+      |             |
+|                     ESP32 Clássico (Co-Processador)                |      |             |
+|                                                                    |      |             |
+|  +--------------------+   +--------------------+   +-------------+ |      |             |
+|  | Controle UART Link |   |  Reamostrador 32.32|   |  I2S Slave  | <------+ (Até 96 kHz)|
+|  | (Core 0 - Estado)  |   | (96k/48k -> 44.1k) |   | (PIN 26/25) | |      |             |
+|  +--------------------+   +--------------------+   +-------------+ |      |             |
+|             |                         |                            |      |             |
+|             v                         v                            |      |             |
+|  +--------------------+   +--------------------+                   |      |             |
+|  |  AVRCP Controller  |   | Multi-Codec Engine |                   |      |             |
+|  |  (Absolute Volume) |   | LDAC/aptX-HD/aptX  |                   |      |             |
+|  +--------------------+   +--------------------+                   |      |             |
+|             |                         |                            |      |             |
+|             +------------+------------+                            |      |             |
+|                          v                                         |      |             |
+|             +--------------------------+                           |      |             |
+|             |  Pilha Bluedroid BT A2DP |                           |      |             |
+|             |  Multi-SEP (4 SEIDs)     |                           |      |             |
+|             +--------------------------+                           |      |             |
+|                          |                                         |      |             |
+|                          |                                         |      v             |
+|                          |                                         +------------------+ |
+|                          |                                         |   DAC PCM5102A   | |
+|                          |                                         | (Até 384kHz/32b) | <+
+|                          |                                         +------------------+ |
+|                          |                                                (Line-Out P2) |
++--------------------------:--------------------------------------------------------------+
+                           : Bluetooth A2DP / AVRCP
+                           v
+               +-----------------------+
+               | Fone de Ouvido / Sink |
+               | Bluetooth Sem Fio     |
                +-----------------------+
 ```
 
@@ -104,15 +111,31 @@ Com os patches da pasta `esp-idf-patches/` e a compilação com `CONFIG_BT_A2DP_
 
 ---
 
-## 5. Distribuição de Tarefas (Core Pinning)
+## 5. Distribuição de Tarefas (Core Pinning) & Otimizações de CPU
 
 ### ESP32-S3 (Player)
-* **Core 0:** GUI OLED SSD1306, leitura com aceleração do joystick, servidor web Wi-Fi (mps3.local), pilha USB MSC.
-* **Core 1:** Decodificação de arquivos de áudio (FLAC, MP3, WAV, AAC, Opus), equalizador IIR de 10 bandas, alimentação DMA I2S.
+* **Core 0:** GUI OLED SSD1306 (sustentando até 62.5 FPS via I2C a 800 kHz), leitura do joystick e expansor I2C PCF8574, tarefa DSP de áudio (`audio_dsp_task`, prioridade 5 com Fast-Path de volume sem branching), VU meter balístico estéreo decimado (stride 8x em taxas > 192 kHz), servidor web Wi-Fi modular (`mps3.local`), pilha USB nativa (CDC/DAC/MSC).
+* **Core 1:** Decodificação de arquivos de áudio em tempo real (`player_task`, prioridade 5: WAV até 32-bit/384 kHz, FLAC até 24-bit/192 kHz com FastSeek, MP3, AAC, M4A, OGG), pipeline assíncrono com ring buffer de 1024 KB em Octal PSRAM com cedência cooperativa de CPU, gatekeeper multinível de formato e alimentação DMA I2S Master.
 
 ### ESP32 Companion
 * **Core 0:** Pilha Bluedroid (HCI, L2CAP, AVDTP, AVRCP), recepção e envio de pacotes de controle UART.
 * **Core 1:** Tarefa de áudio dedicada (`audio_task`, prioridade 18, stack 8 KB): leitura I2S Slave, reamostrador 32.32, codificação LDAC/aptX/SBC e despacho de pacotes de mídia para a pilha de rádio.
+
+### 5.1 Pipeline Assíncrono de I/O em PSRAM Octal e FastSeek
+Para reproduzir áudio extremo em **WAV 32-bit / 384 kHz estéreo** (vazão contínua de **3.072.000 bytes/s**), o subsistema de leitura do cartão SDMMC opera com total desacoplamento da decodificação:
+- **Ring Buffer de 1024 KB (1 MB) em PSRAM Octal (`ASYNC_IO_RING_SIZE`)**: Oferece margem contínua de 333 ms a 384 kHz / 32 bits e mais de 1 segundo a 192 kHz / 24 bits.
+- **Notificação por Histerese**: A tarefa leitora (`audio_reader_task`, Core 0) só é acordada para leituras em lote no SDMMC quando o espaço livre no ring buffer for $\ge 64$ KB (`ASYNC_IO_READ_CHUNK`), eliminando acordares desnecessários a cada milissegundo.
+- **Cedência Cooperativa de CPU**: Se o buffer já possuir mais de 256 KB preenchidos, a tarefa leitora cede a CPU com `vTaskDelay(1)`, garantindo que a tarefa gráfica (`display_task`, prioridade 3) sustente taxas entre 45 e 62.5 FPS mesmo em reproduções Hi-Res extremas.
+- **FastSeek**: Em operações de salto temporal, o buffer assíncrono cancela imediatamente o prefetch em andamento e reancora a leitura no novo deslocamento de bytes, garantindo resposta tátil imediata ao usuário.
+
+### 5.2 Gatekeeper Multinível de Formato & Safe Resume na NVS
+- **Proteção Anti-Brick**: Arquivos codificados fora dos padrões suportados (como FLAC 32-bit, que não possui representação válida nos quadros da libFLAC) são interceptados logo na leitura de metadados (`play_track()`) e antes da alocação de buffers.
+- **Safe Resume NVS**: A gravação de estado de retomada (`last_path`) na memória NVS só é realizada após a confirmação de cabeçalho válido (`header_ready = true`). Caso um arquivo rejeitado seja identificado, qualquer chave residual é expurgada da NVS, impedindo loops de watchdog ou travamentos em reinicializações.
+- **Diagnóstico Visual na Rejeição**: Quando uma faixa excede os limites físicos de amostragem ou profundidade de bits, o display OLED exibe uma tela dedicada de rejeição indicando claramente o badge do codec (`FLAC`, `WAV`) e o teto máximo suportado (`MAX 24-BIT / 192 KHZ` ou `MAX 32-BIT / 384 KHZ`).
+
+### 5.3 Decimação Dinâmica do VU Meter e Fast-Path de Volume
+- **Decimação Balística (Stride 8x)**: Para frequências acima de 192 kHz (ex: WAV 384 kHz), o motor de análise de picos de áudio (`audio_meter_feed`) aplica stride 8x, preservando a taxa de amostragem efetiva de análise em 48 kHz e reduzindo em 50% o processamento do Core 0.
+- **Fast-Path de Ganho**: Durante o ajuste de volume em `audio_dsp_task`, quando ambos os canais operam em volume nominal $\le 100\%$ (`final_L <= 32768 && final_R <= 32768`), o teste condicional de saturação `int64` é omitido, economizando mais de 2 milhões de instruções de branch por segundo.
 
 ---
 
@@ -172,6 +195,11 @@ Para atingir vazão sustentada de **1,30 a 1,46 MB/s** na escrita em cartão mic
      1. `PUT /api/upload?path=/Podcasts/.staging/<Show>/<ep>` com cabeçalho `X-Expected-SHA256`: calcula o SHA-256 em tempo real na `upload_writer_task` (Core 0) sem alocação dinâmica nem contenção de DMA; em caso de divergência, remove o arquivo parcial e retorna `HTTP 422 Unprocessable Entity`.
      2. `POST /api/sync/verify`: relê o arquivo gravado fisicamente no cartão microSD (usando `s_bounce_persist` em SRAM DMA) e recalcula o SHA-256 antes do commit.
      3. `POST /api/rename`: move atomicamente de `/Podcasts/.staging/<Show>/<ep>` para `/Podcasts/<Show>/<ep>`, garantindo que o player nunca veja arquivos parciais (pastas iniciadas por `.` são ignoradas pelo `audio_player`).
+5. **Central Web Modular Embarcada (`components/wifi_transfer/web/src/`)**:
+   - Código-fonte organizado de forma 100% modular em `src/views/`, `src/css/` e `src/js/`, empacotado deterministicamente em Gzip nível 9 (`index_html_gz.h`, ~142 KB), servido diretamente da memória Flash com `Content-Encoding: gzip` e zero bytes de RAM dinâmica.
+   - **Player de Áudio Web no Navegador**: Mini player inferior e visualizador FFT completo em canvas via Web Audio API para reprodução e streaming remoto de faixas contidas no MicroSD.
+   - **Scraper e Sincronizador de Podcasts no Navegador (v3.0)**: Integração com Apple Podcasts API e extrator isolado do YouTube em JS para download e conversão direta no browser sem exigir servidores intermediários.
+   - **Painel Analítico MPS3 Wrapped**: Retrospectiva musical com geração de Stories 1080p em Canvas e sincronização com smartphone via escaneamento de QR Code ISO-18004.
 
 ---
 
@@ -179,22 +207,25 @@ Para atingir vazão sustentada de **1,30 a 1,46 MB/s** na escrita em cartão mic
 
 ```text
 mps3/
-├── components/          # Módulos do firmware ESP32-S3 (audio_player, wifi_transfer, oled_display, eq, usb_manager, etc.)
+├── components/          # Módulos do firmware ESP32-S3 (audio_player, wifi_transfer, oled_display, eq, board_io/pcf8574, etc.)
+│   └── wifi_transfer/   # Servidor web e OTA backend
+│       └── web/src/     # Código-fonte modular da Central Web (views, css, js)
 ├── espidf/              # Projeto principal ESP-IDF v6.0+ (CMakeLists.txt, sdkconfig.defaults, partitions.csv, main/)
 ├── src/                 # Espelho do ponto de entrada main.c para compatibilidade de build
 ├── bt_companion/        # Firmware do co-processador ESP32 Clássico (A2DP Source LDAC/aptX/SBC + AVRCP)
 ├── bt_audio_sink/       # Firmware auxiliar receptor Bluetooth A2DP Sink para testes de bancada
-├── docs/                # Documentação técnica (ARCHITECTURE.md, PROTOCOL.md, WIRING.md, Doxyfile)
-├── tools/               # Ferramentas de desenvolvimento, empacotamento web e benchmarks em tempo real
-│   ├── pack_web.py          # Compactador GZIP (index.html -> include/index_html_gz.h)
-│   ├── wifi_speed_bench.py  # Benchmark de rede (Sink/Source), pipeline SD e fluxo humano de navegador web
+├── docs/                # Documentação técnica (ARCHITECTURE.md, PROCEDIMENTO_RECUPERACAO_SDCARD.md, WIRING.md, PROTOCOL.md)
+├── tools/               # Ferramentas de desenvolvimento, empacotamento web e utilitários
+│   ├── pack_web.py          # Montador e compactador GZIP modular (src/ -> index_html_gz.h)
+│   ├── recover_mps3_sd.py   # Resgate automatizado de cartões MicroSD corrompidos (FOUND.000)
+│   ├── web_dev_simulator.py # Servidor local para desenvolvimento e hot-reload da interface web
+│   ├── yt_scraper_core.py   # Extrator de transmissões YouTube CLI e suíte de testes de canal
+│   ├── wifi_speed_bench.py  # Benchmark de velocidade de rede (Sink/Source) e pipeline SD
 │   ├── mps3_nav.py          # Automação HIL de navegação e captura de tela OLED via UART
-│   ├── testbench_monitor.py # Monitor serial de telemetria de bancada
 │   ├── upload_album.py      # Utilitário CLI para envio de álbuns via HTTP PUT
-│   ├── mps3_sync/           # Pacote multiplataforma de sincronização Push de Podcasts v2.0 (CLI, daemon, PyInstaller)
 │   ├── mobile_relay/        # Relay para sincronização via Hotspot Android/Termux
-│   └── podcast_server/      # Servidor e scraper automatizado de podcasts (integrado ao mps3_sync)
-├── tests/               # Suítes de testes automatizados (Web API, OTA MAC Discovery, Play/Pause, USB MSC, Navegação, Sync Push)
+│   └── podcast_server/      # Servidor local de sincronização de podcasts
+├── tests/               # Suítes de testes automatizados (Web API, Scraper, Wrapped, Shuffle/Repeat, MSC, OTA)
 └── versionamento/       # Automação de build, versionamento de binários e deploy OTA/Serial (mps3_version.ps1/.sh, ota_upload.py)
 ```
 

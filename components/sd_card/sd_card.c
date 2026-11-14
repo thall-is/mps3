@@ -24,14 +24,20 @@ esp_err_t sd_card_init(void)
     // elevadas de 0..50 MHz no cartao. Permite comutacao dinamica entre 20, 26.6, 32 e 40 MHz.
     host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
 
-    // Pre-aloca buffer DMA dedicado (4 KB = 8 setores) para operacoes FATFS/desalinhadas.
-    // Isso impede de forma definitiva que o driver sdmmc tente alocar dinamicamente sob escassez de memoria (erro 0x101).
-    host.dma_aligned_buffer = heap_caps_malloc(4096, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    // Pre-aloca buffer DMA dedicado (16 KB = 32 setores) para operacoes FATFS/desalinhadas.
+    // Isso equilibra velocidade de leitura com a preservacao de DRAM contigua para o I2S DMA.
+    host.dma_aligned_buffer = heap_caps_malloc(16384, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (host.dma_aligned_buffer) {
-        host.unaligned_multi_block_rw_max_chunk_size = 8;
-        ESP_LOGI(TAG, "Buffer DMA dedicado SDMMC alocado com sucesso (4 KB)");
+        host.unaligned_multi_block_rw_max_chunk_size = 32; // 32 setores = 16 KB por burst DMA
+        ESP_LOGI(TAG, "Buffer DMA dedicado SDMMC alocado com sucesso (16 KB / 32 setores)");
     } else {
-        ESP_LOGW(TAG, "Nao foi possivel pre-alocar buffer DMA dedicado SDMMC");
+        host.dma_aligned_buffer = heap_caps_malloc(8192, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (host.dma_aligned_buffer) {
+            host.unaligned_multi_block_rw_max_chunk_size = 16;
+            ESP_LOGI(TAG, "Buffer DMA dedicado SDMMC alocado com fallback (8 KB / 16 setores)");
+        } else {
+            ESP_LOGW(TAG, "Nao foi possivel pre-alocar buffer DMA dedicado SDMMC");
+        }
     }
 
     sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
@@ -82,9 +88,13 @@ sdmmc_card_t* sd_card_get_handle(void)
 esp_err_t sd_card_set_frequency(uint32_t freq_khz)
 {
     if (!s_card) return ESP_ERR_INVALID_STATE;
+    if (s_card->real_freq_khz == (int)freq_khz && s_card->max_freq_khz == freq_khz) {
+        return ESP_OK;
+    }
     esp_err_t err = sdmmc_host_set_card_clk(s_card->host.slot, freq_khz);
     if (err == ESP_OK) {
         s_card->max_freq_khz = freq_khz;
+        s_card->real_freq_khz = (int)freq_khz;
         ESP_LOGI(TAG, "Clock SDMMC alterado para %u kHz (%.2f MHz)", (unsigned)freq_khz, (double)freq_khz / 1000.0);
     } else {
         ESP_LOGE(TAG, "Falha ao alterar clock SDMMC para %u kHz (err=0x%x)", (unsigned)freq_khz, err);
@@ -95,7 +105,7 @@ esp_err_t sd_card_set_frequency(uint32_t freq_khz)
 uint32_t sd_card_get_frequency(void)
 {
     if (!s_card) return 0;
-    return s_card->max_freq_khz;
+    return (s_card->real_freq_khz > 0) ? (uint32_t)s_card->real_freq_khz : s_card->max_freq_khz;
 }
 
 void sd_card_deinit(void)

@@ -4,6 +4,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
@@ -23,6 +24,8 @@ typedef struct {
     char     title[96];
     char     artist[64];
     char     album[64];
+    char     genre[32];
+    uint16_t release_year;
     char     codec[12];
     uint32_t sample_rate;
     uint8_t  bits_per_sample;
@@ -140,21 +143,22 @@ static void save_summary_to_sd(void)
     fprintf(f, "{\n  \"version\": 1,\n  \"unique_tracks\": %d,\n  \"total_plays\": %u,\n  \"total_scrobbles\": %u,\n  \"total_listen_sec\": %llu,\n  \"tracks\": [\n",
             s_summary_count, (unsigned)global_plays, (unsigned)global_scrobbles, (unsigned long long)global_listen_sec);
 
-    char esc_path[256], esc_title[160], esc_artist[112], esc_album[112], esc_codec[24];
+    char esc_path[256], esc_title[160], esc_artist[112], esc_album[112], esc_genre[64], esc_codec[24];
     for (int i = 0; i < s_summary_count; i++) {
         const track_summary_entry_t *e = &s_summary[i];
         json_escape(e->rel_path, esc_path, sizeof(esc_path));
         json_escape(e->title, esc_title, sizeof(esc_title));
         json_escape(e->artist, esc_artist, sizeof(esc_artist));
         json_escape(e->album, esc_album, sizeof(esc_album));
+        json_escape(e->genre, esc_genre, sizeof(esc_genre));
         json_escape(e->codec, esc_codec, sizeof(esc_codec));
 
         fprintf(f,
                 "    {\"id\":\"%016llx\",\"path\":\"%s\",\"title\":\"%s\",\"artist\":\"%s\",\"album\":\"%s\","
-                "\"codec\":\"%s\",\"sr\":%u,\"bits\":%u,\"plays\":%u,\"scrobbles\":%u,\"skips\":%u,"
+                "\"genre\":\"%s\",\"year\":%u,\"codec\":\"%s\",\"sr\":%u,\"bits\":%u,\"plays\":%u,\"scrobbles\":%u,\"skips\":%u,"
                 "\"completed\":%u,\"listen_s\":%u,\"first_ts\":%u,\"last_ts\":%u}%s\n",
                 (unsigned long long)e->track_id, esc_path, esc_title, esc_artist, esc_album,
-                esc_codec, (unsigned)e->sample_rate, (unsigned)e->bits_per_sample,
+                esc_genre, (unsigned)e->release_year, esc_codec, (unsigned)e->sample_rate, (unsigned)e->bits_per_sample,
                 (unsigned)e->total_plays, (unsigned)e->total_scrobbles, (unsigned)e->total_skips,
                 (unsigned)e->total_completed, (unsigned)e->total_listen_sec,
                 (unsigned)e->first_epoch, (unsigned)e->last_epoch,
@@ -168,19 +172,91 @@ static void save_summary_to_sd(void)
     rename(SUMMARY_TMP_PATH, SUMMARY_FILE_PATH);
 }
 
+static bool json_extract_str_field(const char *line, const char *key, char *dst, size_t dst_sz)
+{
+    if (!line || !key || !dst || dst_sz == 0) return false;
+    dst[0] = '\0';
+    const char *p = strstr(line, key);
+    if (!p) return false;
+    p += strlen(key);
+    size_t j = 0;
+    while (*p != '\0' && *p != '"' && j + 1 < dst_sz) {
+        if (*p == '\\' && *(p + 1) != '\0') {
+            p++;
+        }
+        dst[j++] = *p++;
+    }
+    dst[j] = '\0';
+    return true;
+}
+
+static uint32_t json_extract_u32_field(const char *line, const char *key)
+{
+    if (!line || !key) return 0;
+    const char *p = strstr(line, key);
+    if (!p) return 0;
+    p += strlen(key);
+    return (uint32_t)strtoul(p, NULL, 10);
+}
+
+static void load_summary_from_sd(void)
+{
+    if (!s_summary) return;
+    FILE *f = fopen(SUMMARY_FILE_PATH, "r");
+    if (!f) return;
+
+    static char line[1024];
+
+    s_summary_count = 0;
+    while (s_summary_count < MAX_SUMMARY_TRACKS && fgets(line, 1024, f) != NULL) {
+        char id_hex[24];
+        if (!json_extract_str_field(line, "\"id\":\"", id_hex, sizeof(id_hex)) || id_hex[0] == '\0') {
+            continue;
+        }
+        track_summary_entry_t *e = &s_summary[s_summary_count++];
+        memset(e, 0, sizeof(track_summary_entry_t));
+        e->track_id = strtoull(id_hex, NULL, 16);
+        json_extract_str_field(line, "\"path\":\"", e->rel_path, sizeof(e->rel_path));
+        json_extract_str_field(line, "\"title\":\"", e->title, sizeof(e->title));
+        json_extract_str_field(line, "\"artist\":\"", e->artist, sizeof(e->artist));
+        json_extract_str_field(line, "\"album\":\"", e->album, sizeof(e->album));
+        json_extract_str_field(line, "\"genre\":\"", e->genre, sizeof(e->genre));
+        e->release_year    = (uint16_t)json_extract_u32_field(line, "\"year\":");
+        json_extract_str_field(line, "\"codec\":\"", e->codec, sizeof(e->codec));
+        e->sample_rate     = json_extract_u32_field(line, "\"sr\":");
+        e->bits_per_sample = (uint8_t)json_extract_u32_field(line, "\"bits\":");
+        e->total_plays     = json_extract_u32_field(line, "\"plays\":");
+        e->total_scrobbles = json_extract_u32_field(line, "\"scrobbles\":");
+        e->total_skips     = json_extract_u32_field(line, "\"skips\":");
+        e->total_completed = json_extract_u32_field(line, "\"completed\":");
+        e->total_listen_sec = json_extract_u32_field(line, "\"listen_s\":");
+        e->first_epoch     = json_extract_u32_field(line, "\"first_ts\":");
+        e->last_epoch      = json_extract_u32_field(line, "\"last_ts\":");
+    }
+
+    fclose(f);
+    ESP_LOGI(TAG, "Resumo historico recarregado do SD: %d faixas unicas", s_summary_count);
+}
+
 void user_metrics_init(void)
 {
-    if (s_initialized) return;
+    static bool s_in_init = false;
+    if (s_initialized || s_in_init) return;
+    s_in_init = true;
 
     s_summary = (track_summary_entry_t *)heap_caps_calloc(
         MAX_SUMMARY_TRACKS, sizeof(track_summary_entry_t),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_summary) {
-        s_summary = (track_summary_entry_t *)calloc(MAX_SUMMARY_TRACKS, sizeof(track_summary_entry_t));
+        ESP_LOGW(TAG, "PSRAM indisponivel para user_metrics; telemetria desativada.");
+        s_in_init = false;
+        return;
     }
 
     ensure_analytics_dir();
+    load_summary_from_sd();
     s_initialized = true;
+    s_in_init = false;
     ESP_LOGI(TAG, "Coletor de telemetria MPS3 Wrapped inicializado (%s)", ANALYTICS_DIR);
 }
 
@@ -300,11 +376,12 @@ void user_metrics_on_track_end(const user_metrics_end_info_t *info, bool is_seek
     uint64_t track_id = compute_track_id(info->artist, info->title, rel_path);
     const char *cat = detect_category(rel_path);
 
-    char esc_path[256], esc_title[160], esc_artist[112], esc_album[112], esc_codec[24], esc_preset[32];
+    char esc_path[256], esc_title[160], esc_artist[112], esc_album[112], esc_genre[64], esc_codec[24], esc_preset[32];
     json_escape(rel_path, esc_path, sizeof(esc_path));
     json_escape(info->title ? info->title : "", esc_title, sizeof(esc_title));
     json_escape(info->artist ? info->artist : "", esc_artist, sizeof(esc_artist));
     json_escape(info->album ? info->album : "", esc_album, sizeof(esc_album));
+    json_escape(info->genre ? info->genre : "", esc_genre, sizeof(esc_genre));
     json_escape(info->codec ? info->codec : "PCM", esc_codec, sizeof(esc_codec));
     json_escape(eq_preset_name, esc_preset, sizeof(esc_preset));
 
@@ -317,12 +394,12 @@ void user_metrics_on_track_end(const user_metrics_end_info_t *info, bool is_seek
         fprintf(fe,
                 "{\"ts\":\"%04d-%02d-%02dT%02d:%02d:%02d\",\"epoch\":%u,\"wday\":%d,\"hour\":%d,"
                 "\"id\":\"%016llx\",\"path\":\"%s\",\"cat\":\"%s\",\"title\":\"%s\",\"artist\":\"%s\","
-                "\"album\":\"%s\",\"codec\":\"%s\",\"sr\":%u,\"bits\":%u,\"kbps\":%u,"
+                "\"album\":\"%s\",\"genre\":\"%s\",\"year\":%u,\"codec\":\"%s\",\"sr\":%u,\"bits\":%u,\"kbps\":%u,"
                 "\"dur_s\":%u,\"listen_s\":%u,\"pct\":%u,\"scrobble\":%s,\"completed\":%s,"
                 "\"end\":\"%s\",\"seeks\":%u,\"vol\":%d,\"eq_on\":%s,\"eq_preset\":\"%s\"}\n",
                 year, month, day, hour, min, sec, (unsigned)epoch_ts, wday, hour,
                 (unsigned long long)track_id, esc_path, cat, esc_title, esc_artist,
-                esc_album, esc_codec, (unsigned)info->sample_rate, (unsigned)info->bits_per_sample,
+                esc_album, esc_genre, (unsigned)info->release_year, esc_codec, (unsigned)info->sample_rate, (unsigned)info->bits_per_sample,
                 (unsigned)(info->bitrate_bps / 1000U), (unsigned)dur_sec, (unsigned)listen_sec,
                 (unsigned)pct, scrobbled ? "true" : "false", completed ? "true" : "false",
                 info->end_reason ? info->end_reason : "unknown",
@@ -352,6 +429,8 @@ void user_metrics_on_track_end(const user_metrics_end_info_t *info, bool is_seek
             if (info->title && info->title[0])   snprintf(e->title, sizeof(e->title), "%.*s", (int)(sizeof(e->title) - 1), info->title);
             if (info->artist && info->artist[0]) snprintf(e->artist, sizeof(e->artist), "%.*s", (int)(sizeof(e->artist) - 1), info->artist);
             if (info->album && info->album[0])   snprintf(e->album, sizeof(e->album), "%.*s", (int)(sizeof(e->album) - 1), info->album);
+            if (info->genre && info->genre[0])   snprintf(e->genre, sizeof(e->genre), "%.*s", (int)(sizeof(e->genre) - 1), info->genre);
+            if (info->release_year > 0)          e->release_year = info->release_year;
             if (info->codec && info->codec[0])   snprintf(e->codec, sizeof(e->codec), "%.*s", (int)(sizeof(e->codec) - 1), info->codec);
             e->sample_rate = info->sample_rate;
             e->bits_per_sample = (uint8_t)info->bits_per_sample;

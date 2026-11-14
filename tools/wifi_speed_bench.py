@@ -21,6 +21,7 @@ import json
 import threading
 import gzip
 import concurrent.futures
+import re
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -50,6 +51,31 @@ def progress_bar(progress, total, speed_mbs, prefix=""):
     mb_total = total / (1024.0 * 1024.0)
     sys.stdout.write(f"\r  {prefix} [{bar}] {pct:5.1f}% | {mb_transferred:5.1f}/{mb_total:5.1f} MB | {speed_mbs:5.2f} MB/s")
     sys.stdout.flush()
+
+def capture_oled_screen(base_url, name="bench", print_art=True):
+    try:
+        url = f"{base_url}/api/screen"
+        req = urllib.request.Request(url, headers={'User-Agent': 'MPS3-Bench'})
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            raw_bytes = resp.read()
+        if len(raw_bytes) == 1024:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            if script_dir not in sys.path:
+                sys.path.insert(0, script_dir)
+            from oled_screenshot import decode_ssd1306, make_png, print_ascii
+            pixels = decode_ssd1306(raw_bytes, rotate_180=True)
+            os.makedirs("captures", exist_ok=True)
+            png_path = f"captures/oled_{name}.png"
+            with open(png_path, "wb") as f:
+                f.write(make_png(pixels, scale=6))
+            sys.stdout.write(f"\n  📸 [OLED CAPTURE] Framebuffer gravado em: {png_path}\n")
+            if print_art:
+                print_ascii(pixels)
+            sys.stdout.flush()
+            return png_path
+    except Exception:
+        pass
+    return None
 
 def test_ping_latency(base_url, samples=10):
     print("\n" + "=" * 65)
@@ -89,7 +115,7 @@ def test_ping_latency(base_url, samples=10):
         print("  Qualidade do Link: 🔴 DEGRADADA (Possível atenuação física ou distância do modem)")
     return {"min": min_rtt, "avg": avg_rtt, "max": max_rtt, "jitter": jitter}
 
-def test_net_sink(base_url, size_mb=10):
+def test_net_sink(base_url, size_mb=10, mon=None):
     total_bytes = size_mb * 1024 * 1024
     print("\n" + "=" * 65)
     print(f"🚀 2. TESTE DE VAZÃO PURA DA REDE - SINK ({size_mb} MB descartados na RAM)")
@@ -124,11 +150,19 @@ def test_net_sink(base_url, size_mb=10):
         last_t = t0
         last_sent = 0
         instant_speed = 0.0
+        captured_mid = False
 
         while sent < total_bytes:
             to_send = min(CHUNK_SIZE, total_bytes - sent)
             sock.sendall(pattern_block[:to_send])
             sent += to_send
+
+            if not captured_mid:
+                elapsed_now = time.perf_counter() - t0
+                if (sent >= total_bytes // 2 and elapsed_now >= 1.2) or (elapsed_now >= 2.0):
+                    captured_mid = True
+                    if mon:
+                        threading.Thread(target=mon.capture_screenshot, args=("sink_mid", 2.0, True, base_url), daemon=True).start()
 
             now = time.perf_counter()
             dt = now - last_t
@@ -180,7 +214,7 @@ def test_net_sink(base_url, size_mb=10):
         print(f"  ❌ Falha no teste SINK: {e}")
         return None
 
-def test_net_source(base_url, size_mb=10):
+def test_net_source(base_url, size_mb=10, mon=None):
     total_bytes = size_mb * 1024 * 1024
     print("\n" + "=" * 65)
     print(f"📥 3. TESTE DE VAZÃO PURA DA REDE - SOURCE ({size_mb} MB baixados da RAM)")
@@ -196,6 +230,7 @@ def test_net_source(base_url, size_mb=10):
         last_t = t0
         last_received = 0
         instant_speed = 0.0
+        captured_mid = False
 
         with urllib.request.urlopen(req, timeout=timeout_val) as resp:
             while True:
@@ -203,6 +238,10 @@ def test_net_source(base_url, size_mb=10):
                 if not chunk:
                     break
                 received += len(chunk)
+                if not captured_mid and (received >= total_bytes // 2 or (time.perf_counter() - t0 >= 1.8)):
+                    captured_mid = True
+                    if mon:
+                        threading.Thread(target=mon.capture_screenshot, args=("source_mid", 2.0, True, base_url), daemon=True).start()
                 now = time.perf_counter()
                 dt = now - last_t
                 if dt >= 0.2:
@@ -223,11 +262,92 @@ def test_net_source(base_url, size_mb=10):
         print(f"  ❌ Falha no teste SOURCE: {e}")
         return None
 
-def test_sd_upload(base_url, size_mb=10):
+def print_upload_microsecond_table(st, total_bytes):
+    tot_us = max(1, int(st.get("total_us", st.get("total_ms", 1) * 1000)))
+    fw_us = max(1, int(st.get("fwrite_us", st.get("fwrite_ms", 1) * 1000)))
+    raw_sd_mbs = st.get("sd_write_mbps", (total_bytes / (1024.0 * 1024.0)) / (fw_us / 1000000.0))
+    mbps = st.get("mbps", st.get("speed_mbs", 0.0))
+    mode_names = {0: "0 (20MHz Fixo)", 1: "1 (Hybrid 20->40MHz)", 2: "2 (40MHz Cont.)", 3: "3 (Auto-Ch)"}
+    clk_mode = st.get("sd_clk_mode", -1)
+    print("\n  ⏱️ TABELA DE TELEMETRIA EM MICROSSEGUNDOS — UPLOAD (ESP32-S3):")
+    print(f"     • Rádio & Clock SD:   Canal Wi-Fi = {st.get('wifi_ch', 0)} | RSSI = {st.get('rssi_dbm', 0)} dBm | SD Mode = {mode_names.get(clk_mode, clk_mode)} | Clock Final = {st.get('sd_khz', 0)} kHz")
+    print(f"     • Buffers Persist.:   RingBuffer PSRAM = {st.get('rb_kb', 0)} KB | Bounce DMA = {st.get('bounce_kb', 0)} KB | Recv Buf = {st.get('recv_kb', 0)} KB | SHA256 = {'ON' if st.get('sha256_en', 0) else 'OFF (Sob Demanda)'}")
+    print("     ┌────────────────────────────────────────┬──────────────┬───────────┬──────────────────────────────────────────┐")
+    print("     │ Fase do Pipeline (Upload)              │   Tempo (ms) │ % Total   │ Detalhes / Sub-métricas                  │")
+    print("     ├────────────────────────────────────────┼──────────────┼───────────┼──────────────────────────────────────────┤")
+    rows = [
+        ("1. Pre-Lock + Alloc", st.get("pre_lock_us", 0) + st.get("alloc_us", 0),
+         f"pre_lock={st.get('pre_lock_us',0)/1000.0:.2f}ms, alloc={st.get('alloc_us',0)/1000.0:.2f}ms"),
+        ("2. Open FATFS (Total)", st.get("open_us", st.get("open_ms", 0) * 1000),
+         f"mkdir={st.get('mkdir_us',0)/1000.0:.2f}ms, unlink={st.get('unlink_us',0)/1000.0:.2f}ms"),
+        ("   ├─ f_expand (Contíguo)", st.get("f_expand_us", 0),
+         f"fopen={st.get('fopen_us',0)/1000.0:.2f}ms"),
+        ("3. Produtor TCP (httpd_req_recv)", st.get("recv_us", st.get("recv_ms", 0) * 1000),
+         f"calls={st.get('recv_calls',0)}, max={st.get('recv_max_us',0)/1000.0:.2f}ms, >50ms={st.get('recv_slow',0)}"),
+        ("4. RingBuffer Push (xRingbufferSend)", st.get("ring_us", st.get("ring_ms", 0) * 1000),
+         f"calls={st.get('ring_calls',0)}, full(>5ms)={st.get('ring_full',0)}"),
+        ("5. Consumidor Wait RB (Core 1)", st.get("wr_wait_us", st.get("wr_wait_ms", 0) * 1000),
+         f"yield={st.get('yield_us',0)/1000.0:.2f}ms"),
+        ("6. Memcpy PSRAM -> Bounce DMA", st.get("memcpy_us", st.get("memcpy_ms", 0) * 1000),
+         f"sha256_hw={st.get('sha256_us',0)/1000.0:.2f}ms"),
+        ("7. Gravação SDMMC (fwrite CMD25)", fw_us,
+         f"calls={st.get('fwrite_calls',st.get('wr_calls',0))}, max={st.get('fwrite_max_us',0)/1000.0:.2f}ms, >200ms={st.get('fwrite_slow',st.get('wr_slow',0))}"),
+        ("8. Drain Wait (40MHz Turbo Drain)", st.get("drain_us", st.get("drain_ms", 0) * 1000),
+         f"esvaziamento final do RingBuffer"),
+        ("9. Fclose +Sync + Teardown", st.get("fclose_us", st.get("fclose_ms", 0) * 1000) + st.get("teardown_us", 0),
+         f"fclose={st.get('fclose_us',0)/1000.0:.2f}ms, teardown={st.get('teardown_us',0)/1000.0:.2f}ms"),
+        ("TOTAL HANDLER (Ponta a Ponta)", tot_us,
+         f"Net={mbps:.2f} MB/s | SD Puro={raw_sd_mbs:.2f} MB/s"),
+    ]
+    for name, us_val, detail in rows:
+        ms_val = float(us_val) / 1000.0
+        pct = (float(us_val) / float(tot_us)) * 100.0
+        print(f"     │ {name:<38} │ {ms_val:9.2f} ms │ {pct:7.1f} % │ {detail:<40} │")
+    print("     └────────────────────────────────────────┴──────────────┴───────────┴──────────────────────────────────────────┘")
+
+def print_download_microsecond_table(st, total_bytes):
+    tot_us = max(1, int(st.get("total_us", st.get("total_ms", 1) * 1000)))
+    fr_us = max(1, int(st.get("sd_read_us", st.get("fread_us", st.get("sd_read_ms", st.get("fread_ms", 1)) * 1000))))
+    stat_us = int(st.get("stat_open_us", st.get("stat_us", 0) + st.get("fopen_us", 0) + st.get("fseek_us", 0)))
+    net_us = int(st.get("net_send_us", st.get("send_us", st.get("net_send_ms", st.get("send_ms", 0)) * 1000)))
+    raw_sd_mbs = st.get("sd_read_mbps", (total_bytes / (1024.0 * 1024.0)) / (fr_us / 1000000.0))
+    mbps = st.get("mbps", st.get("speed_mbs", 0.0))
+    print("\n  ⏱️ TABELA DE TELEMETRIA EM MICROSSEGUNDOS — DOWNLOAD (ESP32-S3):")
+    print(f"     • Rádio & Clock SD:   Canal Wi-Fi = {st.get('wifi_ch', 0)} | RSSI = {st.get('rssi_dbm', 0)} dBm | SD Mode = {st.get('sd_clk_mode', -1)} | Clock = {st.get('sd_khz', 0)} kHz")
+    print("     ┌────────────────────────────────────────┬──────────────┬───────────┬──────────────────────────────────────────┐")
+    print("     │ Fase do Pipeline (Download)            │   Tempo (ms) │ % Total   │ Detalhes / Sub-métricas                  │")
+    print("     ├────────────────────────────────────────┼──────────────┼───────────┼──────────────────────────────────────────┤")
+    rows = [
+        ("1. Stat + Fopen + Fseek", stat_us,
+         f"stat_open={stat_us/1000.0:.2f}ms"),
+        ("2. Leitura SDMMC (fread CMD18 DMA)", fr_us,
+         f"calls={st.get('fread_calls',0)}, max={st.get('fread_max_us',0)/1000.0:.2f}ms, >50ms={st.get('fread_slow',0)}"),
+        ("3. Envio TCP (httpd_resp_send_chunk)", net_us,
+         f"calls={st.get('send_calls',0)}, max={st.get('send_max_us',0)/1000.0:.2f}ms, >50ms={st.get('send_slow',0)}"),
+        ("4. Fclose FATFS", st.get("fclose_us", 0),
+         f"rb_wait={st.get('ring_us', st.get('rb_wait_us',0))/1000.0:.2f}ms"),
+        ("TOTAL DOWNLOAD (Ponta a Ponta)", tot_us,
+         f"Net={mbps:.2f} MB/s | SD Read={raw_sd_mbs:.2f} MB/s"),
+    ]
+    for name, us_val, detail in rows:
+        ms_val = float(us_val) / 1000.0
+        pct = (float(us_val) / float(tot_us)) * 100.0
+        print(f"     │ {name:<38} │ {ms_val:9.2f} ms │ {pct:7.1f} % │ {detail:<40} │")
+    print("     └────────────────────────────────────────┴──────────────┴───────────┴──────────────────────────────────────────┘")
+
+def fetch_json_endpoint(url, method="GET", timeout=5.0):
+    try:
+        req = urllib.request.Request(url, method=method, headers={'User-Agent': 'MPS3-Bench'})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode('utf-8', errors='replace'))
+    except Exception:
+        return None
+
+def test_sd_upload(base_url, size_mb=10, mon=None, return_details=False):
     total_bytes = size_mb * 1024 * 1024
     print("\n" + "=" * 65)
-    print(f"💾 4. TESTE DE UPLOAD PONTA A PONTA (REDE + SDMMC FATFS) ({size_mb} MB)")
-    print("     (Pipeline Dual-Core: Core 1 TCP->PSRAM 3MB | Core 0 Bounce DMA->SDMMC)")
+    print(f"💾 4. TESTE DE UPLOAD & DOWNLOAD PONTA A PONTA (REDE + SDMMC FATFS) ({size_mb} MB)")
+    print("     (Pipeline Persistente Dual-Core + Transfer Boost Mode + Telemetria em µs)")
     print("=" * 65)
 
     # Prepara bloco padrão de 64 KB e calcula MD5 esperado sem alocar matrizes gigantescas na RAM
@@ -275,11 +395,19 @@ def test_sd_upload(base_url, size_mb=10):
         last_t = t0
         last_sent = 0
         instant_speed = 0.0
+        captured_mid = False
 
         while sent < total_bytes:
             to_send = min(CHUNK_SIZE, total_bytes - sent)
             sock.sendall(pattern[:to_send])
             sent += to_send
+
+            if not captured_mid:
+                elapsed_now = time.perf_counter() - t0
+                if (sent >= total_bytes // 2 and elapsed_now >= 1.5) or (elapsed_now >= 2.5):
+                    captured_mid = True
+                    if mon:
+                        threading.Thread(target=mon.capture_screenshot, args=("upload_mid", 2.0, True, base_url), daemon=True).start()
 
             now = time.perf_counter()
             dt = now - last_t
@@ -302,7 +430,12 @@ def test_sd_upload(base_url, size_mb=10):
                     break
                 resp_data += chunk
                 if b"\r\n\r\n" in resp_data:
-                    if b"Content-Length: 0" in resp_data or resp_data.endswith(b"\r\n\r\n"):
+                    hdr_part, _, body_part = resp_data.partition(b"\r\n\r\n")
+                    cl_m = re.search(rb"content-length:\s*(\d+)", hdr_part, re.IGNORECASE)
+                    if cl_m:
+                        if len(body_part) >= int(cl_m.group(1)):
+                            break
+                    elif b"}" in body_part or b"\"status\"" in body_part or resp_data.endswith(b"\r\n\r\n"):
                         break
             except socket.timeout:
                 if resp_data:
@@ -316,34 +449,30 @@ def test_sd_upload(base_url, size_mb=10):
         print(f"  Concluído em: {total_time:.2f} s")
         print(f"  Taxa Efetiva de Escrita Ponta a Ponta: {format_speed(total_bytes, total_time)}")
 
-        # Extrai telemetria detalhada por etapa do header X-Upload-Stats
-        resp_text = resp_data.decode('utf-8', errors='ignore')
-        for line in resp_text.splitlines():
-            if line.lower().startswith("x-upload-stats:"):
-                raw_json = line.split(":", 1)[1].strip()
-                try:
-                    st = json.loads(raw_json)
-                    fw_ms = max(1, st.get('fwrite_ms', 1))
-                    raw_sd_mbs = (total_bytes / (1024.0 * 1024.0)) / (fw_ms / 1000.0)
-                    print("\n  ⏱️ TELEMETRIA DE LATÊNCIA POR ETAPA (INTERNA DO ESP32-S3):")
-                    print(f"     • Buffers Ativos:     RingBuffer PSRAM = {st.get('rb_kb', 0)} KB | Bounce DMA = {st.get('bounce_kb', 0)} KB | Recv Buf = {st.get('recv_kb', 0)} KB")
-                    print(f"     • Setup Pipeline:     alloc = {st.get('alloc_ms', 0)} ms | mkdir+fopen (Core 0 paralelo) = {st.get('open_ms', 0)} ms")
-                    print(f"     • Produtor (Core 1):  httpd_req_recv = {st.get('recv_ms', 0)} ms ({st.get('recv_calls', 0)} calls, max={st.get('recv_max_ms', 0)} ms, >50ms={st.get('recv_slow', 0)})")
-                    print(f"     • RingBuffer Push:    xRingbufferSend = {st.get('ring_ms', 0)} ms ({st.get('ring_calls', 0)} calls, contrapressão >5ms: {st.get('ring_full', 0)}x)")
-                    print(f"     • Consumidor (Core0): wait_rb = {st.get('wr_wait_ms', 0)} ms | memcpy PSRAM->DMA = {st.get('memcpy_ms', 0)} ms")
-                    print(f"     • Gravação SDMMC:     fwrite = {st.get('fwrite_ms', 0)} ms ({st.get('wr_calls', 0)} blocos, média={st.get('wr_avg_ms', 0)} ms, máx={st.get('wr_max_ms', 0)} ms, >200ms={st.get('wr_slow', 0)})")
-                    print(f"     • Fechamento FATFS:   drain_wait = {st.get('drain_ms', 0)} ms | fclose = {st.get('fclose_ms', 0)} ms")
-                    print(f"     • Vazão Pura SDMMC:   {raw_sd_mbs:.2f} MB/s (durante fwrite) | Total Handler: {st.get('total_ms', 0)} ms ({st.get('speed_mbs', 0):.2f} MB/s)")
-                except Exception as ex:
-                    print(f"  (Erro ao parsear X-Upload-Stats: {ex})")
+        # Busca o JSON completo em /api/upload/stats (ou fallback no header X-Upload-Stats)
+        up_stats = fetch_json_endpoint(f"{base_url}/api/upload/stats")
+        if not up_stats or not up_stats.get("total_us"):
+            resp_text = resp_data.decode('utf-8', errors='ignore')
+            for line in resp_text.splitlines():
+                if line.lower().startswith("x-upload-stats:"):
+                    try:
+                        up_stats = json.loads(line.split(":", 1)[1].strip())
+                    except Exception:
+                        pass
+        if up_stats:
+            print_upload_microsecond_table(up_stats, total_bytes)
 
-        # Validação de integridade baixando o arquivo gravado e conferindo MD5
-        print("\n  Verificando integridade no cartão SD...")
+        # Validação de integridade e medição de velocidade de Download (GET /api/download)
+        print("\n  📥 Testando Download de Alta Velocidade (GET /api/download) + Integridade MD5...")
         download_url = f"{base_url}/api/download?path={urllib.parse.quote(test_file_path)}"
-        req = urllib.request.Request(download_url, headers={'User-Agent': 'MPS3-Bench'})
+        req = urllib.request.Request(download_url, headers={'User-Agent': 'MPS3-Bench', 'Connection': 'keep-alive'})
         verify_hasher = hashlib.md5()
         verified_bytes = 0
         download_timeout = max(30.0, size_mb * 6.0)
+        td0 = time.perf_counter()
+        last_td = td0
+        last_dl_bytes = 0
+        dl_inst = 0.0
         with urllib.request.urlopen(req, timeout=download_timeout) as resp:
             while True:
                 chunk = resp.read(CHUNK_SIZE)
@@ -351,9 +480,26 @@ def test_sd_upload(base_url, size_mb=10):
                     break
                 verify_hasher.update(chunk)
                 verified_bytes += len(chunk)
+                now_d = time.perf_counter()
+                if now_d - last_td >= 0.2:
+                    dl_inst = ((verified_bytes - last_dl_bytes) / (1024.0 * 1024.0)) / (now_d - last_td)
+                    last_td = now_d
+                    last_dl_bytes = verified_bytes
+                    progress_bar(verified_bytes, total_bytes, dl_inst, prefix="SD_GET")
+        td1 = time.perf_counter()
+        dl_time = td1 - td0
+        dl_speed_mbs = (verified_bytes / (1024.0 * 1024.0)) / dl_time if dl_time > 0 else 0.0
+        progress_bar(verified_bytes, total_bytes, dl_speed_mbs, prefix="SD_GET")
+        sys.stdout.write("\n")
+        print(f"  Taxa Efetiva de Download SD -> PC: {format_speed(verified_bytes, dl_time)} em {dl_time:.2f} s")
+
+        dl_stats = fetch_json_endpoint(f"{base_url}/api/download/stats")
+        if dl_stats and dl_stats.get("total_us"):
+            print_download_microsecond_table(dl_stats, verified_bytes)
 
         actual_md5 = verify_hasher.hexdigest()
-        if actual_md5 == expected_md5 and verified_bytes == total_bytes:
+        md5_ok = (actual_md5 == expected_md5 and verified_bytes == total_bytes)
+        if md5_ok:
             print(f"  ✅ Validação de Integridade: PERFEITA (MD5 idêntico: {actual_md5})")
         else:
             print(f"  ❌ FALHA DE INTEGRIDADE: Esperado={expected_md5}, Obtido={actual_md5} ({verified_bytes}/{total_bytes} bytes)")
@@ -369,9 +515,17 @@ def test_sd_upload(base_url, size_mb=10):
         except Exception:
             pass
 
+        if return_details:
+            return {
+                "upload_mbs": upload_speed_mbs,
+                "download_mbs": dl_speed_mbs,
+                "md5_ok": md5_ok,
+                "up_stats": up_stats or {},
+                "dl_stats": dl_stats or {},
+            }
         return upload_speed_mbs
     except Exception as e:
-        print(f"  ❌ Falha no teste de Upload SD: {e}")
+        print(f"  ❌ Falha no teste de Upload/Download SD: {e}")
         return None
 
 def check_device_status(base_url):
@@ -396,6 +550,8 @@ class SerialRebootMonitor:
         self.reboots = []
         self.last_ui = {}
         self._ui_event = threading.Event()
+        self._scr_event = threading.Event()
+        self.last_scr_raw = None
 
     def start(self):
         try:
@@ -441,8 +597,49 @@ class SerialRebootMonitor:
                         self._ui_event.set()
                     except Exception:
                         pass
+                elif line.startswith("@SCR "):
+                    try:
+                        import base64
+                        self.last_scr_raw = base64.b64decode(line[5:].strip())
+                        self._scr_event.set()
+                    except Exception:
+                        pass
             except Exception:
                 break
+
+    def capture_screenshot(self, name="bench", timeout=2.0, print_art=True, base_url=None):
+        self._scr_event.clear()
+        self.last_scr_raw = None
+        self.send_cmd("screen")
+        if not (self._scr_event.wait(timeout) and self.last_scr_raw and len(self.last_scr_raw) == 1024):
+            # Se a UART estiver com contenção de log, tenta ler diretamente do endpoint HTTP /api/screen
+            if base_url:
+                try:
+                    req_scr = urllib.request.Request(f"{base_url}/api/screen")
+                    with urllib.request.urlopen(req_scr, timeout=1.0) as scr_resp:
+                        if scr_resp.status == 200:
+                            data = scr_resp.read()
+                            if len(data) == 1024:
+                                self.last_scr_raw = data
+                except Exception:
+                    pass
+
+        if self.last_scr_raw and len(self.last_scr_raw) == 1024:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            if script_dir not in sys.path:
+                sys.path.insert(0, script_dir)
+            from oled_screenshot import decode_ssd1306, make_png, print_ascii
+            pixels = decode_ssd1306(self.last_scr_raw, rotate_180=True)
+            os.makedirs("captures", exist_ok=True)
+            png_path = f"captures/oled_{name}.png"
+            with open(png_path, "wb") as f:
+                f.write(make_png(pixels, scale=6))
+            sys.stdout.write(f"\n  📸 [OLED CAPTURE] Tela gravada em: {png_path}\n")
+            if print_art:
+                print_ascii(pixels)
+            sys.stdout.flush()
+            return png_path
+        return None
 
     def query_ui(self, timeout=2.0):
         self._ui_event.clear()
@@ -567,24 +764,32 @@ def test_browser_workflow(base_url, size_mb=10):
         last_prog_t = t_batch_start
         last_stats_hdr = ""
 
+        sock = socket.create_connection((host, port), timeout=30.0)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+
         for idx, (t_path, t_bytes) in enumerate(tracks, start=1):
             encoded_q = (
                 f"path={urllib.parse.quote(t_path)}"
                 f"&idx={idx}&count={len(tracks)}&batchTotal={batch_total}"
             )
-            sock = socket.create_connection((host, port), timeout=30.0)
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-
+            conn_hdr = "keep-alive" if idx < len(tracks) else "close"
             req_hdr = (
                 f"PUT /api/upload?{encoded_q} HTTP/1.1\r\n"
                 f"Host: {host}:{port}\r\n"
                 f"User-Agent: Mozilla/5.0 Chrome/130.0\r\n"
                 f"Content-Type: application/octet-stream\r\n"
                 f"Content-Length: {t_bytes}\r\n"
-                f"Connection: close\r\n\r\n"
+                f"Connection: {conn_hdr}\r\n\r\n"
             ).encode('utf-8')
-            sock.sendall(req_hdr)
+            try:
+                sock.sendall(req_hdr)
+            except Exception:
+                sock.close()
+                sock = socket.create_connection((host, port), timeout=30.0)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+                sock.sendall(req_hdr)
 
             sent_file = 0
             while sent_file < t_bytes:
@@ -607,16 +812,22 @@ def test_browser_workflow(base_url, size_mb=10):
                         break
                     resp_data += d
                     if b"\r\n\r\n" in resp_data:
-                        if b"Content-Length: 0" in resp_data or resp_data.endswith(b"\r\n\r\n"):
+                        hdr_end = resp_data.find(b"\r\n\r\n") + 4
+                        hdr_part = resp_data[:hdr_end].decode('utf-8', errors='ignore')
+                        clen = 0
+                        for hline in hdr_part.splitlines():
+                            if hline.lower().startswith("content-length:"):
+                                clen = int(hline.split(":", 1)[1].strip())
+                        if len(resp_data) - hdr_end >= clen:
                             break
                 except socket.timeout:
                     if resp_data:
                         break
                     raise
-            sock.close()
 
             resp_str = resp_data.decode('utf-8', errors='replace')
             if "200 OK" not in resp_str:
+                sock.close()
                 print(f"\n  ❌ Erro HTTP no upload da faixa {idx}: {resp_str.splitlines()[0] if resp_str else 'Sem resposta'}")
                 return None
             for line in resp_str.splitlines():
@@ -627,9 +838,10 @@ def test_browser_workflow(base_url, size_mb=10):
             if idx < len(tracks):
                 time.sleep(0.025)
 
+        sock.close()
         t_batch_dur = time.perf_counter() - t_batch_start
         web_upload_mbs = (batch_total / (1024.0 * 1024.0)) / t_batch_dur
-        print(f"\n  ✅ [Passo 4] Lote de músicas enviado via Web UI: {format_speed(batch_total, t_batch_dur)} em {t_batch_dur:.2f} s")
+        print(f"\n  ✅ [Passo 4] Lote de músicas enviado via Web UI (Keep-Alive): {format_speed(batch_total, t_batch_dur)} em {t_batch_dur:.2f} s")
         if last_stats_hdr:
             print(f"     📊 Telemetria X-Upload-Stats (faixa principal): {last_stats_hdr}")
 
@@ -683,12 +895,120 @@ def test_browser_workflow(base_url, size_mb=10):
         print(f"\n  ❌ Falha no fluxo de navegador Web: {e}")
         return None
 
+def sweep_sd_clock_modes(base_url, size_mb=10, mon=None):
+    print("\n" + "=" * 75)
+    print(f"🔬 VARREDURA EMPÍRICA DE MODOS DE CLOCK SDMMC (--sweep-modes | {size_mb} MB)")
+    print("=" * 75)
+    modes = [
+        (0, "Mode 0: 20 MHz Fixo"),
+        (1, "Mode 1: Hybrid (20MHz RX -> 40MHz Drain)"),
+        (2, "Mode 2: 40 MHz Contínuo"),
+        (3, "Mode 3: Auto-Channel (40MHz ch!=5..8, Hybrid ch 5..8)"),
+    ]
+    results = []
+    for mode_id, mode_label in modes:
+        print(f"\n>>> Configurando {mode_label} via POST /api/bench/sd_clock?mode={mode_id} ...")
+        cfg_resp = fetch_json_endpoint(f"{base_url}/api/bench/sd_clock?mode={mode_id}", method="POST")
+        print(f"    Resposta do firmware: {cfg_resp}")
+        det = test_sd_upload(base_url, size_mb=size_mb, return_details=True)
+        if mon and not mon.check_healthy(f"Sweep {mode_label}"):
+            break
+        if det:
+            up_st = det.get("up_stats", {})
+            dl_st = det.get("dl_stats", {})
+            results.append({
+                "mode": mode_id,
+                "label": mode_label,
+                "up_mbs": det["upload_mbs"],
+                "dl_mbs": det["download_mbs"],
+                "sd_wr_mbs": up_st.get("sd_write_mbps", 0.0),
+                "sd_rd_mbs": dl_st.get("sd_read_mbps", 0.0),
+                "drain_ms": up_st.get("drain_us", 0) / 1000.0,
+                "recv_slow": up_st.get("recv_slow", 0),
+                "wr_slow": up_st.get("fwrite_slow", up_st.get("wr_slow", 0)),
+                "wifi_ch": up_st.get("wifi_ch", 0),
+                "rssi": up_st.get("rssi_dbm", 0),
+                "md5_ok": det["md5_ok"],
+            })
+
+    # Restaura Mode 3 (Auto-Channel) ou o melhor modo medido sem perda de integridade
+    best_mode = 3
+    valid_res = [r for r in results if r["md5_ok"]]
+    if valid_res:
+        best_res = max(valid_res, key=lambda r: r["up_mbs"] + 0.5 * r["dl_mbs"])
+        best_mode = best_res["mode"]
+    fetch_json_endpoint(f"{base_url}/api/bench/sd_clock?mode={best_mode}", method="POST")
+
+    print("\n" + "=" * 95)
+    print("📊 TABELA COMPARATIVA DE MODOS DE CLOCK SDMMC (UPLOAD & DOWNLOAD)")
+    print("=" * 95)
+    print(f"{'Modo SDMMC':<42} | {'Upload':>9} | {'SD Write':>9} | {'Drain':>8} | {'Download':>9} | {'SD Read':>9} | {'MD5':>4}")
+    print("-" * 95)
+    for r in results:
+        print(f"{r['label']:<42} | {r['up_mbs']:6.2f}MB/s | {r['sd_wr_mbs']:6.2f}MB/s | {r['drain_ms']:6.1f}ms | {r['dl_mbs']:6.2f}MB/s | {r['sd_rd_mbs']:6.2f}MB/s | {'OK' if r['md5_ok'] else 'ERR':>4}")
+    print("=" * 95)
+    print(f"🏆 Modo selecionado e aplicado no firmware: Mode {best_mode}")
+    return results
+
+def sweep_oled_fps(base_url, size_mb=10, mon=None):
+    print("\n" + "=" * 75)
+    print(f"🔬 VARREDURA EMPÍRICA DE TAXAS DE ATUALIZAÇÃO OLED (--sweep-fps | {size_mb} MB)")
+    print("=" * 75)
+    fps_list = [0, 4, 8, 10, 15, 20, 30]
+    results = []
+    base_up_mbs = None
+    for fps in fps_list:
+        label = f"{fps} FPS" if fps > 0 else "0 FPS (Display OFF)"
+        print(f"\n>>> Configurando {label} via POST /api/bench/oled_fps?fps={fps} ...")
+        cfg_resp = fetch_json_endpoint(f"{base_url}/api/bench/oled_fps?fps={fps}", method="POST")
+        print(f"    Resposta do firmware: {cfg_resp}")
+        det = test_sd_upload(base_url, size_mb=size_mb, return_details=True)
+        if mon and not mon.check_healthy(f"Sweep {label}"):
+            break
+        if det:
+            up_st = det.get("up_stats", {})
+            dl_st = det.get("dl_stats", {})
+            up_mbs = det["upload_mbs"]
+            if base_up_mbs is None:
+                base_up_mbs = up_mbs
+            diff_pct = ((up_mbs - base_up_mbs) / base_up_mbs * 100.0) if base_up_mbs else 0.0
+            results.append({
+                "fps": fps,
+                "label": label,
+                "interval_ms": cfg_resp.get("interval_ms", 1000 // fps if fps else 0) if cfg_resp else 0,
+                "up_mbs": up_mbs,
+                "dl_mbs": det["download_mbs"],
+                "sd_wr_mbs": up_st.get("sd_write_mbps", 0.0),
+                "sd_rd_mbs": dl_st.get("sd_read_mbps", 0.0),
+                "drain_ms": up_st.get("drain_us", 0) / 1000.0,
+                "diff_pct": diff_pct,
+                "md5_ok": det["md5_ok"],
+            })
+
+    # Restaura 4 FPS no firmware
+    fetch_json_endpoint(f"{base_url}/api/bench/oled_fps?fps=4", method="POST")
+
+    print("\n" + "=" * 95)
+    print("📊 TABELA COMPARATIVA DE TAXAS DE ATUALIZAÇÃO OLED (UPLOAD & DOWNLOAD)")
+    print("=" * 95)
+    print(f"{'Taxa OLED':<24} | {'Intervalo':>9} | {'Upload Net':>10} | {'SD Write':>9} | {'Download':>9} | {'Impacto vs 0FPS':>15} | {'MD5':>4}")
+    print("-" * 95)
+    for r in results:
+        status_md5 = "OK" if r["md5_ok"] else "ERR"
+        diff_str = f"{r['diff_pct']:+5.1f}%" if r["fps"] > 0 else " BASE "
+        print(f"{r['label']:<24} | {r['interval_ms']:>6} ms | {r['up_mbs']:7.2f}MB/s | {r['sd_wr_mbs']:6.2f}MB/s | {r['dl_mbs']:6.2f}MB/s | {diff_str:>15} | {status_md5:>4}")
+    print("=" * 95)
+    return results
+
 def main():
     parser = argparse.ArgumentParser(description="MPS3 Wi-Fi Speed & Pipeline Benchmark Tool")
-    parser.add_argument("target", nargs="?", default="192.168.15.61",
-                        help="IP ou hostname do dispositivo MPS3 (ex: 192.168.15.61 ou 192.168.4.1)")
+    parser.add_argument("target", nargs="?", default="mps3.local",
+                        help="IP ou hostname do dispositivo MPS3 (ex: mps3.local ou 192.168.4.1)")
     parser.add_argument("--size", type=int, default=10, help="Tamanho do arquivo de teste em MB (padrão: 10)")
     parser.add_argument("--serial-port", default="COM5", help="Porta serial para monitoramento de UI e reboots (padrão: COM5)")
+    parser.add_argument("--sweep-modes", action="store_true", help="Executa varredura comparativa dos Modos 0, 1, 2 e 3 de clock SDMMC")
+    parser.add_argument("--fps", type=int, default=None, help="Configura a taxa de atualização (FPS) do OLED durante transferência")
+    parser.add_argument("--sweep-fps", action="store_true", help="Executa varredura comparativa de taxas de atualização OLED (0, 4, 8, 10, 15, 20, 30 FPS)")
     args = parser.parse_args()
 
     target = args.target
@@ -710,18 +1030,20 @@ def main():
         if mon.start():
             ui_init = mon.query_ui()
             if ui_init:
-                print(f"  Estado de UI inicial: Modo={ui_init.get('mode_name')} | Wi-Fi={ui_init.get('wifi')} | Menu={ui_init.get('menu_active')}")
-                if not ui_init.get("wifi"):
-                    print("  ⚠️ Dispositivo não está no modo Wi-Fi! Enviando comando 'w' para ativar...")
-                    mon.send_cmd("w")
-                    time.sleep(5.0)
+                print(f"  Estado de UI inicial: Modo={ui_init.get('mode_name')} | Wi-Fi={ui_init.get('wifi')} ({ui_init.get('wifi_substate')}) | Menu={ui_init.get('menu_active')}")
+                if not ui_init.get("wifi") or ui_init.get("wifi_substate") not in ("STA_ACTIVE", "AP_ACTIVE"):
+                    print("  ⚠️ Ativando modo Wi-Fi STA via comando UART 'wifi sta'...")
+                    mon.send_cmd("wifi sta")
+                    time.sleep(6.0)
                     ui_init = mon.query_ui()
-                    print(f"  Novo estado: Wi-Fi={ui_init.get('wifi') if ui_init else 'aguardando STA...'}")
+                    print(f"  Novo estado: Wi-Fi={ui_init.get('wifi') if ui_init else 'aguardando'} ({ui_init.get('wifi_substate') if ui_init else 'STA'})")
             else:
-                print("  (Sem resposta do comando @UI - continuando via HTTP)")
+                print("  (Sem resposta do comando @UI - enviando 'wifi sta' preventivamente)")
+                mon.send_cmd("wifi sta")
+                time.sleep(5.0)
 
     status_before = None
-    for attempt in range(5):
+    for attempt in range(8):
         status_before = check_device_status(base_url)
         if status_before:
             break
@@ -732,6 +1054,19 @@ def main():
         if mon: mon.stop()
         sys.exit(1)
 
+    if args.sweep_modes:
+        sweep_sd_clock_modes(base_url, size_mb=args.size, mon=mon)
+
+    if args.fps is not None:
+        print(f"\n>>> Configurando OLED para {args.fps} FPS via POST /api/bench/oled_fps?fps={args.fps} ...")
+        resp_fps = fetch_json_endpoint(f"{base_url}/api/bench/oled_fps?fps={args.fps}", method="POST")
+        print(f"    Resposta do firmware: {resp_fps}")
+
+    if args.sweep_fps:
+        sweep_oled_fps(base_url, size_mb=args.size, mon=mon)
+        if mon: mon.stop()
+        return
+
     # 1. RTT Latency Ping
     rtt_res = test_ping_latency(base_url, samples=8)
     if mon and not mon.check_healthy("Ping Latency"):
@@ -739,20 +1074,22 @@ def main():
         sys.exit(1)
 
     # 2. Network Sink (pure RAM)
-    sink_speed = test_net_sink(base_url, size_mb=args.size)
+    sink_speed = test_net_sink(base_url, size_mb=args.size, mon=mon)
     if mon and not mon.check_healthy("Network Sink"):
         mon.stop()
         sys.exit(1)
 
     # 3. Network Source (pure RAM)
-    source_speed = test_net_source(base_url, size_mb=args.size)
+    source_speed = test_net_source(base_url, size_mb=args.size, mon=mon)
     if mon and not mon.check_healthy("Network Source"):
         mon.stop()
         sys.exit(1)
 
-    # 4. SD Upload (Network + SDMMC FatFS)
-    sd_speed = test_sd_upload(base_url, size_mb=args.size)
-    if mon and not mon.check_healthy("SD Card Upload"):
+    # 4. SD Upload & Download (Network + SDMMC FatFS)
+    sd_details = test_sd_upload(base_url, size_mb=args.size, mon=mon, return_details=True)
+    sd_speed = sd_details["upload_mbs"] if isinstance(sd_details, dict) else sd_details
+    dl_speed = sd_details["download_mbs"] if isinstance(sd_details, dict) else None
+    if mon and not mon.check_healthy("SD Card Upload & Download"):
         mon.stop()
         sys.exit(1)
 
@@ -773,7 +1110,9 @@ def main():
     if source_speed:
         print(f"  - Teto do Rádio (Wi-Fi TX): {source_speed:6.2f} MB/s ({source_speed * 8:6.2f} Mbps)")
     if sd_speed:
-        print(f"  - Upload Sintético SD:      {sd_speed:6.2f} MB/s ({sd_speed * 8:6.2f} Mbps)")
+        print(f"  - Upload Ponta a Ponta SD:  {sd_speed:6.2f} MB/s ({sd_speed * 8:6.2f} Mbps)")
+    if dl_speed:
+        print(f"  - Download Ponta a Ponta:   {dl_speed:6.2f} MB/s ({dl_speed * 8:6.2f} Mbps)")
     if web_speed:
         print(f"  - Upload Real via Site Web: {web_speed:6.2f} MB/s ({web_speed * 8:6.2f} Mbps)")
 

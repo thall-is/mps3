@@ -67,6 +67,67 @@ bool has_supported_extension(const char *name)
     return mps3::detect_audio_format(name) != mps3::AudioFormat::Unknown;
 }
 
+bool is_playlist_extension(const char *name)
+{
+    if (!name) return false;
+    const char *ext = strrchr(name, '.');
+    if (!ext) return false;
+    return (strcasecmp(ext, ".m3u") == 0 || strcasecmp(ext, ".m3u8") == 0);
+}
+
+static void scan_playlist_file(const char *playlist_path, DirScan &out)
+{
+    FILE *fp = fopen(playlist_path, "r");
+    if (!fp) {
+        ESP_LOGE(TAG, "Falha ao abrir playlist %s", playlist_path);
+        return;
+    }
+
+    char base_dir[512];
+    strlcpy(base_dir, playlist_path, sizeof(base_dir));
+    char *last_slash = strrchr(base_dir, '/');
+    if (last_slash) {
+        *last_slash = '\0';
+    } else {
+        strlcpy(base_dir, "/sdcard", sizeof(base_dir));
+    }
+
+    char line[512];
+    while (fgets(line, sizeof(line), fp) != NULL && out.audio_count < MAX_ENTRIES) {
+        char *p = line;
+        if ((uint8_t)p[0] == 0xEF && (uint8_t)p[1] == 0xBB && (uint8_t)p[2] == 0xBF) {
+            p += 3;
+        }
+        while (*p == ' ' || *p == '\t') p++;
+        size_t len = strlen(p);
+        while (len > 0 && (p[len - 1] == '\r' || p[len - 1] == '\n' || p[len - 1] == ' ' || p[len - 1] == '\t')) {
+            p[--len] = '\0';
+        }
+        if (len == 0 || p[0] == '#') continue;
+
+        for (size_t i = 0; i < len; i++) {
+            if (p[i] == '\\') p[i] = '/';
+        }
+
+        char resolved[768];
+        if (strncmp(p, "/sdcard/", 8) == 0) {
+            strlcpy(resolved, p, sizeof(resolved));
+        } else if (p[0] == '/') {
+            snprintf(resolved, sizeof(resolved), "/sdcard%s", p);
+        } else {
+            snprintf(resolved, sizeof(resolved), "%s/%s", base_dir, p);
+        }
+
+        if (has_supported_extension(resolved)) {
+            char *s = strdup(resolved);
+            if (s) {
+                out.audio_files[out.audio_count++] = s;
+            }
+        }
+    }
+    fclose(fp);
+}
+
 bool is_junk_entry(const char *name)
 {
     if (name[0] == '.') return true;
@@ -87,6 +148,10 @@ void free_dir_scan(DirScan &scan)
 void scan_dir(const char *path, DirScan &out)
 {
     free_dir_scan(out);
+    if (is_playlist_extension(path)) {
+        scan_playlist_file(path, out);
+        return;
+    }
     DIR *d = opendir(path);
     if (!d) {
         ESP_LOGE(TAG, "Falha ao abrir diretorio %s", path);
@@ -106,7 +171,12 @@ void scan_dir(const char *path, DirScan &out)
                 if (s) out.subdirs[out.subdir_count++] = s;
             }
         } else if (ent->d_type == DT_REG) {
-            if (has_supported_extension(ent->d_name)) {
+            if (is_playlist_extension(ent->d_name)) {
+                if (out.subdir_count < MAX_ENTRIES) {
+                    char *s = strdup(ent->d_name);
+                    if (s) out.subdirs[out.subdir_count++] = s;
+                }
+            } else if (has_supported_extension(ent->d_name)) {
                 if (entry_count < MAX_ENTRIES) {
                     char *s = strdup(ent->d_name);
                     if (s) {

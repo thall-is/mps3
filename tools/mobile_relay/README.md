@@ -1,6 +1,6 @@
 # MPS3 Mobile Relay & Tailscale Bridge
 
-Este diretório contém as ferramentas para permitir que o player **MPS3 (ESP32-S3)** sincronize seus podcasts a partir do servidor **Radxa Rock 3E (Tailscale: `100.120.93.115:8088`)** quando você estiver fora de casa, utilizando seu smartphone como ponte.
+Este diretório contém as ferramentas para permitir que o player **MPS3 (ESP32-S3)** sincronize seus podcasts a partir do servidor **(Tailscale: `100.64.0.1:8088` ou IP da sua rede)** quando você estiver fora de casa, utilizando seu smartphone como ponte.
 
 ---
 
@@ -10,7 +10,7 @@ Este diretório contém as ferramentas para permitir que o player **MPS3 (ESP32-
 2. Abra o navegador do celular e acerte:
    - `http://mps3.local` ou `http://192.168.4.1` (ou o IP do MPS3).
 3. Na barra superior de arquivos, clique no botão **`🎙️ Podcasts`**.
-4. O modal já vem configurado com `http://100.120.93.115:8088`:
+4. Configure o endereço do servidor (ex: `http://100.64.0.1:8088` ou `http://meu-servidor:8088`):
    - Clique em **`Testar`** para validar o acesso à Tailscale.
    - Clique em **`🔍 Verificar Novos Episódios`**: o navegador compara o catálogo do servidor com os episódios já gravados no SD Card.
    - Clique em **`Baixar e Gravar no SD`**: o celular baixa os episódios do servidor via 4G/5G pela Tailscale e envia direto para o cartão SD do MPS3 em segundo plano, com barra de progresso em tempo real e animação de transferência no display OLED do player!

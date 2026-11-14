@@ -82,9 +82,9 @@ void IRAM_ATTR audio_meter_feed(const int32_t *samples, size_t sample_count, uin
     int32_t max_r = 0;
 
     size_t pairs = sample_count >> 1;
-    // Em faixas Hi-Res (96 kHz / 192 kHz), decimamos a leitura de pico por 2x ou 4x
-    // (mantendo ~48 kHz efetivos para o VU meter), reduzindo o trafego de PSRAM em 75%.
-    size_t stride = (sample_rate > 96000) ? 4 : ((sample_rate > 48000) ? 2 : 1);
+    // Em faixas Hi-Res (96 kHz / 192 kHz / 384 kHz), decimamos a leitura de pico
+    // mantendo ~48 kHz efetivos para o VU meter, reduzindo drasticamente o trafego de PSRAM e carga de CPU no Core 0.
+    size_t stride = (sample_rate > 192000) ? 8 : ((sample_rate > 96000) ? 4 : ((sample_rate > 48000) ? 2 : 1));
     for (size_t i = 0; i < pairs; i += stride) {
         int32_t sl = samples[i * 2];
         int32_t sr = samples[i * 2 + 1];

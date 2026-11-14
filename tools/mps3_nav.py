@@ -264,6 +264,32 @@ class Mps3Nav:
             time.sleep(step)
         raise NavigationTimeout(f"Condicao nao satisfeita em {timeout}s (Ultimo estado: {self.last_ui})")
 
+    def wifi_open_menu(self) -> Dict[str, Any]:
+        """Abre o submenu Wi-Fi a partir do menu principal."""
+        return self.goto("WIFI_SUBMENU")
+
+    def wifi_select_ap(self) -> Dict[str, Any]:
+        """Abre o submenu Wi-Fi e ativa o Hotspot SoftAP (Opção 1)."""
+        return self.goto("WIFI_AP")
+
+    def wifi_select_sta(self) -> Dict[str, Any]:
+        """Abre o submenu Wi-Fi e conecta na rede Wi-Fi Station (Opção 2)."""
+        return self.goto("WIFI_STA")
+
+    def wifi_select_scan(self) -> Dict[str, Any]:
+        """Abre o submenu Wi-Fi e inicia varredura de redes locais (Opção 3)."""
+        return self.goto("WIFI_SCAN")
+
+    def wifi_select_saved(self) -> Dict[str, Any]:
+        """Abre o submenu Wi-Fi e acessa gerenciador de redes salvas (Opção 4)."""
+        return self.goto("WIFI_SAVED")
+
+    def wifi_back(self) -> Dict[str, Any]:
+        """Pressiona 'L' para voltar do submenu ou estado Wi-Fi atual."""
+        self.seq("L")
+        time.sleep(0.3)
+        return self.query_ui()
+
     def goto(self, target: str) -> Dict[str, Any]:
         """
         Navega dinamicamente ate uma tela de destino:
@@ -283,11 +309,84 @@ class Mps3Nav:
         if target in ("MAIN_MENU", "LIST"):
             return st
 
-        if target == "WIFI":
+        if target == "PLAYING":
+            # Do menu principal, pressiona L para ir para Now Playing
+            st = self.query_ui()
+            if st.get("mode_name") == "PLAYING":
+                return st
+            self.seq("L")
+            return self.wait_for(lambda s: s.get("mode_name") == "PLAYING", timeout=3.0)
+
+        if target in ("WIFI", "WIFI_SUBMENU", "WIFI_MENU"):
             # No menu principal: indice 0=Player, 1=WiFi, 2=BT, 3=Conf, 4=USB, 5=Game
-            # Se comeca em 0, vai para 1 (U ou D conforme cursor)
-            self.seq("D,R")
-            return self.wait_for(lambda s: s.get("wifi") is True or s.get("mode_name") == "LIST", timeout=5.0)
+            st = self.query_ui()
+            if st.get("wifi_substate") == "SUBMENU":
+                return st
+            self.send_cmd("menu 1")
+            time.sleep(0.15)
+            self.press("r")
+            return self.wait_for(
+                lambda s: s.get("wifi_substate") == "SUBMENU" or s.get("wifi_menu") is True or s.get("wifi") is True,
+                timeout=5.0
+            )
+
+        elif target in ("WIFI_AP", "WIFI_HOTSPOT"):
+            # Abre o Submenu e seleciona a opção 0 (Abrir Hotspot AP)
+            self.goto("WIFI_SUBMENU")
+            st = self.query_ui()
+            cur = st.get("wifi_cursor", 0)
+            while cur > 0:
+                self.seq("U")
+                cur -= 1
+            self.seq("R")
+            return self.wait_for(
+                lambda s: s.get("wifi_substate") == "AP_ACTIVE" or (s.get("wifi") is True and s.get("wifi_substate") != "SUBMENU"),
+                timeout=6.0
+            )
+
+        elif target in ("WIFI_STA", "WIFI_CONNECT"):
+            # Abre o Submenu e seleciona a opção 1 (Conectar Wi-Fi STA)
+            self.goto("WIFI_SUBMENU")
+            st = self.query_ui()
+            cur = st.get("wifi_cursor", 0)
+            if cur == 0:
+                self.seq("D,R")
+            elif cur == 1:
+                self.seq("R")
+            else:
+                while cur > 1:
+                    self.seq("U")
+                    cur -= 1
+                self.seq("R")
+            return self.wait_for(
+                lambda s: s.get("wifi_substate") == "STA_ACTIVE" or (s.get("wifi") is True and s.get("wifi_substate") != "SUBMENU"),
+                timeout=8.0
+            )
+
+        elif target in ("WIFI_SCAN", "WIFI_SCAN_LIST"):
+            # Abre o Submenu e seleciona a opção 2 (Buscar Redes Scan)
+            self.goto("WIFI_SUBMENU")
+            st = self.query_ui()
+            cur = st.get("wifi_cursor", 0)
+            if cur < 2:
+                for _ in range(2 - cur):
+                    self.seq("D")
+            elif cur > 2:
+                for _ in range(cur - 2):
+                    self.seq("U")
+            self.seq("R")
+            return self.wait_for(lambda s: s.get("wifi_substate") == "SCAN_LIST", timeout=6.0)
+
+        elif target in ("WIFI_SAVED", "WIFI_MANAGE"):
+            # Abre o Submenu e seleciona a opção 3 (Redes Salvas NVS)
+            self.goto("WIFI_SUBMENU")
+            st = self.query_ui()
+            cur = st.get("wifi_cursor", 0)
+            if cur < 3:
+                for _ in range(3 - cur):
+                    self.seq("D")
+            self.seq("R")
+            return self.wait_for(lambda s: s.get("wifi_substate") == "MANAGE_SAVED", timeout=6.0)
 
         elif target == "CONF_MENU":
             # Indice 3 = Conf: desce 3 vezes e entra com R
@@ -311,8 +410,8 @@ class Mps3Nav:
             return self.wait_for(lambda s: s.get("mode_name") == "CONF_DISPLAY", timeout=4.0)
 
         elif target == "TOP_SCREEN":
-            # Da tela PLAYING, aperta U para subir para TOP_SCREEN
-            self.home()
+            # Garante que esta na tela PLAYING, depois aperta U para TOP_SCREEN
+            self.goto("PLAYING")
             self.seq("U")
             return self.wait_for(lambda s: s.get("mode_name") == "TOP_SCREEN", timeout=3.0)
 

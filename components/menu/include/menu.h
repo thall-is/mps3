@@ -35,7 +35,8 @@ typedef struct {
     void (*request_action)(void); /**< Dispara ação contextual durante o modo (ex: clique central). */
     void (*nav_up)(void);         /**< Navegação contextual para cima. */
     void (*nav_down)(void);       /**< Navegação contextual para baixo. */
-    void (*nav_select)(void);     /**< Seleção contextual dentro do modo ativo. */
+    void (*nav_select)(void);     /**< Seleção contextual dentro do modo ativo (avanço/direita). */
+    void (*nav_left)(void);       /**< Navegação contextual para a esquerda (voltar/cancelar). */
 } menu_item_t;
 
 #define MENU_MAX_ITEMS 8 /**< Limite máximo de itens suportados no menu principal. */
@@ -115,6 +116,11 @@ void menu_nav_down_active(void);
  * @brief Envia evento de seleção/avanço ao modo ativo.
  */
 void menu_nav_select_active(void);
+
+/**
+ * @brief Envia evento de navegação para a esquerda ao modo ativo.
+ */
+void menu_nav_left_active(void);
 
 #ifdef __cplusplus
 }

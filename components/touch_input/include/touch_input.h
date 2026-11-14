@@ -64,6 +64,7 @@ typedef enum {
     UI_MODE_GAMES_MENU   = 22, /**< Submenu de seleção de jogos (Game of Life, Tetris, etc.). */
     UI_MODE_CHRONO       = 23, /**< Aplicativo Cronômetro (Stopwatch). */
     UI_MODE_LOCK_CLOCK_CFG = 24, /**< Configuração de tempo do relógio de bloqueio. */
+    UI_MODE_ACTIONS_MENU = 25, /**< Menu de ações contextuais de arquivos/pastas. */
 } ui_mode_t;
 
 /**
@@ -305,6 +306,11 @@ int touch_input_chrono_get_laps(uint32_t *out_laps, int max_laps);
 bool touch_input_is_lock_clock_visible(void);
 int touch_input_get_lock_clock_timeout_idx(void);
 uint32_t touch_input_get_lock_clock_secs(void);
+
+// Funções do Menu de Ações e Clipboard
+int touch_input_get_action_cursor(void);
+int touch_input_get_action_items(const char *items[], int max_items);
+const char *touch_input_get_clipboard_item(void);
 
 #ifdef __cplusplus
 }

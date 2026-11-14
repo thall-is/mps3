@@ -19,8 +19,8 @@
 extern "C" {
 #endif
 
-#define PODCAST_DEFAULT_LOCAL_SERVER     "http://192.168.15.216:8088"  /**< URL do servidor local de desenvolvimento. */
-#define PODCAST_DEFAULT_TAILSCALE_SERVER "http://100.120.93.115:8088"  /**< URL do servidor remoto via Tailscale. */
+#define PODCAST_DEFAULT_LOCAL_SERVER     "http://192.168.1.100:8088"   /**< URL do servidor local de desenvolvimento. */
+#define PODCAST_DEFAULT_TAILSCALE_SERVER "http://100.64.0.1:8088"      /**< URL do servidor remoto via Tailscale (RFC 6598 CGNAT). */
 #define PODCAST_MAX_EPISODES             32                            /**< Limite de episódios no catálogo por sincronização. */
 
 /**

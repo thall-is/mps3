@@ -5,7 +5,7 @@ import json
 import os
 import sys
 
-TARGET = "http://192.168.15.61"
+TARGET = os.environ.get("MPS3_TARGET", "http://mps3.local")
 POLL_INTERVAL_SEC = 0.1  # 100 ms polling
 
 class StatusSampler:

@@ -124,6 +124,10 @@ int wifi_transfer_get_known_count(void);
  */
 bool wifi_transfer_get_known_network(int idx, char *out_ssid, size_t ssid_len, char *out_pass, size_t pass_len);
 void wifi_transfer_save_network(const char *ssid, const char *pass);
+bool wifi_transfer_delete_network(const char *ssid);
+bool wifi_transfer_promote_network(const char *ssid);
+esp_err_t wifi_transfer_scan_start(void);
+esp_err_t wifi_transfer_scan_get_results(void *out_aps, int max_aps, int *out_count);
 
 /**
  * @brief Preenche uma string formatada com o status atual do Wi-Fi para exibição no display OLED.
@@ -139,7 +143,7 @@ void wifi_transfer_get_status(char *out, size_t out_len, int *files_received);
  */
 typedef struct {
     bool in_progress;       /**< true se há transferência ocorrendo neste instante. */
-    char filename[64];      /**< Nome do arquivo sendo transferido. */
+    char filename[128];     /**< Nome do arquivo sendo transferido. */
     int file_pct;           /**< Progresso percentual do arquivo atual (0-100%). */
     int overall_pct;        /**< Progresso percentual do lote total (-1 se avulso). */
     int idx;                /**< Índice do arquivo atual no lote. */
@@ -191,6 +195,85 @@ int wifi_transfer_get_connected_clients(void);
  * @brief Registra o item "WiFi" no menu carrossel principal do sistema.
  */
 void wifi_transfer_register_menu_entry(void);
+
+/**
+ * @brief Retorna o nome textual do sub-estado atual do menu/interface Wi-Fi.
+ *
+ * Ex: "SUBMENU", "AP_ACTIVE", "STA_ACTIVE", "SCAN_LIST", "KEYBOARD", "MANAGE_SAVED", "OFF".
+ */
+const char* wifi_transfer_get_substate_name(void);
+
+/**
+ * @brief Retorna a posição do cursor atual dentro do submenu Wi-Fi (0 a 3).
+ */
+int wifi_transfer_get_submenu_cursor(void);
+
+/**
+ * @brief Informa se o submenu/interface visual de Wi-Fi está aberto na tela.
+ */
+bool wifi_transfer_is_menu_open(void);
+
+/**
+ * @brief Informa se o modo de transferência turbo (Boost Mode) está ativo.
+ *
+ * Retorna true durante uploads/downloads ativos e na janela de histerese (1,5s)
+ * entre arquivos consecutivos de um lote, permitindo suspender tráfego I2C do OLED,
+ * keep-alive ARP e reduzir polling de periféricos no Core 0.
+ *
+ * @return true se o Boost Mode estiver ativo; false caso contrário.
+ */
+bool wifi_transfer_is_boost_active(void);
+
+/**
+ * @brief Define a política de clock SDMMC durante transferências Wi-Fi.
+ *
+ * @param[in] mode 0 = 20 MHz Fixo, 1 = Híbrido (20 MHz RX -> 40 MHz Drain),
+ *                 2 = 40 MHz Contínuo, 3 = Auto-Channel (40 MHz fora dos canais 5..8, senão Híbrido).
+ */
+void wifi_transfer_set_sd_clock_mode(int mode);
+
+/**
+ * @brief Retorna a política atual de clock SDMMC configurada para transferências Wi-Fi.
+ *
+ * @return Modo configurado (0 a 3).
+ */
+int wifi_transfer_get_sd_clock_mode(void);
+
+/**
+ * @brief Informa se o display deve renderizar o overlay de progresso ou conclusão de transferência.
+ *
+ * Retorna true durante transferências ativas (upload, download, OTA) ou na janela de exibição
+ * da tela de confirmação (WIFI_UI_DONE).
+ *
+ * @return true se o overlay deve ser exibido; false caso contrário.
+ */
+bool wifi_transfer_is_overlay_active(void);
+
+/**
+ * @brief Renderiza diretamente no display OLED a tela de status/progresso da transferência atual.
+ */
+void wifi_transfer_draw_overlay(void);
+
+/**
+ * @brief Configura a taxa de atualização (FPS) da tela de transferência Wi-Fi.
+ *
+ * @param[in] fps Taxa de quadros desejada (0 = tela desativada durante transferência, 1 a 60 FPS).
+ */
+void wifi_transfer_set_display_fps(int fps);
+
+/**
+ * @brief Retorna a taxa atual de atualização (FPS) configurada para a tela de transferência Wi-Fi.
+ *
+ * @return FPS configurado (0 a 60).
+ */
+int wifi_transfer_get_display_fps(void);
+
+/**
+ * @brief Retorna o intervalo em milissegundos correspondente ao FPS configurado.
+ *
+ * @return Intervalo em ms entre quadros do OLED (ex: 250 ms para 4 FPS).
+ */
+uint32_t wifi_transfer_get_display_interval_ms(void);
 
 #ifdef __cplusplus
 }

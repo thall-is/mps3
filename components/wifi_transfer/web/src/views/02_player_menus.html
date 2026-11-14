@@ -1,0 +1,92 @@
+<!-- ========================================================================
+     VIEW 02: Mini Player Fixo, Fullscreen Player com Visualizer e Menu Contexto
+     ======================================================================== -->
+    <!-- Mini Player -->
+    <div id="player-bar">
+        <audio id="audioEl" style="display:none" crossorigin="anonymous"></audio>
+        <div class="player-row">
+            <div class="track-info" onclick="toggleFullscreen()">
+                <img id="albumArt" class="album-art" src="">
+                <div class="track-text">
+                    <div id="trackTitle" class="track-title">Selecione uma música</div>
+                    <div id="trackArtist" class="track-artist">...</div>
+                </div>
+            </div>
+            <div class="controls">
+                <button class="btn-icon" onclick="prevTrack()"><svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
+                <button id="playBtn" class="play-btn" onclick="togglePlay()"><svg fill="currentColor" viewBox="0 0 24 24" width="20" height="20"><path d="M8 5v14l11-7z"/></svg></button>
+                <button class="btn-icon" onclick="nextTrack()"><svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
+            </div>
+        </div>
+        <div class="progress-row">
+            <span id="timeCur">0:00</span>
+            <div id="progressCont" class="progress-bar-container" onclick="seek(event, this)">
+                <div id="bufferFill" class="buffer-bar-fill"></div>
+                <div id="progressFill" class="progress-bar-fill"></div>
+            </div>
+            <span id="timeTot">0:00</span>
+        </div>
+    </div>
+    
+    <!-- Fullscreen Player -->
+    <div id="fs-player">
+        <div id="fs-bg"></div>
+        <div class="fs-header">
+            <div class="fs-close" onclick="toggleFullscreen()"><svg fill="currentColor" viewBox="0 0 24 24" width="28" height="28"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg></div>
+            <div style="font-size:0.9em; font-weight:bold; letter-spacing:1px; text-transform:uppercase;">Tocando agora</div>
+            <div style="width:30px"></div>
+        </div>
+        <div class="fs-art-container">
+            <img id="fsArt" class="fs-art" src="">
+            <canvas id="visualizer"></canvas>
+        </div>
+        <div class="fs-info">
+            <div id="fsTitle" class="fs-title">Title</div>
+            <div id="fsArtist" class="fs-artist">Artist</div>
+        </div>
+
+        <!-- Equalizer -->
+        <div class="eq-panel">
+            <div class="eq-group">
+                <span>Grave</span>
+                <input type="range" id="eqBass" min="-10" max="15" value="0" step="1">
+            </div>
+            <div class="eq-group">
+                <span>Médio</span>
+                <input type="range" id="eqMid" min="-10" max="10" value="0" step="1">
+            </div>
+            <div class="eq-group">
+                <span>Agudo</span>
+                <input type="range" id="eqTreble" min="-10" max="12" value="0" step="1">
+            </div>
+        </div>
+
+        <div class="fs-controls-container">
+            <div class="fs-progress-row">
+                <span id="fsTimeCur">0:00</span>
+                <div id="fsProgressCont" class="fs-progress-cont" onclick="seek(event, this)">
+                    <div id="fsBufferFill" class="fs-buffer-fill"></div>
+                    <div id="fsProgressFill" class="fs-progress-fill"></div>
+                </div>
+                <span id="fsTimeTot">0:00</span>
+            </div>
+            <div class="fs-controls">
+                <button id="btnShuffle" class="fs-btn small" onclick="toggleShuffle()"><svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg></button>
+                <button class="fs-btn" onclick="prevTrack()"><svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
+                <button id="fsPlayBtn" class="fs-play" onclick="togglePlay()"><svg fill="currentColor" viewBox="0 0 24 24" width="30" height="30"><path d="M8 5v14l11-7z"/></svg></button>
+                <button class="fs-btn" onclick="nextTrack()"><svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
+                <button id="btnRepeat" class="fs-btn small" onclick="toggleRepeat()"><svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg></button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Context Menu -->
+    <div id="ctxMenu" class="dropdown">
+        <div id="ctxNext">🎵 Tocar a seguir</div>
+        <div id="ctxQueue">➕ Adicionar à fila</div>
+        <div id="ctxPlaylist">🎶 Adicionar à Playlist...</div>
+        <div id="ctxDownload">⬇️ Baixar arquivo</div>
+        <div id="ctxRename">✏️ Renomear</div>
+        <div id="ctxMove">📁 Mover para...</div>
+        <div id="ctxDel" style="color:#c33">🗑️ Excluir</div>
+    </div>

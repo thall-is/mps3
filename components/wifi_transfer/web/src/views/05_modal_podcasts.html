@@ -1,0 +1,157 @@
+<!-- ========================================================================
+     VIEW 05: Modal de Podcasts v3.0 (Scraper YouTube/RSS no Navegador + Ponte Móvel)
+     ======================================================================== -->
+    <!-- MODAL DE SINCRONIZAÇÃO DE PODCASTS (BROWSER SCRAPER YOUTUBE/RSS + TAILSCALE BRIDGE) -->
+    <div id="podModal" class="modal-backdrop" style="display:none;">
+        <div class="modal-card" style="max-width:600px;max-height:92vh;display:flex;flex-direction:column;">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:10px;margin-bottom:10px;">
+                <h3 style="margin:0;display:flex;align-items:center;gap:8px;font-size:1.12em;">
+                    <span>🎙️ Podcasts &amp; YouTube Scraper</span>
+                    <span id="podBridgeBadge" style="font-size:0.68em;padding:2px 7px;border-radius:10px;background:var(--bg-subtle);color:var(--accent-color);border:1px solid var(--border-color);font-weight:bold;">Browser v3.0</span>
+                </h3>
+                <button type="button" id="btnClosePod" style="background:none;border:none;font-size:1.4em;cursor:pointer;color:var(--text-muted);padding:4px 8px;">✕</button>
+            </div>
+
+            <!-- Seletor de Modo: Scraper no Navegador (YouTube/RSS) vs Servidor Radxa -->
+            <div style="display:flex;gap:6px;margin-bottom:10px;background:var(--bg-subtle);padding:4px;border-radius:8px;border:1px solid var(--border-color);">
+                <button type="button" id="podTabBrowserBtn" class="btn-primary" style="flex:1;padding:7px 10px;font-size:0.83em;font-weight:bold;border-radius:6px;" onclick="setPodSourceMode('browser')">🌐 YouTube &amp; RSS (Navegador)</button>
+                <button type="button" id="podTabServerBtn" class="btn-secondary" style="flex:1;padding:7px 10px;font-size:0.83em;font-weight:bold;border-radius:6px;" onclick="setPodSourceMode('server')">🏠 Servidor Radxa (Tailscale)</button>
+            </div>
+
+            <!-- ABA 1: SCRAPER NATIVO NO NAVEGADOR (YOUTUBE + RSS) -->
+            <div id="podBrowserPanel" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px;">
+                <!-- Cabeçalho de Canais Assinados (Salvos em /Podcasts/.subscriptions.json no SD) -->
+                <div style="background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:8px;padding:10px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+                        <div style="font-size:0.84em;font-weight:bold;color:var(--text-primary);display:flex;align-items:center;gap:6px;">
+                            <span>📺 Canais YouTube &amp; Feeds RSS</span>
+                            <span id="podSubsCountBadge" style="background:var(--accent-color);color:#fff;padding:1px 6px;border-radius:10px;font-size:0.75em;">0</span>
+                        </div>
+                        <div style="display:flex;gap:5px;flex-wrap:wrap;">
+                            <button type="button" id="btnPodToggleAddSub" class="btn-secondary" style="font-size:0.75em;padding:3px 8px;font-weight:bold;">➕ Adicionar Canal</button>
+                            <button type="button" id="btnPodSaveSubsSd" class="btn-secondary" style="font-size:0.75em;padding:3px 8px;" title="Salva a lista de canais em /Podcasts/.subscriptions.json no Cartão SD do MPS3">💾 Salvar no SD</button>
+                            <button type="button" id="btnPodToggleApiCfg" class="btn-secondary" style="font-size:0.75em;padding:3px 8px;" title="Configurar instâncias Invidious / Piped / Cobalt e Modo de Áudio">⚙️ Opções</button>
+                        </div>
+                    </div>
+
+                    <!-- Formulário para Adicionar Novo Canal YouTube ou RSS (com Busca Oficial Apple Podcasts) -->
+                    <div id="podAddSubBox" style="display:none;background:var(--bg-card);border:1px solid var(--border-color);border-radius:6px;padding:8px;margin-bottom:8px;">
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+                            <select id="podNewSubType" style="padding:6px;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:5px;font-size:0.82em;font-weight:bold;">
+                                <option value="rss">📡 RSS Podcast (Feed XML Oficial)</option>
+                                <option value="youtube">▶ YouTube (Canal / /streams / ID UC...)</option>
+                            </select>
+                            <input type="text" id="podNewSubName" placeholder="Nome do Podcast (ex: NerdCast, Vórtex, Hora Boa)" style="flex:1;min-width:140px;padding:6px 8px;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:5px;font-size:0.82em;">
+                            <button type="button" id="btnPodSearchItunes" class="btn-secondary" style="padding:6px 10px;font-size:0.78em;font-weight:bold;white-space:nowrap;" title="Busca o Feed RSS oficial do podcast no diretório público do Apple Podcasts">🔎 Buscar RSS Oficial</button>
+                        </div>
+                        <div id="podItunesResults" style="display:none;max-height:110px;overflow-y:auto;margin-bottom:6px;border:1px solid var(--border-color);border-radius:5px;background:var(--bg-subtle);padding:4px;font-size:0.78em;"></div>
+                        <div style="display:flex;gap:6px;">
+                            <input type="text" id="podNewSubUrl" placeholder="URL do Feed RSS Oficial (https://...) ou Canal YouTube" style="flex:1;padding:6px 8px;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:5px;font-size:0.82em;">
+                            <button type="button" id="btnPodConfirmAddSub" class="btn-primary" style="padding:6px 12px;font-size:0.82em;white-space:nowrap;">Adicionar</button>
+                        </div>
+                    </div>
+
+                    <!-- Painel Opcional de Configuração de Instâncias CORS & Conversão de Áudio -->
+                    <div id="podApiCfgBox" style="display:none;background:var(--bg-card);border:1px solid var(--border-color);border-radius:6px;padding:8px;margin-bottom:8px;font-size:0.8em;">
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+                            <label style="font-weight:bold;color:var(--text-muted);">Formato de Áudio:</label>
+                            <select id="podAudioFormatMode" style="flex:1;padding:4px 6px;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:4px;font-size:0.95em;">
+                                <option value="auto">⚡ Smart Auto (M4A/AAC, WebM/Opus ou MP3 Direto — Recomendado)</option>
+                                <option value="mp3_wav">🎵 Forçar Re-codificação no Navegador (Web Audio API)</option>
+                            </select>
+                        </div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+                            <label style="font-weight:bold;color:var(--text-muted);">Retenção por Canal:</label>
+                            <select id="podKeepRecentSelect" style="padding:4px 6px;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:4px;">
+                                <option value="3">Top 3 mais recentes (Padrão MPS3)</option>
+                                <option value="1">Apenas 1 mais recente</option>
+                                <option value="5">Top 5 mais recentes</option>
+                            </select>
+                            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                                <input type="checkbox" id="podAutoCleanPlayed" checked> Limpar ouvidos fora do Top N
+                            </label>
+                        </div>
+                        <div>
+                            <label style="font-weight:bold;color:var(--text-muted);display:block;margin-bottom:3px;">Endpoints Piped / Invidious (separados por vírgula):</label>
+                            <input type="text" id="podCustomApiInstances" style="width:100%;padding:5px 7px;border:1px solid var(--border-input);background:var(--bg-subtle);color:var(--text-primary);border-radius:4px;font-family:monospace;font-size:0.9em;">
+                        </div>
+                    </div>
+
+                    <!-- Lista Compacta de Canais Configurados -->
+                    <div id="podSubsList" style="max-height:110px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;font-size:0.82em;"></div>
+                </div>
+            </div>
+
+            <!-- ABA 2: SERVIDOR RADXA (TAILSCALE / LAN) -->
+            <div id="podServerPanel" style="display:none;margin-bottom:10px;">
+                <label style="font-size:0.85em;font-weight:bold;display:block;margin-bottom:4px;">Servidor Radxa (Tailscale / LAN):</label>
+                <div style="display:flex;gap:6px;">
+                    <input type="text" id="podServerUrl" placeholder="http://meu-servidor:8088" style="flex:1;padding:8px 10px;border:1px solid var(--border-input);background:var(--bg-card);color:var(--text-primary);border-radius:6px;font-size:0.9em;">
+                    <button type="button" id="btnTestPodServer" class="btn-secondary" style="white-space:nowrap;padding:8px 12px;">Testar</button>
+                </div>
+                <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+                    <button type="button" class="btn-secondary" style="font-size:0.75em;padding:4px 8px;" onclick="document.getElementById('podServerUrl').value='http://100.64.0.1:8088'; document.getElementById('btnTestPodServer').click();">🌐 Tailscale (100.64.0.1)</button>
+                    <button type="button" class="btn-secondary" style="font-size:0.75em;padding:4px 8px;" onclick="document.getElementById('podServerUrl').value='http://192.168.1.100:8088'; document.getElementById('btnTestPodServer').click();">🏠 Rede Local (192.168.1.100)</button>
+                </div>
+                <div id="podServerStatus" style="font-size:0.8em;margin-top:4px;color:var(--text-muted);">Dica: No celular 4G/5G, mantenha o Tailscale ativo para acessar o servidor de casa.</div>
+            </div>
+
+            <!-- Ações de Verificação / Raspagem -->
+            <div style="display:flex;gap:8px;margin-bottom:8px;">
+                <button type="button" id="btnCheckPodcasts" class="btn-secondary" style="flex:1;font-weight:600;padding:9px;min-height:40px;">🔍 Raspar Canais &amp; Planejar Sincronia com o SD</button>
+            </div>
+
+            <!-- Resumo de Limpeza Automática (Episódios já ouvidos fora do Top 3) -->
+            <div id="podCleanupBanner" style="display:none;background:rgba(245,158,11,0.12);border:1px solid #f59e0b;color:var(--text-primary);border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:0.78em;justify-content:space-between;align-items:center;">
+                <span id="podCleanupText">🧹 0 episódios já ouvidos serão removidos para liberar espaço.</span>
+            </div>
+
+            <!-- Barra de Seleção e Filtros de Recência -->
+            <div id="podSelectToolbar" style="display:none;background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:8px;padding:8px 10px;margin-bottom:8px;flex-direction:column;gap:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
+                    <div style="font-size:0.84em;font-weight:bold;color:var(--text-primary);">
+                        <span id="podSelectedSummary">0 selecionados (0 MB)</span>
+                    </div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                        <button type="button" id="btnSelectRecent" class="btn-secondary" style="font-size:0.75em;padding:4px 8px;font-weight:bold;color:var(--accent-color);" title="Seleciona apenas o episódio mais recente de cada canal">⚡ Apenas Recentes (1 por canal)</button>
+                        <button type="button" id="btnSelectAll" class="btn-secondary" style="font-size:0.75em;padding:4px 8px;">✓ Todos</button>
+                        <button type="button" id="btnSelectNone" class="btn-secondary" style="font-size:0.75em;padding:4px 8px;">✗ Nenhum</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Lista de Novos Episódios com Seleção -->
+            <div id="podDiffSection" style="margin-bottom:10px;flex:1;min-height:0;display:flex;flex-direction:column;">
+                <div style="display:flex;justify-content:space-between;font-size:0.84em;font-weight:bold;margin-bottom:4px;">
+                    <span>Episódios Pendentes para o SD:</span>
+                    <span id="podPendingCount" style="color:var(--accent-color);">0</span>
+                </div>
+                <div id="podList" style="border:1px solid var(--border-color);border-radius:8px;max-height:190px;overflow-y:auto;-webkit-overflow-scrolling:touch;background:var(--bg-card);padding:6px;font-size:0.84em;color:var(--text-regular);">
+                    <div style="color:var(--text-muted);text-align:center;padding:14px;">Clique em "Raspar Canais &amp; Planejar Sincronia" para buscar novos episódios do YouTube/RSS e comparar com o cartão SD.</div>
+                </div>
+            </div>
+
+            <!-- Progresso de Transferência -->
+            <div id="podProgressBox" style="display:none;margin-bottom:10px;background:var(--bg-subtle);border:1px solid var(--border-color);border-radius:8px;padding:10px;">
+                <div style="display:flex;justify-content:space-between;font-size:0.85em;margin-bottom:4px;">
+                    <span id="podCurrentItem" style="font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px;color:var(--accent-color);">Transferindo...</span>
+                    <span id="podItemPct" style="font-weight:bold;color:var(--accent-color);">0%</span>
+                </div>
+                <div style="width:100%;height:8px;background:var(--bg-card);border:1px solid var(--border-color);border-radius:4px;overflow:hidden;margin-bottom:6px;">
+                    <div id="podItemBar" style="width:0%;height:100%;background:var(--accent-color);transition:width 0.1s linear;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:0.78em;color:var(--text-muted);">
+                    <span id="podOverallInfo">Total: 0/0</span>
+                    <span id="podSpeedInfo">-- KB/s</span>
+                </div>
+            </div>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border-color);padding-top:10px;gap:8px;flex-wrap:wrap;">
+                <span id="podStatusMsg" style="font-size:0.82em;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px;"></span>
+                <div style="display:flex;gap:8px;margin-left:auto;">
+                    <button type="button" id="btnCancelPodSync" class="btn-secondary" style="min-height:38px;">Fechar</button>
+                    <button type="button" id="btnStartPodSync" class="btn-primary" disabled style="min-height:38px;white-space:nowrap;">Sincronizar com MPS3</button>
+                </div>
+            </div>
+        </div>
+    </div>

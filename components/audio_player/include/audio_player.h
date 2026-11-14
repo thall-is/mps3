@@ -44,7 +44,31 @@ typedef struct {
     // Web Radio
     bool is_web_radio;          /**< true se o fluxo atual provém de uma estação de Web Rádio (HTTP). */
     char web_radio_url[256];    /**< URL da estação de rádio web atualmente conectada. */
+
+    // Modos de Reproducao (Loop e Shuffle)
+    uint8_t loop_mode;          /**< Modo de repeticao: 0=NONE, 1=ALL, 2=TRACK (audio_player_loop_mode_t). */
+    uint8_t shuffle_mode;       /**< Modo aleatorio: 0=OFF, 1=FOLDER, 2=ALL (audio_player_shuffle_mode_t). */
+    uint8_t loop_track_repeat_count; /**< Repeticoes restantes da faixa: 1=primeira execucao (icone com 1), 0=repetindo (icone simples sem 1). */
+    bool is_favorite;           /**< true se a faixa atual consta na playlist Favoritas / ativa. */
 } playback_state_t;
+
+/**
+ * @brief Modos de Repetição de Áudio (Loop).
+ */
+typedef enum {
+    AUDIO_LOOP_NONE  = 0,  /**< Linear: para ao término da pasta ou playlist. */
+    AUDIO_LOOP_ALL   = 1,  /**< Repete Sempre: reinicia do início em ciclo infinito. */
+    AUDIO_LOOP_TRACK = 2   /**< Repete 1: repete a mesma faixa continuamente ao término. */
+} audio_player_loop_mode_t;
+
+/**
+ * @brief Modos de Reprodução Aleatória (Shuffle).
+ */
+typedef enum {
+    AUDIO_SHUFFLE_OFF    = 0, /**< Desativado: reproduz na ordem alfabética ou tags. */
+    AUDIO_SHUFFLE_FOLDER = 1, /**< Aleatório na Pasta/Playlist atual via permutação Fisher-Yates em PSRAM. */
+    AUDIO_SHUFFLE_ALL    = 2  /**< Aleatório Global: sorteia faixas por todas as pastas do MicroSD. */
+} audio_player_shuffle_mode_t;
 
 /**
  * @brief Inicializa o subsistema de áudio e cria a tarefa de reprodução.
@@ -276,6 +300,20 @@ int audio_player_get_current_index(void);
 bool audio_player_browse_is_root(void);
 
 /**
+ * @brief Verifica se a pasta atualmente navegada no menu e a mesma que esta tocando.
+ *
+ * @return true se s_browse_dir for identico a s_playback_dir; false caso contrario.
+ */
+bool audio_player_browse_is_playback_dir(void);
+
+/**
+ * @brief Retorna o indice da faixa que esta tocando no navegador de pastas atual.
+ *
+ * @return Indice relativo a lista visivel (excluindo '..'), ou -1 se nao estiver na pasta de reproducao.
+ */
+int audio_player_get_current_track_browse_index(void);
+
+/**
  * @brief Retorna o número de entradas (pastas e arquivos) na pasta navegada no menu.
  *
  * @note A pasta navegada no menu é independente da pasta que está tocando em segundo plano.
@@ -395,6 +433,274 @@ void audio_player_set_sort_mode(track_sort_mode_t mode);
  * @return Modo ativo (`SORT_MODE_NAME` ou `SORT_MODE_DATE`).
  */
 track_sort_mode_t audio_player_get_sort_mode(void);
+
+/**
+ * @brief Modos de operação do ReplayGain automático.
+ */
+typedef enum {
+    RG_MODE_OFF   = 0, /**< ReplayGain desativado (0.0 dB). */
+    RG_MODE_TRACK = 1, /**< Ganho por faixa (fallback para álbum). */
+    RG_MODE_ALBUM = 2  /**< Ganho por álbum (fallback para faixa). */
+} replaygain_mode_t;
+
+/**
+ * @brief Modos de persistência de múltiplos bookmarks (Podcasts / Audiolivros).
+ */
+typedef enum {
+    BOOKMARK_MODE_OFF  = 0, /**< Bookmarks individuais desativados. */
+    BOOKMARK_MODE_AUTO = 1, /**< Automático (/Podcasts, /Audiobooks, .m4b ou >= 15 min). */
+    BOOKMARK_MODE_ALL  = 2  /**< Salva posição individual para todas as faixas. */
+} bookmark_mode_t;
+
+/**
+ * @brief Ativa ou desativa a reprodução Gapless Real e persiste na NVS.
+ */
+void audio_player_set_gapless_enabled(bool enabled);
+
+/**
+ * @brief Retorna se a reprodução Gapless Real está ativa.
+ */
+bool audio_player_get_gapless_enabled(void);
+
+/**
+ * @brief Ativa ou desativa o Fade-In/Fade-Out suave anti-click (10-15 ms) e persiste na NVS.
+ */
+void audio_player_set_soft_fade_enabled(bool enabled);
+
+/**
+ * @brief Retorna se o Fade-In/Fade-Out suave está ativo.
+ */
+bool audio_player_get_soft_fade_enabled(void);
+
+/**
+ * @brief Define o modo de ReplayGain automático e persiste na NVS.
+ */
+void audio_player_set_replaygain_mode(replaygain_mode_t mode);
+
+/**
+ * @brief Retorna o modo de ReplayGain atualmente ativo.
+ */
+replaygain_mode_t audio_player_get_replaygain_mode(void);
+
+/**
+ * @brief Define o modo de múltiplos Bookmarks e persiste na NVS.
+ */
+void audio_player_set_bookmark_mode(bookmark_mode_t mode);
+
+/**
+ * @brief Retorna o modo de múltiplos Bookmarks atualmente ativo.
+ */
+bookmark_mode_t audio_player_get_bookmark_mode(void);
+
+/**
+ * @brief Ativa ou desativa o Salto Alfabético Rápido (A-Z Jump) e persiste na NVS.
+ */
+void audio_player_set_az_jump_enabled(bool enabled);
+
+/**
+ * @brief Retorna se o Salto Alfabético Rápido (A-Z Jump) está ativo.
+ */
+bool audio_player_get_az_jump_enabled(void);
+
+/**
+ * @brief Obtém o modo de repetição (loop) configurado no momento.
+ * @return Modo ativo (AUDIO_LOOP_NONE, AUDIO_LOOP_ALL, AUDIO_LOOP_TRACK).
+ */
+audio_player_loop_mode_t audio_player_get_loop_mode(void);
+
+/**
+ * @brief Define o modo de repetição (loop) e persiste na memória NVS.
+ * @param[in] mode Novo modo desejado.
+ */
+void audio_player_set_loop_mode(audio_player_loop_mode_t mode);
+
+/**
+ * @brief Alterna ciclicamente o modo de repetição (NONE -> ALL -> TRACK -> NONE).
+ * @return Novo modo ativo após a transição.
+ */
+audio_player_loop_mode_t audio_player_cycle_loop_mode(void);
+
+/**
+ * @brief Alterna no sentido inverso o modo de repeticao (NONE -> TRACK -> ALL -> NONE).
+ * @return Novo modo ativo apos a transicao.
+ */
+audio_player_loop_mode_t audio_player_prev_loop_mode(void);
+
+/**
+ * @brief Obtém o modo de reprodução aleatória (shuffle) configurado no momento.
+ * @return Modo ativo (AUDIO_SHUFFLE_OFF, AUDIO_SHUFFLE_FOLDER, AUDIO_SHUFFLE_ALL).
+ */
+audio_player_shuffle_mode_t audio_player_get_shuffle_mode(void);
+
+/**
+ * @brief Define o modo de reprodução aleatória (shuffle) e persiste na memória NVS.
+ * @param[in] mode Novo modo desejado.
+ */
+void audio_player_set_shuffle_mode(audio_player_shuffle_mode_t mode);
+
+/**
+ * @brief Alterna ciclicamente o modo aleatório (OFF -> FOLDER -> ALL -> OFF).
+ * @return Novo modo ativo após a transição.
+ */
+audio_player_shuffle_mode_t audio_player_cycle_shuffle_mode(void);
+
+/**
+ * @brief Alterna no sentido inverso o modo aleatorio (OFF -> ALL -> FOLDER -> OFF).
+ * @return Novo modo ativo apos a transicao.
+ */
+audio_player_shuffle_mode_t audio_player_prev_shuffle_mode(void);
+
+/**
+ * @brief Salta para a próxima ou anterior letra inicial na lista de navegação atual.
+ *
+ * @param[in]  cur_cursor Índice real atual na lista (incluindo ".." se houver).
+ * @param[in]  dir_step   Direção do salto (+1 para próxima letra, -1 para letra anterior).
+ * @param[out] out_letter Letra inicial de destino alcançada (ex: 'A'..'Z' ou '#').
+ * @return Novo índice real do cursor na lista de navegação.
+ */
+int audio_player_jump_browse_letter(int cur_cursor, int dir_step, char *out_letter);
+
+/**
+ * @brief Adiciona ou remove a faixa atual da playlist on-the-go /sdcard/Favoritos.m3u8.
+ *
+ * @param[out] out_added Recebe true se a faixa foi adicionada, false se foi removida.
+ * @return true se a operação no cartão SD foi bem-sucedida.
+ */
+bool audio_player_toggle_favorite_current(bool *out_added);
+
+/**
+ * @brief Retorna a quantidade total de playlists (.m3u e .m3u8) disponíveis em /sdcard/Playlists.
+ */
+int audio_player_get_playlists_count(void);
+
+/**
+ * @brief Obtém o nome e status da playlist pelo índice (índice 0 é sempre Favoritos, padrão estilo Spotify).
+ *
+ * @param[in]  index         Índice na lista (0 .. count-1).
+ * @param[out] out_name      Buffer para receber o nome da playlist.
+ * @param[in]  out_len       Tamanho do buffer.
+ * @param[out] out_is_active Recebe true se esta for a playlist alvo selecionada no momento.
+ * @return true se obteve os dados com sucesso.
+ */
+bool audio_player_get_playlist_by_index(int index, char *out_name, size_t out_len, bool *out_is_active);
+
+/**
+ * @brief Define a playlist alvo ativa através do seu índice na lista de /sdcard/Playlists.
+ *
+ * @param[in] index Índice selecionado.
+ * @return true se selecionada com sucesso.
+ */
+bool audio_player_set_target_playlist_by_index(int index);
+
+/**
+ * @brief Navega diretamente para a pasta /sdcard/Playlists no explorador de arquivos.
+ */
+void audio_player_browse_to_playlists(void);
+
+/**
+ * @brief Garante que o diretório /sdcard/Playlists exista e migra arquivos .m3u/.m3u8 legados da raiz.
+ */
+void audio_player_ensure_playlists_migrated(void);
+
+/**
+ * @brief Retorna o nome do arquivo da playlist alvo ativa (ex: "Favoritos.m3u8").
+ */
+const char *audio_player_get_target_playlist(void);
+
+/**
+ * @brief Alterna a playlist alvo ativa entre os arquivos .m3u e .m3u8 existentes na raiz do SD.
+ *
+ * @param[in] delta Direção (+1 para próxima, -1 para anterior).
+ */
+void audio_player_cycle_target_playlist(int delta);
+
+/**
+ * @brief Cria um novo arquivo de playlist (.m3u8 ou .m3u) em /sdcard e o define como playlist alvo ativa.
+ *
+ * @param[in]  name         Nome digitado pelo usuário (se não tiver extensão .m3u/.m3u8, anexa .m3u8).
+ * @param[out] out_filename Buffer opcional para receber o nome final criado.
+ * @param[in]  out_len      Tamanho do buffer out_filename.
+ * @return true se o arquivo foi criado com sucesso.
+ */
+bool audio_player_create_playlist(const char *name, char *out_filename, size_t out_len);
+
+/**
+ * @brief Exclui permanentemente um arquivo de playlist (.m3u/.m3u8) em /sdcard/Playlists.
+ *
+ * Se a playlist apagada for a playlist alvo atual, o sistema automaticamente
+ * redefine a lista alvo para "Favoritos.m3u8" e atualiza a NVS.
+ * Arquivos da lista padrão de Favoritos são protegidos contra exclusão.
+ *
+ * @param[in] name_or_filename Nome ou caminho do arquivo da playlist a ser apagada.
+ * @return true se a playlist foi excluída com sucesso, false em caso de erro ou se protegida.
+ */
+bool audio_player_delete_playlist(const char *name_or_filename);
+
+/**
+ * @brief Adiciona todas as faixas da pasta atual à playlist alvo ativa.
+ *
+ * @param[out] out_added_count Recebe a quantidade de faixas inéditas adicionadas.
+ * @return true se a operação foi concluída com sucesso.
+ */
+bool audio_player_add_current_folder_to_target_playlist(int *out_added_count);
+
+/**
+ * @brief Adiciona/remove o item selecionado no navegador (faixa ou pasta inteira) na playlist alvo ativa.
+ *
+ * @param[in]  browse_idx Índice real do item em s_browse_scan (incluindo offset de ".." se aplicável).
+ * @param[out] out_added  Recebe true se adicionado, false se removido.
+ * @param[out] out_count  Quantidade de faixas afetadas.
+ * @return true se a operação no SD foi bem-sucedida.
+ */
+bool audio_player_toggle_browse_item_in_target_playlist(int browse_idx, bool *out_added, int *out_count);
+
+/**
+ * @brief Adiciona (like=true) ou remove (like=false) a faixa atual à playlist alvo ativa.
+ */
+bool audio_player_like_current(bool like, bool *out_status);
+
+/**
+ * @brief Adiciona (like=true) ou remove (like=false) o item focado do navegador à playlist alvo ativa.
+ */
+bool audio_player_like_browse_item(int browse_idx, bool like, bool *out_status);
+
+/**
+ * @brief Retorna o diretório atualmente em foco no navegador de arquivos.
+ */
+void audio_player_get_browse_dir(char *out, size_t out_len);
+
+/**
+ * @brief Re-escaneia o diretório atualmente aberto no navegador de arquivos.
+ */
+void audio_player_rescan_browser(void);
+
+/**
+ * @brief Retorna o navegador de arquivos imediatamente para a raiz (/sdcard).
+ */
+void audio_player_browse_to_root(void);
+
+/**
+ * @brief Retorna true se a faixa atual em reprodução já consta na playlist alvo ativa.
+ */
+bool audio_player_is_current_favorite(void);
+
+/**
+ * @brief Retorna true se o item do navegador em browse_idx já consta na playlist alvo ativa.
+ */
+bool audio_player_is_browse_item_favorite(int browse_idx);
+
+/**
+ * @brief Limpa o registro da última faixa reproduzida na NVS para recuperação de boot ou falha.
+ */
+void audio_player_clear_resume_state(void);
+
+/**
+ * @brief Define ou limpa mensagem de erro da reprodução para exibição na interface visual.
+ *
+ * @param[in] filename  Nome do arquivo com erro (ou NULL).
+ * @param[in] error_msg Mensagem de erro descritiva (ou NULL para limpar).
+ */
+void audio_player_set_last_error(const char *filename, const char *error_msg);
 
 #ifdef __cplusplus
 }

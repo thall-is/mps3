@@ -205,7 +205,7 @@ def get_arp_neighbors() -> List[Tuple[str, str]]:
 
 
 def get_local_subnets() -> List[str]:
-    """Detects active local IPv4 `/24` subnet prefixes (e.g. `'192.168.15.'`)."""
+    """Detects active local IPv4 `/24` subnet prefixes (e.g. `'192.168.1.'`)."""
     subnets: List[str] = []
     seen: Set[str] = set()
 

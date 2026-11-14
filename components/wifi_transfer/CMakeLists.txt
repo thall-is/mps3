@@ -21,6 +21,8 @@ idf_component_register(
         board_io
         esp_app_format
         mbedtls
+        esp_http_client
+        esp-tls
         podcast_sync
 )
 

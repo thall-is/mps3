@@ -88,8 +88,12 @@ static void display_task(void *arg)
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
         uint32_t frame_start_ms = now;
 
-        bool lock_clock_active = touch_input_is_lock_clock_visible();
-        bool should_sleep = (touch_input_is_sleeping() || touch_input_is_powered_off() || touch_input_is_locked()) && !podcast_sync_is_busy() && !lock_clock_active;
+        bool lock_anim = oled_display_is_lock_anim_active();
+        oled_lock_anim_t anim_type = oled_display_get_lock_anim_type();
+        bool lock_clock_active = touch_input_is_lock_clock_visible() && (anim_type != OLED_LOCK_ANIM_CLOSING);
+        bool should_sleep = (touch_input_is_sleeping() || touch_input_is_powered_off() || touch_input_is_locked())
+                            && !podcast_sync_is_busy() && !wifi_transfer_is_overlay_active()
+                            && !lock_clock_active && !lock_anim;
         if (should_sleep) {
             if (!s_was_sleeping) {
                 ESP_LOGI(TAG, "Tela em repouso/bloqueio. Desligando OLED e suspendendo display_task...");
@@ -116,7 +120,8 @@ static void display_task(void *arg)
             // Gerenciamento de inatividade prolongada para Deep Sleep
             uint32_t ds_timeout_ms = touch_input_get_deepsleep_ms();
             uint32_t last_act_ms = touch_input_get_last_activity_ms();
-            if (!is_usb_mode && !menu_any_active() && ds_timeout_ms > 0 && !state.playing && !wifi_active && !podcast_sync_is_busy()) {
+            bool is_usb_power = (battery_get_status() != BATTERY_DISCHARGING);
+            if (!is_usb_mode && !menu_any_active() && ds_timeout_ms > 0 && !state.playing && !wifi_active && !podcast_sync_is_busy() && !is_usb_power) {
                 if (now >= last_act_ms && (now - last_act_ms) >= ds_timeout_ms) {
                     ESP_LOGI(TAG, "Inatividade atingiu tempo limite (%u s). Entrando em Deep Sleep...", (unsigned)(ds_timeout_ms / 1000));
                     pwr_governor_enter_deep_sleep();
@@ -158,8 +163,10 @@ static void display_task(void *arg)
         // Checagem universal de inatividade para Deep Sleep (pausado e sem uso, mesmo com tela ligada)
         uint32_t ds_timeout_ms = touch_input_get_deepsleep_ms();
         uint32_t last_act_ms = touch_input_get_last_activity_ms();
+        bool is_usb_power = (battery_get_status() != BATTERY_DISCHARGING);
         if (ds_timeout_ms > 0 && !state.playing && !wifi_active && !podcast_sync_is_busy() &&
             cur_ui_mode != UI_MODE_USB_MSC && cur_ui_mode != UI_MODE_USB_DAC && cur_ui_mode != UI_MODE_USB_PROMPT &&
+            !is_usb_power &&
             !menu_any_active()) {
             if (now >= last_act_ms && (now - last_act_ms) >= ds_timeout_ms) {
                 ESP_LOGI(TAG, "Inatividade prolongada atingida (%u s). Entrando em Deep Sleep...", (unsigned)(ds_timeout_ms / 1000));
@@ -188,6 +195,10 @@ static void display_task(void *arg)
             volume_show_until_ms = now + VOLUME_DISPLAY_MS;
         }
 
+        if (wifi_transfer_is_active() && !wifi_transfer_is_overlay_active()) {
+            wifi_transfer_poll();
+        }
+
         if (lock_clock_active) {
             rtc_clock_info_t clk_info;
             rtc_ds3231_get_clock_info(&clk_info);
@@ -203,6 +214,14 @@ static void display_task(void *arg)
                                            p.current_idx, p.total_count,
                                            p.current_pct, p.speed_kbs, p.status_msg);
             vTaskDelay(pdMS_TO_TICKS(250)); // 4 FPS durante sync para dedicar 95% da CPU e rede
+            continue;
+        } else if (wifi_transfer_is_overlay_active()) {
+            wifi_transfer_poll();
+            if (wifi_transfer_get_display_fps() > 0) {
+                wifi_transfer_draw_overlay();
+            }
+            uint32_t interval_ms = wifi_transfer_get_display_interval_ms();
+            vTaskDelay(pdMS_TO_TICKS(interval_ms > 0 ? interval_ms : 250));
             continue;
         } else if (menu_any_active()) {
             // Algum item do menu esta' num modo de tela cheia (USB, WiFi,
@@ -254,12 +273,40 @@ static void display_task(void *arg)
                 } else if (touch_input_get_mode() == UI_MODE_GAMES_MENU) {
             const char* games_items[] = {"Game of Life", "Tetris"};
             oled_display_show_list(games_items, 2, touch_input_get_games_cursor(), &state);
+        } else if (touch_input_get_mode() == UI_MODE_ACTIONS_MENU) {
+            const char *actions[16];
+            int act_count = touch_input_get_action_items(actions, 16);
+            oled_display_show_list(actions, act_count, touch_input_get_action_cursor(), &state);
         } else if (touch_input_get_mode() == UI_MODE_CONF_MENU) {
             const char* conf_items[] = {"Config. de Audio", "Display e LED", "Sistema e Energia"};
             oled_display_show_list(conf_items, 3, touch_input_get_list_cursor(), &state);
         } else if (touch_input_get_mode() == UI_MODE_CONF_AUDIO) {
-            const char* audio_items[] = {"Volume", "Balanco L/R", "Equalizador", "Ordenar Faixas"};
-            oled_display_show_list(audio_items, 4, touch_input_get_list_cursor(), &state);
+            static char s_item_gapless[28];
+            static char s_item_fade[28];
+            static char s_item_rg[28];
+            static char s_item_bm[28];
+            static char s_item_az[28];
+            replaygain_mode_t rg = audio_player_get_replaygain_mode();
+            const char *rg_str = (rg == RG_MODE_TRACK) ? "Faixa" : ((rg == RG_MODE_ALBUM) ? "Album" : "OFF");
+            bookmark_mode_t bm = audio_player_get_bookmark_mode();
+            const char *bm_str = (bm == BOOKMARK_MODE_AUTO) ? "Auto" : ((bm == BOOKMARK_MODE_ALL) ? "Todas" : "OFF");
+            snprintf(s_item_gapless, sizeof(s_item_gapless), "Gapless: %s", audio_player_get_gapless_enabled() ? "ON" : "OFF");
+            snprintf(s_item_fade, sizeof(s_item_fade), "Fade Suave: %s", audio_player_get_soft_fade_enabled() ? "ON" : "OFF");
+            snprintf(s_item_rg, sizeof(s_item_rg), "ReplayGain: %s", rg_str);
+            snprintf(s_item_bm, sizeof(s_item_bm), "Bookmarks: %s", bm_str);
+            snprintf(s_item_az, sizeof(s_item_az), "Salto A-Z: %s", audio_player_get_az_jump_enabled() ? "ON" : "OFF");
+            const char* audio_items[] = {
+                "Volume",
+                "Balanco L/R",
+                "Equalizador",
+                "Ordenar Faixas",
+                s_item_gapless,
+                s_item_fade,
+                s_item_rg,
+                s_item_bm,
+                s_item_az
+            };
+            oled_display_show_list(audio_items, 9, touch_input_get_list_cursor(), &state);
         } else if (touch_input_get_mode() == UI_MODE_CONF_DISPLAY) {
             const char* disp_items[] = {"Brilho e Tela", "Relogio Bloqueio", "LED RGB"};
             oled_display_show_list(disp_items, 3, touch_input_get_list_cursor(), &state);
@@ -390,8 +437,13 @@ static void display_task(void *arg)
             } else if (state.no_files_found) {
                 oled_display_show_message("Nenhum audio", "encontrado no SD");
             } else if (state.last_error[0] != '\0') {
-                if (strncmp(state.last_error, "Formato", 7) == 0) {
-                    oled_display_show_unsupported(state.filename);
+                if (strncmp(state.last_error, "Formato", 7) == 0 ||
+                    strstr(state.last_error, "max") != NULL ||
+                    strstr(state.last_error, "Max") != NULL ||
+                    strstr(state.last_error, "suport") != NULL ||
+                    strstr(state.last_error, "limite") != NULL ||
+                    strstr(state.last_error, "Limite") != NULL) {
+                    oled_display_show_unsupported_ex(state.filename, state.last_error);
                 } else {
                     oled_display_show_message(state.last_error, state.filename);
                 }
@@ -411,9 +463,9 @@ static void display_task(void *arg)
         const uint32_t target_frame_ms = is_wifi_mode ? 100 : 16; // ~62.5 FPS maximo (16 ms) no player / 10 FPS (100 ms) em modo WiFi e menus para priorizar 95%+ da CPU no Core 0
         if (frame_elapsed_ms < target_frame_ms) {
             uint32_t sleep_ms = target_frame_ms - frame_elapsed_ms;
-            vTaskDelay(pdMS_TO_TICKS(sleep_ms < 2 ? 2 : sleep_ms));
+            vTaskDelay(pdMS_TO_TICKS(sleep_ms));
         } else {
-            vTaskDelay(pdMS_TO_TICKS(2));
+            taskYIELD();
         }
 
         static uint32_t s_last_fps_log_ms = 0;
@@ -458,7 +510,7 @@ static void scan_and_print_sd(const char *dir_path)
 static void uart_cmd_task(void *arg)
 {
     (void)arg;
-    char line_buf[64];
+    char line_buf[256];
     int line_len = 0;
 
     while (1) {
@@ -493,6 +545,24 @@ static void uart_cmd_task(void *arg)
                         if (!wifi_transfer_is_active()) {
                             wifi_transfer_enter(WIFI_TRANSFER_MODE_STA);
                         }
+                    } else if (strcmp(line_buf, "scan") == 0) {
+                        ESP_LOGI("UART_CMD", "Comando recebido: iniciar Wi-Fi scan");
+                        wifi_transfer_scan_start();
+                    } else if (strncmp(line_buf, "wifi_save ", 10) == 0) {
+                        char ssid[32] = {0}, pass[64] = {0};
+                        int parsed = sscanf(line_buf + 10, "%31s %63s", ssid, pass);
+                        if (parsed >= 1) {
+                            ESP_LOGI("UART_CMD", "Salvando rede na NVS: SSID='%s'", ssid);
+                            wifi_transfer_save_network(ssid, (parsed == 2) ? pass : "");
+                        }
+                    } else if (strcmp(line_buf, "down") == 0 || strcmp(line_buf, "j") == 0) {
+                        menu_nav_down_active();
+                    } else if (strcmp(line_buf, "up") == 0 || strcmp(line_buf, "k") == 0) {
+                        menu_nav_up_active();
+                    } else if (strcmp(line_buf, "left") == 0 || strcmp(line_buf, "h") == 0) {
+                        menu_nav_left_active();
+                    } else if (strcmp(line_buf, "ok") == 0 || strcmp(line_buf, "select") == 0) {
+                        menu_request_action_active();
                     } else if (strcmp(line_buf, "exit") == 0 || strcmp(line_buf, "x") == 0) {
                         ESP_LOGI("UART_CMD", "Comando recebido: sair do modo WiFi");
                         if (menu_any_active()) {
@@ -531,6 +601,47 @@ static void uart_cmd_task(void *arg)
                     } else if (strcmp(line_buf, "play") == 0 || strcmp(line_buf, "p") == 0) {
                         ESP_LOGI("UART_CMD", "Comando recebido: toggle play/pause");
                         audio_player_toggle_play_pause();
+                    } else if (strcmp(line_buf, "next") == 0 || strcmp(line_buf, "n") == 0) {
+                        ESP_LOGI("UART_CMD", "Comando recebido: proxima faixa (audio_player_next)");
+                        audio_player_next();
+                    } else if (strcmp(line_buf, "prev") == 0) {
+                        ESP_LOGI("UART_CMD", "Comando recebido: faixa anterior (audio_player_previous)");
+                        audio_player_previous();
+                    } else if (strcmp(line_buf, "track") == 0) {
+                        playback_state_t st;
+                        audio_player_get_state(&st);
+                        ESP_LOGI("UART_CMD", "[TRACK] '%s' - '%s' ('%s') | %u/%u s | Loop: %d | Shuf: %d | Fav: %d",
+                                 st.title, st.artist, st.filename,
+                                 (unsigned)st.elapsed_sec, (unsigned)st.total_sec,
+                                 (int)st.loop_mode, (int)st.shuffle_mode, st.is_favorite ? 1 : 0);
+                    } else if (strncmp(line_buf, "shuf ", 5) == 0) {
+                        int sm = atoi(line_buf + 5);
+                        audio_player_set_shuffle_mode((audio_player_shuffle_mode_t)sm);
+                        ESP_LOGI("UART_CMD", "Modo shuffle ajustado para %d", sm);
+                    } else if (strncmp(line_buf, "loop ", 5) == 0) {
+                        int lm = atoi(line_buf + 5);
+                        audio_player_set_loop_mode((audio_player_loop_mode_t)lm);
+                        ESP_LOGI("UART_CMD", "Modo loop ajustado para %d", lm);
+                    } else if (strncmp(line_buf, "seek ", 5) == 0) {
+                        uint32_t target = (uint32_t)strtoul(line_buf + 5, NULL, 10);
+                        playback_state_t st;
+                        audio_player_get_state(&st);
+                        if (target > st.elapsed_sec) {
+                            audio_player_seek_forward(target - st.elapsed_sec);
+                        } else if (target < st.elapsed_sec) {
+                            audio_player_seek_backward(st.elapsed_sec - target);
+                        }
+                        ESP_LOGI("UART_CMD", "Seek para %u s (atual: %u s)", (unsigned)target, (unsigned)st.elapsed_sec);
+                    } else if (strcmp(line_buf, "restart") == 0) {
+                        audio_player_restart();
+                        ESP_LOGI("UART_CMD", "Faixa reiniciada do inicio");
+                    } else if (strcmp(line_buf, "seek-end") == 0) {
+                        playback_state_t st;
+                        audio_player_get_state(&st);
+                        if (st.total_sec > 3 && st.elapsed_sec < (st.total_sec - 2)) {
+                            audio_player_seek_forward(st.total_sec - st.elapsed_sec - 2);
+                            ESP_LOGI("UART_CMD", "Seek para 2s antes do fim...");
+                        }
                     } else if (strcmp(line_buf, "msc") == 0) {
                         ESP_LOGI("UART_CMD", "Comando recebido: entrar no modo USB MSC (Pendrive)");
                         touch_input_enter_usb_msc();
@@ -689,12 +800,148 @@ static void uart_cmd_task(void *arg)
                         esp_err_t err = debug_nav_enqueue_seq(p);
                         if (err == ESP_OK) printf("@OK seq\n");
                         else printf("@ERR seq invalid\n");
+                    } else if (strcmp(line_buf, "hud") == 0) {
+                        oled_display_set_chord_hud(true, 100, -1, false);
+                        printf("@OK hud on\n");
+                    } else if (strcmp(line_buf, "hud off") == 0) {
+                        oled_display_set_chord_hud(false, 0, -1, false);
+                        printf("@OK hud off\n");
+                    } else if (strncmp(line_buf, "drawer eq", 9) == 0) {
+                        static const char *s_mock_eq[3] = { "Padrao", "Rock", "+ Novo Preset" };
+                        int cursor = 0;
+                        const char *p = line_buf + 9;
+                        while (*p == ' ') p++;
+                        if (*p != '\0') cursor = atoi(p);
+                        oled_display_set_chord_drawer(CHORD_DRAWER_EQUALIZER, 50, s_mock_eq, 3, cursor, 0);
+                        printf("@OK drawer eq cursor=%d\n", cursor);
+                    } else if (strncmp(line_buf, "drawer pl", 9) == 0) {
+                        static const char *s_mock_pls[4] = { "Favoritos", "Rock Nacional 80s", "MPB Essencial", "+ Nova Lista" };
+                        int cursor = 0;
+                        const char *p = line_buf + 9;
+                        while (*p == ' ') p++;
+                        if (*p != '\0') cursor = atoi(p);
+                        oled_display_set_chord_drawer(CHORD_DRAWER_PLAYLISTS, 50, s_mock_pls, 4, cursor, 0);
+                        printf("@OK drawer pl cursor=%d\n", cursor);
+                    } else if (strncmp(line_buf, "drawer modes", 12) == 0) {
+                        static const char *s_mock_modes[2] = { "< Tudo >", "< Pasta >" };
+                        int cursor = (strstr(line_buf, "1")) ? 1 : 0;
+                        oled_display_set_chord_drawer(CHORD_DRAWER_MODES, 50, s_mock_modes, 2, cursor, 0);
+                        printf("@OK drawer modes cursor=%d\n", cursor);
+                    } else if (strcmp(line_buf, "drawer off") == 0) {
+                        oled_display_set_chord_drawer(CHORD_DRAWER_NONE, 0, NULL, 0, 0, 0);
+                        printf("@OK drawer off\n");
                     } else if (strcmp(line_buf, "ui") == 0) {
                         debug_nav_dump_state();
                     } else if (strcmp(line_buf, "screen") == 0) {
                         debug_nav_request_screenshot();
+                    } else if (strncmp(line_buf, "seele", 5) == 0) {
+                        const char *p = line_buf + 5;
+                        while (*p == ' ') p++;
+                        if (strstr(p, "wav")) {
+                            audio_player_set_last_error("track.wav", "WAV max 32b/384k");
+                        } else if (strstr(p, "flac") || strstr(p, "limit")) {
+                            audio_player_set_last_error("track.flac", "FLAC max 24b/192k");
+                        } else if (strstr(p, "clear")) {
+                            audio_player_set_last_error(NULL, NULL);
+                        } else {
+                            audio_player_set_last_error("track.xyz", "Formato nao suportado");
+                        }
+                        printf("@OK seele set: %s\n", p);
                     } else if (strcmp(line_buf, "nav reset") == 0) {
                         debug_nav_reset_home();
+                    } else if (strcmp(line_buf, "wifi sta") == 0) {
+                        esp_err_t err = wifi_transfer_enter(WIFI_TRANSFER_MODE_STA);
+                        if (err == ESP_OK) printf("@OK wifi sta\n");
+                        else printf("@ERR wifi sta (%d)\n", (int)err);
+                    } else if (strcmp(line_buf, "wifi ap") == 0) {
+                        esp_err_t err = wifi_transfer_enter(WIFI_TRANSFER_MODE_AP);
+                        if (err == ESP_OK) printf("@OK wifi ap\n");
+                        else printf("@ERR wifi ap (%d)\n", (int)err);
+                    } else if (strcmp(line_buf, "wifi auto") == 0) {
+                        esp_err_t err = wifi_transfer_enter_auto();
+                        if (err == ESP_OK) printf("@OK wifi auto\n");
+                        else printf("@ERR wifi auto (%d)\n", (int)err);
+                    } else if (strcmp(line_buf, "wifi off") == 0) {
+                        wifi_transfer_request_exit();
+                        printf("@OK wifi off\n");
+                    } else if (strcmp(line_buf, "reset-resume") == 0 || strcmp(line_buf, "clear-resume") == 0) {
+                        audio_player_clear_resume_state();
+                        printf("@OK resume state reset\n");
+                    } else if (strncmp(line_buf, "pl create ", 10) == 0) {
+                        const char *p = line_buf + 10;
+                        while (*p == ' ') p++;
+                        char out_pl[64] = {0};
+                        bool ok = audio_player_create_playlist(p, out_pl, sizeof(out_pl));
+                        if (ok) printf("@OK pl created: %s\n", out_pl);
+                        else printf("@ERR pl create failed\n");
+                    } else if (strncmp(line_buf, "pl delete ", 10) == 0) {
+                        const char *p = line_buf + 10;
+                        while (*p == ' ') p++;
+                        bool ok = audio_player_delete_playlist(p);
+                        if (ok) printf("@OK pl deleted: %s\n", p);
+                        else printf("@ERR pl delete failed: %s\n", p);
+                    } else if (strcmp(line_buf, "pl list") == 0) {
+                        int cnt = audio_player_get_playlists_count();
+                        printf("@OK pl count=%d\n", cnt);
+                        for (int k = 0; k < cnt; k++) {
+                            char plname[64] = {0};
+                            bool is_act = false;
+                            audio_player_get_playlist_by_index(k, plname, sizeof(plname), &is_act);
+                            printf("  [%d] %s%s\n", k, plname, is_act ? " (ATIVA)" : "");
+                        }
+                    } else if (strncmp(line_buf, "pl set ", 7) == 0) {
+                        int idx = atoi(line_buf + 7);
+                        bool ok = audio_player_set_target_playlist_by_index(idx);
+                        if (ok) printf("@OK pl set: %s\n", audio_player_get_target_playlist());
+                        else printf("@ERR pl set failed: %d\n", idx);
+                    } else if (strcmp(line_buf, "pl target") == 0) {
+                        printf("@OK pl target: %s\n", audio_player_get_target_playlist());
+                    } else if (strcmp(line_buf, "pl add folder") == 0) {
+                        int added = 0;
+                        bool ok = audio_player_add_current_folder_to_target_playlist(&added);
+                        if (ok) printf("@OK pl folder added: %d\n", added);
+                        else printf("@ERR pl folder add failed\n");
+                    } else if (strncmp(line_buf, "pl dump ", 8) == 0) {
+                        const char *p = line_buf + 8;
+                        while (*p == ' ') p++;
+                        char fpath[300];
+                        if (strchr(p, '/')) {
+                            strlcpy(fpath, p, sizeof(fpath));
+                        } else {
+                            snprintf(fpath, sizeof(fpath), "/sdcard/Playlists/%s", p);
+                        }
+                        FILE *fp = fopen(fpath, "r");
+                        if (!fp) {
+                            printf("@ERR pl dump open failed: %s\n", fpath);
+                        } else {
+                            printf("@OK pl dump %s:\n", fpath);
+                            char dline[256];
+                            int lcnt = 0;
+                            while (fgets(dline, sizeof(dline), fp) != NULL) {
+                                size_t dl = strlen(dline);
+                                while (dl > 0 && (dline[dl-1] == '\r' || dline[dl-1] == '\n')) dline[--dl] = '\0';
+                                printf("  [%d] %s\n", lcnt++, dline);
+                            }
+                            fclose(fp);
+                        }
+                    } else if (strncmp(line_buf, "loop", 4) == 0) {
+                        const char *p = line_buf + 4;
+                        while (*p == ' ') p++;
+                        if (*p >= '0' && *p <= '2') {
+                            audio_player_set_loop_mode((audio_player_loop_mode_t)(*p - '0'));
+                        } else {
+                            audio_player_cycle_loop_mode();
+                        }
+                        printf("@OK loop %d\n", (int)audio_player_get_loop_mode());
+                    } else if (strncmp(line_buf, "shuf", 4) == 0) {
+                        const char *p = line_buf + 4;
+                        while (*p == ' ') p++;
+                        if (*p >= '0' && *p <= '2') {
+                            audio_player_set_shuffle_mode((audio_player_shuffle_mode_t)(*p - '0'));
+                        } else {
+                            audio_player_cycle_shuffle_mode();
+                        }
+                        printf("@OK shuf %d\n", (int)audio_player_get_shuffle_mode());
                     } else if (strncmp(line_buf, "viz", 3) == 0) {
                         const char *p = line_buf + 3;
                         while (*p == ' ') p++;
@@ -704,6 +951,13 @@ static void uart_cmd_task(void *arg)
                             oled_display_cycle_viz_mode();
                         }
                         printf("@OK viz %d\n", (int)oled_display_get_viz_mode());
+                    } else if (strcmp(line_buf, "like") == 0 || strcmp(line_buf, "fav") == 0) {
+                        bool added = false;
+                        if (audio_player_toggle_favorite_current(&added)) {
+                            printf("@OK fav %s\n", added ? "liked" : "unliked");
+                        } else {
+                            printf("@ERR fav failed\n");
+                        }
                     } else if (strncmp(line_buf, "sdclk", 5) == 0) {
                         const char *p = line_buf + 5;
                         while (*p == ' ') p++;
@@ -905,13 +1159,13 @@ void app_main(void)
     // display_task no Core 0 com prioridade 3:
     // Nao disputa com o decodificador/IO do player_task (Core 1),
     // e cede CPU instantaneamente para audio_dsp_task (Core 0, prio 5)
-    // e touch_task (Core 0, prio 5).
+    // e touch_task (Core 0, prio 4).
     TaskHandle_t display_handle = NULL;
     ESP_LOGI(TAG, "Criando display_task no Core 0 com prioridade 3...");
     xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 3, &display_handle, 0);
     touch_input_set_display_task_handle(display_handle);
 
-    ESP_LOGI(TAG, "Criando uart_cmd_task no Core 0...");
+    ESP_LOGI(TAG, "Criando uart_cmd_task no Core 0 com prioridade 1...");
     xTaskCreatePinnedToCore(uart_cmd_task, "uart_cmd", 8192, NULL, 1, NULL, 0);
 
     ESP_LOGI(TAG, "mps3 rodando.");

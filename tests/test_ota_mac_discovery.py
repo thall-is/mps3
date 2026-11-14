@@ -97,7 +97,7 @@ class TestOtaMacDiscovery(unittest.TestCase):
             self.assertRegex(sub, r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.$")
 
     def test_cache_ip(self):
-        test_ip = "192.168.15.99"
+        test_ip = "192.168.1.99"
         old_ip = ota_upload.get_cached_ip()
         try:
             ota_upload.save_cached_ip(test_ip)

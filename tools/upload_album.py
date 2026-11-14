@@ -15,7 +15,7 @@ if sys.platform.startswith("win"):
 def safe_str(s):
     return s.encode("ascii", "replace").decode("ascii")
 
-def upload_album(album_dir, base_url="http://192.168.15.61"):
+def upload_album(album_dir, base_url="http://mps3.local"):
     if not os.path.isdir(album_dir):
         print(f"Erro: Diretorio nao encontrado: {album_dir}")
         return False
@@ -89,6 +89,6 @@ def upload_album(album_dir, base_url="http://192.168.15.61"):
     return fail_count == 0
 
 if __name__ == "__main__":
-    album_path = sys.argv[1] if len(sys.argv) > 1 else r"C:\Users\thall\Music\To Pimp A Butterfly"
-    target = sys.argv[2] if len(sys.argv) > 2 else "http://192.168.15.61"
+    album_path = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("MPS3_UPLOAD_ALBUM", "Music")
+    target = sys.argv[2] if len(sys.argv) > 2 else "http://mps3.local"
     upload_album(album_path, target)

@@ -81,7 +81,7 @@ esp_err_t u8g2_hal_i2c_init(int sda_gpio, int scl_gpio, uint8_t i2c_addr_7bit)
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = i2c_addr_7bit,
-        .scl_speed_hz = 800000, // 800 kHz Fast-Mode Plus para taxa de quadros maxima (~60-75 FPS)
+        .scl_speed_hz = 800000, // 800 kHz Fast-Mode Plus estável para SSD1306 (sustenta 62.5 FPS com todas as páginas dirty)
     };
     ret = i2c_master_bus_add_device(s_bus, &dev_cfg, &s_dev);
     if (ret != ESP_OK) {

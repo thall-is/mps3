@@ -253,8 +253,9 @@ void eq_init(void)
     memset(s_eq_states, 0, sizeof(s_eq_states));
 
     eq_config_t cfg = {};
-    for(int p=0; p<EQ_MAX_PRESETS; p++) {
-        snprintf(cfg.presets[p].name, EQ_PRESET_NAME_LEN, "Preset %d", p+1);
+    strlcpy(cfg.presets[0].name, "Padrao", EQ_PRESET_NAME_LEN);
+    for(int p = 1; p < EQ_MAX_PRESETS; p++) {
+        cfg.presets[p].name[0] = '\0';
     }
     
     nvs_handle_t h;
@@ -270,7 +271,16 @@ void eq_init(void)
             char key_name[16];
             snprintf(key_name, sizeof(key_name), "p%d_name", p);
             size_t len = EQ_PRESET_NAME_LEN;
-            nvs_get_str(h, key_name, cfg.presets[p].name, &len);
+            if (nvs_get_str(h, key_name, cfg.presets[p].name, &len) == ESP_OK) {
+                if (p == 0 && (strcmp(cfg.presets[0].name, "Preset 1") == 0 || cfg.presets[0].name[0] == '\0')) {
+                    strlcpy(cfg.presets[0].name, "Padrao", EQ_PRESET_NAME_LEN);
+                } else if (p > 0 && strncmp(cfg.presets[p].name, "Preset ", 7) == 0) {
+                    cfg.presets[p].name[0] = '\0';
+                }
+            } else {
+                if (p == 0) strlcpy(cfg.presets[0].name, "Padrao", EQ_PRESET_NAME_LEN);
+                else cfg.presets[p].name[0] = '\0';
+            }
             
             char key_ovr[16];
             snprintf(key_ovr, sizeof(key_ovr), "p%d_ovr", p);
@@ -369,8 +379,9 @@ void eq_get_config(eq_config_t *config)
 void eq_reset_to_defaults(void)
 {
     eq_config_t defaults = {};
-    for (int p = 0; p < EQ_MAX_PRESETS; p++) {
-        snprintf(defaults.presets[p].name, EQ_PRESET_NAME_LEN, "Preset %d", p+1);
+    strlcpy(defaults.presets[0].name, "Padrao", EQ_PRESET_NAME_LEN);
+    for (int p = 1; p < EQ_MAX_PRESETS; p++) {
+        defaults.presets[p].name[0] = '\0';
     }
     defaults.enabled = false;
     eq_update_config(&defaults);
