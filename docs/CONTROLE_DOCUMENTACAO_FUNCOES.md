@@ -1,10 +1,10 @@
 # MPS3 — Mapeamento e Controle de Documentação de Funções do Projeto
 
-[![Total de Funções](https://img.shields.io/badge/Funções_Catalogadas-375-blue.svg)](#) 
+[![Total de Funções](https://img.shields.io/badge/Funções_Catalogadas-385-blue.svg)](#) 
 [![Status](https://img.shields.io/badge/Status-100%25_Documentado-brightgreen.svg)](#) 
 [![Padrão](https://img.shields.io/badge/Padrão-Doxygen%20%2F%20ESP--IDF-orange.svg)](#)
 
-Este documento contém o inventário exaustivo de **todas as 375 funções do projeto mps3**, organizadas por componente e subsistema arquitetural. Cada função possui uma caixa de seleção (checkbox `- [x]`) indicando seu status de revisão e documentação técnica detalhada, incluindo papel no pipeline de áudio/sistema, parâmetros, retorno, restrições de concorrência (FreeRTOS) e periféricos de hardware envolvidos.
+Este documento contém o inventário exaustivo de **todas as 385 funções do projeto mps3**, organizadas por componente e subsistema arquitetural. Cada função possui uma caixa de seleção (checkbox `- [x]`) indicando seu status de revisão e documentação técnica detalhada, incluindo papel no pipeline de áudio/sistema, parâmetros, retorno, restrições de concorrência (FreeRTOS) e periféricos de hardware envolvidos.
 
 ## 📊 Sumário Executivo por Subsistema
 
@@ -2633,7 +2633,7 @@ void eq_set_sample_rate(uint32_t sample_rate);
 ```
 
 **Descrição Técnica:**  
-@brief Recalcula os coeficientes dos filtros biquad para a nova taxa de amostragem. Deve ser invocada antes de iniciar o processamento de novas faixas quando a taxa de amostragem mudar (ex: de 44.1 kHz para 48 kHz). @param[in] sample_rate Frequência de amostragem da faixa em Hz.
+@brief Recalcula os coeficientes dos filtros SVF trapezoidais lineares para a nova taxa de amostragem (suporta de 8 kHz a 384 kHz). Deve ser invocada antes de iniciar o processamento de novas faixas quando a taxa de amostragem mudar (ex: de 44.1 kHz para 96 kHz ou 384 kHz). @param[in] sample_rate Frequência de amostragem da faixa em Hz.
 
 **Parâmetros:**  
 - `uint32_t sample_rate`: Parâmetro de entrada/saída para a operação.
@@ -2656,7 +2656,7 @@ void eq_update_config(const eq_config_t *config);
 ```
 
 **Descrição Técnica:**  
-@brief Atualiza os ganhos das bandas, recalcula o Auto Pre-cut e persiste na NVS. @param[in] config Ponteiro para a nova configuração a ser aplicada.
+@brief Atualiza os ganhos das bandas (-15 dB a +15 dB) e Pre-Amp (-30 dB a +30 dB) em double-buffer lock-free (`s_eq_pool[2]`) e agenda gravação debounced (1.5s) na NVS. @param[in] config Ponteiro para a nova configuração a ser aplicada.
 
 **Parâmetros:**  
 - `const eq_config_t *config`: Parâmetro de entrada/saída para a operação.
@@ -2679,7 +2679,7 @@ void eq_process(int32_t *buffer, size_t samples);
 ```
 
 **Descrição Técnica:**  
-@brief Processa um bloco de amostras PCM de áudio estéreo em 32 bits (in-place). Aplica os 10 filtros biquad em cascata nos canais esquerdo e direito. Para taxas acima de 48 kHz, o processamento entra automaticamente em modo Bit-Perfect direto sem alteração de amostras para economizar ciclos de CPU. @param[in,out] buffer  Ponteiro para as amostras estéreo intercaladas (L, R). @param[in]     samples Número total de amostras escalares (frames  2). @note Executa no Core 0 dentro de `audio_dsp_task`.
+@brief Processa um bloco de amostras PCM de áudio estéreo em 32 bits (in-place). Aplica os 10 filtros SVF trapezoidais lineares em cascata nos canais esquerdo e direito em tiles de 64 pares (`EQ_TILE_PAIRS`) em `IRAM_ATTR`, operando continuamente de 44.1 kHz até 384 kHz sem bypass. @param[in,out] buffer  Ponteiro para as amostras estéreo intercaladas (L, R). @param[in]     samples Número total de amostras escalares (frames * 2). @note Executa no Core 0 dentro de `audio_dsp_task`.
 
 **Parâmetros:**  
 - `int32_t *buffer`: Parâmetro de entrada/saída para a operação.
@@ -2749,7 +2749,7 @@ void eq_reset_state(void);
 ```
 
 **Descrição Técnica:**  
-@brief Zera os registradores de atraso histórico (z1, z2) dos filtros biquad. Evita transientes e ruídos residuais (pops) ao alternar de faixa ou após saltos de busca (seek).
+@brief Zera os registradores de estado integrador (ic1, ic2) dos filtros SVF. Evita transientes e ruídos residuais (pops) ao alternar de faixa ou após saltos de busca (seek).
 
 **Parâmetros:**  
 - *Nenhum (void)*.
@@ -12926,3 +12926,2982 @@ void wifi_transfer_get_status(char *out, size_t out_len, int *files_received);
 **Concorrência e Hardware:**  
 - **Núcleo / Tarefa:** F
 ... [truncated for diff preview]
+
+# 📌 Atualizações de Funções Catalogadas (v2.5)
+
+
+## 📁 Audio Meter - Analisador de Espectro & VU Balístico
+
+### - [x] `audio_meter_feed()`
+
+```c
+void audio_meter_feed(const int32_t *samples, size_t sample_count, uint32_t sample_rate);
+```
+
+**Descrição Técnica:**  
+Inicializa o motor de medicao de intensidade sonora e balistica. esp_err_t audio_meter_init(void);
+
+**Parâmetros:**  
+- `samples`: Ponteiro para o buffer de amostras int32_t (L e R)
+- `sample_count`: Quantidade total de amostras (canais somados, ex: 512 = 256 L + 256 R)
+- `sample_rate`: Taxa de amostragem em Hz (ex: 44100, 48000)
+
+**Retorno:**  
+- `void`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`audio_dsp_task`, prioridade 5 com decimação balística).
+- **Hardware Envolvido:** Processamento matemático de amostras PCM em SRAM interna.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_meter_get_levels()`
+
+```c
+void audio_meter_get_levels(float *out_peak_l, float *out_peak_r,
+                           float *out_hold_l, float *out_hold_r,
+                           float *out_db_l, float *out_db_r);
+```
+
+**Descrição Técnica:**  
+Inicializa o motor de medicao de intensidade sonora e balistica. esp_err_t audio_meter_init(void);
+
+**Parâmetros:**  
+- `samples`: Ponteiro para o buffer de amostras int32_t (L e R)
+- `sample_count`: Quantidade total de amostras (canais somados, ex: 512 = 256 L + 256 R)
+- `sample_rate`: Taxa de amostragem em Hz (ex: 44100, 48000) void audio_meter_feed(const int32_t *samples, size_t sample_count, uint32_t sample_rate);
+- `out_peak_l`: Nivel instantaneo suavizado do canal L (0.0 a 1.0)
+- `out_peak_r`: Nivel instantaneo suavizado do canal R (0.0 a 1.0)
+- `out_hold_l`: Nivel de Peak-Hold do canal L (0.0 a 1.0)
+- `out_hold_r`: Nivel de Peak-Hold do canal R (0.0 a 1.0)
+- `out_db_l`: Valor opcional em dBFS do canal L (-40.0 a 0.0)
+- `out_db_r`: Valor opcional em dBFS do canal R (-40.0 a 0.0)
+
+**Retorno:**  
+- `void`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`audio_dsp_task`, prioridade 5 com decimação balística).
+- **Hardware Envolvido:** Processamento matemático de amostras PCM em SRAM interna.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_meter_get_mode()`
+
+```c
+audio_meter_mode_t audio_meter_get_mode(void);
+```
+
+**Descrição Técnica:**  
+Inicializa o motor de medicao de intensidade sonora e balistica. esp_err_t audio_meter_init(void);
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `audio_meter_mode_t`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`audio_dsp_task`, prioridade 5 com decimação balística).
+- **Hardware Envolvido:** Processamento matemático de amostras PCM em SRAM interna.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_meter_get_spectrum_bands()`
+
+```c
+void audio_meter_get_spectrum_bands(float out_bands[AUDIO_METER_SPECTRUM_BANDS], float out_peaks[AUDIO_METER_SPECTRUM_BANDS]);
+```
+
+**Descrição Técnica:**  
+Inicializa o motor de medicao de intensidade sonora e balistica. esp_err_t audio_meter_init(void);
+
+**Parâmetros:**  
+- `samples`: Ponteiro para o buffer de amostras int32_t (L e R)
+- `sample_count`: Quantidade total de amostras (canais somados, ex: 512 = 256 L + 256 R)
+- `sample_rate`: Taxa de amostragem em Hz (ex: 44100, 48000) void audio_meter_feed(const int32_t *samples, size_t sample_count, uint32_t sample_rate);
+- `out_peak_l`: Nivel instantaneo suavizado do canal L (0.0 a 1.0)
+- `out_peak_r`: Nivel instantaneo suavizado do canal R (0.0 a 1.0)
+- `out_hold_l`: Nivel de Peak-Hold do canal L (0.0 a 1.0)
+- `out_hold_r`: Nivel de Peak-Hold do canal R (0.0 a 1.0)
+- `out_db_l`: Valor opcional em dBFS do canal L (-40.0 a 0.0)
+- `out_db_r`: Valor opcional em dBFS do canal R (-40.0 a 0.0) void audio_meter_get_levels(float *out_peak_l, float *out_peak_r, float *out_hold_l, float *out_hold_r, float *out_db_l, float *out_db_r);
+- `out_bands`: Array de AUDIO_METER_SPECTRUM_BANDS floats para as barras de energia
+- `out_peaks`: Array de AUDIO_METER_SPECTRUM_BANDS floats para os marcadores de peak-hold flutuantes
+- `out_bands[AUDIO_METER_SPECTRUM_BANDS]`: Parâmetro `float out_bands[AUDIO_METER_SPECTRUM_BANDS]`.
+- `out_peaks[AUDIO_METER_SPECTRUM_BANDS]`: Parâmetro `float out_peaks[AUDIO_METER_SPECTRUM_BANDS]`.
+
+**Retorno:**  
+- `void`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`audio_dsp_task`, prioridade 5 com decimação balística).
+- **Hardware Envolvido:** Processamento matemático de amostras PCM em SRAM interna.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_meter_init()`
+
+```c
+esp_err_t audio_meter_init(void);
+```
+
+**Descrição Técnica:**  
+Inicializa o motor de medicao de intensidade sonora e balistica.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `esp_err_t`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`audio_dsp_task`, prioridade 5 com decimação balística).
+- **Hardware Envolvido:** Processamento matemático de amostras PCM em SRAM interna.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_meter_is_active()`
+
+```c
+bool audio_meter_is_active(void);
+```
+
+**Descrição Técnica:**  
+Inicializa o motor de medicao de intensidade sonora e balistica. esp_err_t audio_meter_init(void);
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `bool`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`audio_dsp_task`, prioridade 5 com decimação balística).
+- **Hardware Envolvido:** Processamento matemático de amostras PCM em SRAM interna.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_meter_set_mode()`
+
+```c
+void audio_meter_set_mode(audio_meter_mode_t mode, bool save_nvs);
+```
+
+**Descrição Técnica:**  
+Inicializa o motor de medicao de intensidade sonora e balistica. esp_err_t audio_meter_init(void);
+
+**Parâmetros:**  
+- `samples`: Ponteiro para o buffer de amostras int32_t (L e R)
+- `sample_count`: Quantidade total de amostras (canais somados, ex: 512 = 256 L + 256 R)
+- `sample_rate`: Taxa de amostragem em Hz (ex: 44100, 48000) void audio_meter_feed(const int32_t *samples, size_t sample_count, uint32_t sample_rate);
+- `out_peak_l`: Nivel instantaneo suavizado do canal L (0.0 a 1.0)
+- `out_peak_r`: Nivel instantaneo suavizado do canal R (0.0 a 1.0)
+- `out_hold_l`: Nivel de Peak-Hold do canal L (0.0 a 1.0)
+- `out_hold_r`: Nivel de Peak-Hold do canal R (0.0 a 1.0)
+- `out_db_l`: Valor opcional em dBFS do canal L (-40.0 a 0.0)
+- `out_db_r`: Valor opcional em dBFS do canal R (-40.0 a 0.0) void audio_meter_get_levels(float *out_peak_l, float *out_peak_r, float *out_hold_l, float *out_hold_r, float *out_db_l, float *out_db_r);
+- `mode`: Parâmetro `audio_meter_mode_t mode`.
+- `save_nvs`: Parâmetro `bool save_nvs`.
+
+**Retorno:**  
+- `void`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`audio_dsp_task`, prioridade 5 com decimação balística).
+- **Hardware Envolvido:** Processamento matemático de amostras PCM em SRAM interna.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+
+## 📁 Audio Player - Core & Reprodução
+
+### - [x] `audio_player_add_current_folder_to_target_playlist()`
+
+```c
+bool audio_player_add_current_folder_to_target_playlist(int *out_added_count);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `music_dir`: Caminho base no sistema de arquivos FatFS (ex: "/sdcard" ou "/sdcard/Musicas").
+- `out_state`: Ponteiro para a estrutura `playback_state_t` onde os dados serão copiados.
+- `delta`: Direção (+1 para próxima, -1 para anterior). void audio_player_cycle_target_playlist(int delta);
+- `volume`: Novo volume percentual (0 a 100). typedef void (*audio_volume_change_cb_t)(int volume);
+- `cb`: Ponteiro para a função de callback. void audio_player_register_track_completed_cb(audio_track_completed_cb_t cb);
+- `rel_path`: Caminho relativo ao ponto de montagem SD (ex: "Podcasts/Show/ep.mp3").
+- `elapsed_sec`: Segundos reproduzidos da faixa.
+- `total_sec`: Duração total estimada/real da faixa em segundos. typedef void (*audio_track_completed_cb_t)(const char *rel_path, uint32_t elapsed_sec, uint32_t total_sec);
+- `balance`: Valor entre -100 (atenua R) e +100 (atenua L). 0 = Centro. void audio_player_set_balance(int balance);
+- `url`: URL completa do stream (ex: "http://stream.exemplo.com:8000/live.mp3").
+- `seconds`: Quantidade de segundos a retroceder. void audio_player_seek_backward(uint32_t seconds);
+- `index`: Índice selecionado.
+- `out`: Ponteiro para a estrutura onde a configuração atual será copiada. void audio_player_get_eq_config(player_eq_config_t *out);
+- `out_len`: Tamanho do buffer out_filename.
+- `config`: Ponteiro para a nova configuração a ser aplicada imediatamente. void audio_player_set_eq_config(const player_eq_config_t *config);
+- `mode`: Novo modo desejado. void audio_player_set_shuffle_mode(audio_player_shuffle_mode_t mode);
+- `cur_cursor`: Índice real atual na lista (incluindo ".." se houver).
+- `dir_step`: Direção do salto (+1 para próxima letra, -1 para letra anterior).
+- `out_letter`: Letra inicial de destino alcançada (ex: 'A'..'Z' ou '#').
+- `out_added`: Recebe true se a faixa foi adicionada, false se foi removida.
+- `out_name`: Buffer para receber o nome da playlist.
+- `out_is_active`: Recebe true se esta for a playlist alvo selecionada no momento.
+- `name`: Nome digitado pelo usuário (se não tiver extensão .m3u/.m3u8, anexa .m3u8).
+- `out_filename`: Buffer opcional para receber o nome final criado.
+- `name_or_filename`: Nome ou caminho do arquivo da playlist a ser apagada.
+- `out_added_count`: Recebe a quantidade de faixas inéditas adicionadas.
+
+**Retorno:**  
+- `bool`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_browse_to_root()`
+
+```c
+void audio_player_browse_to_root(void);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_create_playlist()`
+
+```c
+bool audio_player_create_playlist(const char *name, char *out_filename, size_t out_len);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `music_dir`: Caminho base no sistema de arquivos FatFS (ex: "/sdcard" ou "/sdcard/Musicas").
+- `out_state`: Ponteiro para a estrutura `playback_state_t` onde os dados serão copiados.
+- `delta`: Direção (+1 para próxima, -1 para anterior). void audio_player_cycle_target_playlist(int delta);
+- `volume`: Novo volume percentual (0 a 100). typedef void (*audio_volume_change_cb_t)(int volume);
+- `cb`: Ponteiro para a função de callback. void audio_player_register_track_completed_cb(audio_track_completed_cb_t cb);
+- `rel_path`: Caminho relativo ao ponto de montagem SD (ex: "Podcasts/Show/ep.mp3").
+- `elapsed_sec`: Segundos reproduzidos da faixa.
+- `total_sec`: Duração total estimada/real da faixa em segundos. typedef void (*audio_track_completed_cb_t)(const char *rel_path, uint32_t elapsed_sec, uint32_t total_sec);
+- `balance`: Valor entre -100 (atenua R) e +100 (atenua L). 0 = Centro. void audio_player_set_balance(int balance);
+- `url`: URL completa do stream (ex: "http://stream.exemplo.com:8000/live.mp3").
+- `seconds`: Quantidade de segundos a retroceder. void audio_player_seek_backward(uint32_t seconds);
+- `index`: Índice selecionado.
+- `out`: Ponteiro para a estrutura onde a configuração atual será copiada. void audio_player_get_eq_config(player_eq_config_t *out);
+- `out_len`: Tamanho do buffer out_filename.
+- `config`: Ponteiro para a nova configuração a ser aplicada imediatamente. void audio_player_set_eq_config(const player_eq_config_t *config);
+- `mode`: Novo modo desejado. void audio_player_set_shuffle_mode(audio_player_shuffle_mode_t mode);
+- `cur_cursor`: Índice real atual na lista (incluindo ".." se houver).
+- `dir_step`: Direção do salto (+1 para próxima letra, -1 para letra anterior).
+- `out_letter`: Letra inicial de destino alcançada (ex: 'A'..'Z' ou '#').
+- `out_added`: Recebe true se a faixa foi adicionada, false se foi removida.
+- `out_name`: Buffer para receber o nome da playlist.
+- `out_is_active`: Recebe true se esta for a playlist alvo selecionada no momento.
+- `name`: Nome digitado pelo usuário (se não tiver extensão .m3u/.m3u8, anexa .m3u8).
+- `out_filename`: Buffer opcional para receber o nome final criado.
+
+**Retorno:**  
+- `bool`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_cycle_target_playlist()`
+
+```c
+void audio_player_cycle_target_playlist(int delta);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `music_dir`: Caminho base no sistema de arquivos FatFS (ex: "/sdcard" ou "/sdcard/Musicas").
+- `out_state`: Ponteiro para a estrutura `playback_state_t` onde os dados serão copiados.
+- `delta`: Direção (+1 para próxima, -1 para anterior).
+- `volume`: Novo volume percentual (0 a 100). typedef void (*audio_volume_change_cb_t)(int volume);
+- `cb`: Ponteiro para a função de callback. void audio_player_register_track_completed_cb(audio_track_completed_cb_t cb);
+- `rel_path`: Caminho relativo ao ponto de montagem SD (ex: "Podcasts/Show/ep.mp3").
+- `elapsed_sec`: Segundos reproduzidos da faixa.
+- `total_sec`: Duração total estimada/real da faixa em segundos. typedef void (*audio_track_completed_cb_t)(const char *rel_path, uint32_t elapsed_sec, uint32_t total_sec);
+- `balance`: Valor entre -100 (atenua R) e +100 (atenua L). 0 = Centro. void audio_player_set_balance(int balance);
+- `url`: URL completa do stream (ex: "http://stream.exemplo.com:8000/live.mp3").
+- `seconds`: Quantidade de segundos a retroceder. void audio_player_seek_backward(uint32_t seconds);
+- `index`: Índice selecionado.
+- `out`: Ponteiro para a estrutura onde a configuração atual será copiada. void audio_player_get_eq_config(player_eq_config_t *out);
+- `out_len`: Tamanho do buffer.
+- `config`: Ponteiro para a nova configuração a ser aplicada imediatamente. void audio_player_set_eq_config(const player_eq_config_t *config);
+- `mode`: Novo modo desejado. void audio_player_set_shuffle_mode(audio_player_shuffle_mode_t mode);
+- `cur_cursor`: Índice real atual na lista (incluindo ".." se houver).
+- `dir_step`: Direção do salto (+1 para próxima letra, -1 para letra anterior).
+- `out_letter`: Letra inicial de destino alcançada (ex: 'A'..'Z' ou '#').
+- `out_added`: Recebe true se a faixa foi adicionada, false se foi removida.
+- `out_name`: Buffer para receber o nome da playlist.
+- `out_is_active`: Recebe true se esta for a playlist alvo selecionada no momento.
+
+**Retorno:**  
+- `void`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_ensure_playlists_migrated()`
+
+```c
+void audio_player_ensure_playlists_migrated(void);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_get_browse_dir()`
+
+```c
+void audio_player_get_browse_dir(char *out, size_t out_len);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `music_dir`: Caminho base no sistema de arquivos FatFS (ex: "/sdcard" ou "/sdcard/Musicas").
+- `out_state`: Ponteiro para a estrutura `playback_state_t` onde os dados serão copiados.
+- `delta`: Direção (+1 para próxima, -1 para anterior). void audio_player_cycle_target_playlist(int delta);
+- `volume`: Novo volume percentual (0 a 100). typedef void (*audio_volume_change_cb_t)(int volume);
+- `cb`: Ponteiro para a função de callback. void audio_player_register_track_completed_cb(audio_track_completed_cb_t cb);
+- `rel_path`: Caminho relativo ao ponto de montagem SD (ex: "Podcasts/Show/ep.mp3").
+- `elapsed_sec`: Segundos reproduzidos da faixa.
+- `total_sec`: Duração total estimada/real da faixa em segundos. typedef void (*audio_track_completed_cb_t)(const char *rel_path, uint32_t elapsed_sec, uint32_t total_sec);
+- `balance`: Valor entre -100 (atenua R) e +100 (atenua L). 0 = Centro. void audio_player_set_balance(int balance);
+- `url`: URL completa do stream (ex: "http://stream.exemplo.com:8000/live.mp3").
+- `seconds`: Quantidade de segundos a retroceder. void audio_player_seek_backward(uint32_t seconds);
+- `index`: Índice selecionado.
+- `out`: Ponteiro para a estrutura onde a configuração atual será copiada. void audio_player_get_eq_config(player_eq_config_t *out);
+- `out_len`: Tamanho do buffer out_filename.
+- `config`: Ponteiro para a nova configuração a ser aplicada imediatamente. void audio_player_set_eq_config(const player_eq_config_t *config);
+- `mode`: Novo modo desejado. void audio_player_set_shuffle_mode(audio_player_shuffle_mode_t mode);
+- `cur_cursor`: Índice real atual na lista (incluindo ".." se houver).
+- `dir_step`: Direção do salto (+1 para próxima letra, -1 para letra anterior).
+- `out_letter`: Letra inicial de destino alcançada (ex: 'A'..'Z' ou '#').
+- `out_added`: Recebe true se adicionado, false se removido.
+- `out_name`: Buffer para receber o nome da playlist.
+- `out_is_active`: Recebe true se esta for a playlist alvo selecionada no momento.
+- `name`: Nome digitado pelo usuário (se não tiver extensão .m3u/.m3u8, anexa .m3u8).
+- `out_filename`: Buffer opcional para receber o nome final criado.
+- `name_or_filename`: Nome ou caminho do arquivo da playlist a ser apagada.
+- `out_added_count`: Recebe a quantidade de faixas inéditas adicionadas.
+- `browse_idx`: Índice real do item em s_browse_scan (incluindo offset de ".." se aplicável).
+- `out_count`: Quantidade de faixas afetadas.
+
+**Retorno:**  
+- `void`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_get_target_playlist()`
+
+```c
+const char * audio_player_get_target_playlist(void);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `const char *`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_like_browse_item()`
+
+```c
+bool audio_player_like_browse_item(int browse_idx, bool like, bool *out_status);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `music_dir`: Caminho base no sistema de arquivos FatFS (ex: "/sdcard" ou "/sdcard/Musicas").
+- `out_state`: Ponteiro para a estrutura `playback_state_t` onde os dados serão copiados.
+- `delta`: Direção (+1 para próxima, -1 para anterior). void audio_player_cycle_target_playlist(int delta);
+- `volume`: Novo volume percentual (0 a 100). typedef void (*audio_volume_change_cb_t)(int volume);
+- `cb`: Ponteiro para a função de callback. void audio_player_register_track_completed_cb(audio_track_completed_cb_t cb);
+- `rel_path`: Caminho relativo ao ponto de montagem SD (ex: "Podcasts/Show/ep.mp3").
+- `elapsed_sec`: Segundos reproduzidos da faixa.
+- `total_sec`: Duração total estimada/real da faixa em segundos. typedef void (*audio_track_completed_cb_t)(const char *rel_path, uint32_t elapsed_sec, uint32_t total_sec);
+- `balance`: Valor entre -100 (atenua R) e +100 (atenua L). 0 = Centro. void audio_player_set_balance(int balance);
+- `url`: URL completa do stream (ex: "http://stream.exemplo.com:8000/live.mp3").
+- `seconds`: Quantidade de segundos a retroceder. void audio_player_seek_backward(uint32_t seconds);
+- `index`: Índice selecionado.
+- `out`: Ponteiro para a estrutura onde a configuração atual será copiada. void audio_player_get_eq_config(player_eq_config_t *out);
+- `out_len`: Tamanho do buffer out_filename.
+- `config`: Ponteiro para a nova configuração a ser aplicada imediatamente. void audio_player_set_eq_config(const player_eq_config_t *config);
+- `mode`: Novo modo desejado. void audio_player_set_shuffle_mode(audio_player_shuffle_mode_t mode);
+- `cur_cursor`: Índice real atual na lista (incluindo ".." se houver).
+- `dir_step`: Direção do salto (+1 para próxima letra, -1 para letra anterior).
+- `out_letter`: Letra inicial de destino alcançada (ex: 'A'..'Z' ou '#').
+- `out_added`: Recebe true se adicionado, false se removido.
+- `out_name`: Buffer para receber o nome da playlist.
+- `out_is_active`: Recebe true se esta for a playlist alvo selecionada no momento.
+- `name`: Nome digitado pelo usuário (se não tiver extensão .m3u/.m3u8, anexa .m3u8).
+- `out_filename`: Buffer opcional para receber o nome final criado.
+- `name_or_filename`: Nome ou caminho do arquivo da playlist a ser apagada.
+- `out_added_count`: Recebe a quantidade de faixas inéditas adicionadas.
+- `browse_idx`: Índice real do item em s_browse_scan (incluindo offset de ".." se aplicável).
+- `out_count`: Quantidade de faixas afetadas.
+- `like`: Parâmetro `bool like`.
+- `out_status`: Parâmetro `bool *out_status`.
+
+**Retorno:**  
+- `bool`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_like_current()`
+
+```c
+bool audio_player_like_current(bool like, bool *out_status);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `music_dir`: Caminho base no sistema de arquivos FatFS (ex: "/sdcard" ou "/sdcard/Musicas").
+- `out_state`: Ponteiro para a estrutura `playback_state_t` onde os dados serão copiados.
+- `delta`: Direção (+1 para próxima, -1 para anterior). void audio_player_cycle_target_playlist(int delta);
+- `volume`: Novo volume percentual (0 a 100). typedef void (*audio_volume_change_cb_t)(int volume);
+- `cb`: Ponteiro para a função de callback. void audio_player_register_track_completed_cb(audio_track_completed_cb_t cb);
+- `rel_path`: Caminho relativo ao ponto de montagem SD (ex: "Podcasts/Show/ep.mp3").
+- `elapsed_sec`: Segundos reproduzidos da faixa.
+- `total_sec`: Duração total estimada/real da faixa em segundos. typedef void (*audio_track_completed_cb_t)(const char *rel_path, uint32_t elapsed_sec, uint32_t total_sec);
+- `balance`: Valor entre -100 (atenua R) e +100 (atenua L). 0 = Centro. void audio_player_set_balance(int balance);
+- `url`: URL completa do stream (ex: "http://stream.exemplo.com:8000/live.mp3").
+- `seconds`: Quantidade de segundos a retroceder. void audio_player_seek_backward(uint32_t seconds);
+- `index`: Índice selecionado.
+- `out`: Ponteiro para a estrutura onde a configuração atual será copiada. void audio_player_get_eq_config(player_eq_config_t *out);
+- `out_len`: Tamanho do buffer out_filename.
+- `config`: Ponteiro para a nova configuração a ser aplicada imediatamente. void audio_player_set_eq_config(const player_eq_config_t *config);
+- `mode`: Novo modo desejado. void audio_player_set_shuffle_mode(audio_player_shuffle_mode_t mode);
+- `cur_cursor`: Índice real atual na lista (incluindo ".." se houver).
+- `dir_step`: Direção do salto (+1 para próxima letra, -1 para letra anterior).
+- `out_letter`: Letra inicial de destino alcançada (ex: 'A'..'Z' ou '#').
+- `out_added`: Recebe true se adicionado, false se removido.
+- `out_name`: Buffer para receber o nome da playlist.
+- `out_is_active`: Recebe true se esta for a playlist alvo selecionada no momento.
+- `name`: Nome digitado pelo usuário (se não tiver extensão .m3u/.m3u8, anexa .m3u8).
+- `out_filename`: Buffer opcional para receber o nome final criado.
+- `name_or_filename`: Nome ou caminho do arquivo da playlist a ser apagada.
+- `out_added_count`: Recebe a quantidade de faixas inéditas adicionadas.
+- `browse_idx`: Índice real do item em s_browse_scan (incluindo offset de ".." se aplicável).
+- `out_count`: Quantidade de faixas afetadas.
+- `like`: Parâmetro `bool like`.
+- `out_status`: Parâmetro `bool *out_status`.
+
+**Retorno:**  
+- `bool`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_register_track_completed_cb()`
+
+```c
+void audio_player_register_track_completed_cb(audio_track_completed_cb_t cb);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `music_dir`: Caminho base no sistema de arquivos FatFS (ex: "/sdcard" ou "/sdcard/Musicas").
+- `out_state`: Ponteiro para a estrutura `playback_state_t` onde os dados serão copiados.
+- `delta`: Valor de ajuste (ex.: +5 para aumentar 5%, -5 para diminuir 5%). void audio_player_adjust_volume(int delta);
+- `volume`: Novo volume percentual (0 a 100). typedef void (*audio_volume_change_cb_t)(int volume);
+- `cb`: Ponteiro para a função de callback.
+- `rel_path`: Caminho relativo ao ponto de montagem SD (ex: "Podcasts/Show/ep.mp3").
+- `elapsed_sec`: Segundos reproduzidos da faixa.
+- `total_sec`: Duração total estimada/real da faixa em segundos. typedef void (*audio_track_completed_cb_t)(const char *rel_path, uint32_t elapsed_sec, uint32_t total_sec);
+
+**Retorno:**  
+- `void`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_rescan_browser()`
+
+```c
+void audio_player_rescan_browser(void);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_toggle_browse_item_in_target_playlist()`
+
+```c
+bool audio_player_toggle_browse_item_in_target_playlist(int browse_idx, bool *out_added, int *out_count);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `music_dir`: Caminho base no sistema de arquivos FatFS (ex: "/sdcard" ou "/sdcard/Musicas").
+- `out_state`: Ponteiro para a estrutura `playback_state_t` onde os dados serão copiados.
+- `delta`: Direção (+1 para próxima, -1 para anterior). void audio_player_cycle_target_playlist(int delta);
+- `volume`: Novo volume percentual (0 a 100). typedef void (*audio_volume_change_cb_t)(int volume);
+- `cb`: Ponteiro para a função de callback. void audio_player_register_track_completed_cb(audio_track_completed_cb_t cb);
+- `rel_path`: Caminho relativo ao ponto de montagem SD (ex: "Podcasts/Show/ep.mp3").
+- `elapsed_sec`: Segundos reproduzidos da faixa.
+- `total_sec`: Duração total estimada/real da faixa em segundos. typedef void (*audio_track_completed_cb_t)(const char *rel_path, uint32_t elapsed_sec, uint32_t total_sec);
+- `balance`: Valor entre -100 (atenua R) e +100 (atenua L). 0 = Centro. void audio_player_set_balance(int balance);
+- `url`: URL completa do stream (ex: "http://stream.exemplo.com:8000/live.mp3").
+- `seconds`: Quantidade de segundos a retroceder. void audio_player_seek_backward(uint32_t seconds);
+- `index`: Índice selecionado.
+- `out`: Ponteiro para a estrutura onde a configuração atual será copiada. void audio_player_get_eq_config(player_eq_config_t *out);
+- `out_len`: Tamanho do buffer out_filename.
+- `config`: Ponteiro para a nova configuração a ser aplicada imediatamente. void audio_player_set_eq_config(const player_eq_config_t *config);
+- `mode`: Novo modo desejado. void audio_player_set_shuffle_mode(audio_player_shuffle_mode_t mode);
+- `cur_cursor`: Índice real atual na lista (incluindo ".." se houver).
+- `dir_step`: Direção do salto (+1 para próxima letra, -1 para letra anterior).
+- `out_letter`: Letra inicial de destino alcançada (ex: 'A'..'Z' ou '#').
+- `out_added`: Recebe true se adicionado, false se removido.
+- `out_name`: Buffer para receber o nome da playlist.
+- `out_is_active`: Recebe true se esta for a playlist alvo selecionada no momento.
+- `name`: Nome digitado pelo usuário (se não tiver extensão .m3u/.m3u8, anexa .m3u8).
+- `out_filename`: Buffer opcional para receber o nome final criado.
+- `name_or_filename`: Nome ou caminho do arquivo da playlist a ser apagada.
+- `out_added_count`: Recebe a quantidade de faixas inéditas adicionadas.
+- `browse_idx`: Índice real do item em s_browse_scan (incluindo offset de ".." se aplicável).
+- `out_count`: Quantidade de faixas afetadas.
+
+**Retorno:**  
+- `bool`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `audio_player_toggle_play_pause()`
+
+```c
+void audio_player_toggle_play_pause(void);
+```
+
+**Descrição Técnica:**  
+Subsistema Central de Reprodução de Áudio Digital (Player Core & Pipeline) Fornece a interface de controle do reprodutor de áudio digital Hi-Res (DAP). Gerencia a decodificação multiformato (FLAC 24b/192k, MP3, WAV, AAC, M4A, OGG), navegação de faixas e pastas no cartão MicroSD, controle de volume logarítmico, balanço estéreo L/R, equalizador de 10 bandas e integração com rádio web. #include <stdint.h> #include <stdbool.h> #include <stddef.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: - ESP_OK: Subsistema inicializado e tarefa criada com sucesso. - ESP_ERR_INVALID_ARG: Diretório fornecido é inválido ou nulo. - ESP_FAIL: Falha ao inicializar filas FreeRTOS ou criar a tarefa.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `ensure_stereo_scratch()`
+
+```c
+int32_t * ensure_stereo_scratch(size_t needed_samples);
+```
+
+**Descrição Técnica:**  
+Estruturas Internas e Pipeline DSP Dual-Core do Audio Player Define os comandos assíncronos do reprodutor, os mutexes de sincronização do estado interno e as funções de comunicação inter-núcleo (Core 1 Decodificador ➔ Core 0 Audio DSP Task / I2S DMA). #include "audio_player.h" #include "freertos/FreeRTOS.h" #include "freertos/semphr.h" #include "freertos/queue.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `samples`: Ponteiro para as amostras PCM estéreo intercaladas (L/R).
+- `count`: Número total de amostras escalares (frames * 2).
+- `rate`: Nova taxa de amostragem em Hz (ex: 44100, 48000, 96000, 192000). void audio_dsp_set_rate(uint32_t rate);
+- `sample_rate`: Taxa de amostragem da faixa para calibração da duração da rampa. void audio_dsp_trigger_fade_in(uint32_t sample_rate);
+- `needed_samples`: Número mínimo de amostras necessárias.
+
+**Retorno:**  
+- `int32_t *`: - ESP_OK: Bloco enfileirado com sucesso. - ESP_ERR_TIMEOUT: Fila de processamento cheia ou travada. esp_err_t audio_dsp_send_pcm(const int32_t *samples, size_t count, uint32_t rate);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 (`player_task`, prioridade 5) ou Core 0 (`audio_dsp_task`, prioridade 5).
+- **Hardware Envolvido:** Barramento SDMMC 4-Bit nativo (GPIOs 4,5,6,7,16,17) e DMA I2S Master.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+
+## 📁 Board I/O - Expansor I2C PCF8574 & Periféricos
+
+### - [x] `pcf8574_get_address()`
+
+```c
+uint8_t pcf8574_get_address(void);
+```
+
+**Descrição Técnica:**  
+Driver I2C para o Expansor de I/O de 8-Bit PCF8574 / PCF8574A Suporta auto-detecção em toda a faixa de endereços (0x20..0x27 e 0x38..0x3F), compartilhando o barramento I2C mestre do ESP32-S3 (SDA=GPIO 10, SCL=GPIO 9). Opera no modo de portas quasi-bidirecionais ativas em nível baixo (GND). #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "driver/i2c_master.h" #ifdef __cplusplus extern "C" { #endif #define PCF8574_DEFAULT_ADDR   0x20 #define PCF8574A_DEFAULT_ADDR  0x38
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `uint8_t`: ESP_OK se o expansor foi detectado e configurado com sucesso. esp_err_t pcf8574_init(i2c_master_bus_handle_t bus_handle);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task` ou `main`).
+- **Hardware Envolvido:** Barramento I2C compartilhado (SDA: GPIO 10, SCL: GPIO 9) com expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `pcf8574_get_pin_pressed()`
+
+```c
+bool pcf8574_get_pin_pressed(uint8_t pin);
+```
+
+**Descrição Técnica:**  
+Driver I2C para o Expansor de I/O de 8-Bit PCF8574 / PCF8574A Suporta auto-detecção em toda a faixa de endereços (0x20..0x27 e 0x38..0x3F), compartilhando o barramento I2C mestre do ESP32-S3 (SDA=GPIO 10, SCL=GPIO 9). Opera no modo de portas quasi-bidirecionais ativas em nível baixo (GND). #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "driver/i2c_master.h" #ifdef __cplusplus extern "C" { #endif #define PCF8574_DEFAULT_ADDR   0x20 #define PCF8574A_DEFAULT_ADDR  0x38
+
+**Parâmetros:**  
+- `bus_handle`: Handle do barramento I2C mestre (u8g2_hal_get_bus_handle()).
+- `val`: Valor a transmitir.
+- `pin`: Número do pino (0 a 7).
+
+**Retorno:**  
+- `bool`: ESP_OK se o expansor foi detectado e configurado com sucesso. esp_err_t pcf8574_init(i2c_master_bus_handle_t bus_handle);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task` ou `main`).
+- **Hardware Envolvido:** Barramento I2C compartilhado (SDA: GPIO 10, SCL: GPIO 9) com expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `pcf8574_init()`
+
+```c
+esp_err_t pcf8574_init(i2c_master_bus_handle_t bus_handle);
+```
+
+**Descrição Técnica:**  
+Driver I2C para o Expansor de I/O de 8-Bit PCF8574 / PCF8574A Suporta auto-detecção em toda a faixa de endereços (0x20..0x27 e 0x38..0x3F), compartilhando o barramento I2C mestre do ESP32-S3 (SDA=GPIO 10, SCL=GPIO 9). Opera no modo de portas quasi-bidirecionais ativas em nível baixo (GND). #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "driver/i2c_master.h" #ifdef __cplusplus extern "C" { #endif #define PCF8574_DEFAULT_ADDR   0x20 #define PCF8574A_DEFAULT_ADDR  0x38
+
+**Parâmetros:**  
+- `bus_handle`: Handle do barramento I2C mestre (u8g2_hal_get_bus_handle()).
+
+**Retorno:**  
+- `esp_err_t`: ESP_OK se o expansor foi detectado e configurado com sucesso.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task` ou `main`).
+- **Hardware Envolvido:** Barramento I2C compartilhado (SDA: GPIO 10, SCL: GPIO 9) com expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `pcf8574_is_available()`
+
+```c
+bool pcf8574_is_available(void);
+```
+
+**Descrição Técnica:**  
+Driver I2C para o Expansor de I/O de 8-Bit PCF8574 / PCF8574A Suporta auto-detecção em toda a faixa de endereços (0x20..0x27 e 0x38..0x3F), compartilhando o barramento I2C mestre do ESP32-S3 (SDA=GPIO 10, SCL=GPIO 9). Opera no modo de portas quasi-bidirecionais ativas em nível baixo (GND). #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "driver/i2c_master.h" #ifdef __cplusplus extern "C" { #endif #define PCF8574_DEFAULT_ADDR   0x20 #define PCF8574A_DEFAULT_ADDR  0x38
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `bool`: ESP_OK se o expansor foi detectado e configurado com sucesso. esp_err_t pcf8574_init(i2c_master_bus_handle_t bus_handle);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task` ou `main`).
+- **Hardware Envolvido:** Barramento I2C compartilhado (SDA: GPIO 10, SCL: GPIO 9) com expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `pcf8574_read_raw()`
+
+```c
+esp_err_t pcf8574_read_raw(uint8_t *val);
+```
+
+**Descrição Técnica:**  
+Driver I2C para o Expansor de I/O de 8-Bit PCF8574 / PCF8574A Suporta auto-detecção em toda a faixa de endereços (0x20..0x27 e 0x38..0x3F), compartilhando o barramento I2C mestre do ESP32-S3 (SDA=GPIO 10, SCL=GPIO 9). Opera no modo de portas quasi-bidirecionais ativas em nível baixo (GND). #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "driver/i2c_master.h" #ifdef __cplusplus extern "C" { #endif #define PCF8574_DEFAULT_ADDR   0x20 #define PCF8574A_DEFAULT_ADDR  0x38
+
+**Parâmetros:**  
+- `bus_handle`: Handle do barramento I2C mestre (u8g2_hal_get_bus_handle()).
+- `val`: Ponteiro para armazenar o byte lido.
+
+**Retorno:**  
+- `esp_err_t`: ESP_OK se o expansor foi detectado e configurado com sucesso. esp_err_t pcf8574_init(i2c_master_bus_handle_t bus_handle);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task` ou `main`).
+- **Hardware Envolvido:** Barramento I2C compartilhado (SDA: GPIO 10, SCL: GPIO 9) com expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `pcf8574_write_raw()`
+
+```c
+esp_err_t pcf8574_write_raw(uint8_t val);
+```
+
+**Descrição Técnica:**  
+Driver I2C para o Expansor de I/O de 8-Bit PCF8574 / PCF8574A Suporta auto-detecção em toda a faixa de endereços (0x20..0x27 e 0x38..0x3F), compartilhando o barramento I2C mestre do ESP32-S3 (SDA=GPIO 10, SCL=GPIO 9). Opera no modo de portas quasi-bidirecionais ativas em nível baixo (GND). #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "driver/i2c_master.h" #ifdef __cplusplus extern "C" { #endif #define PCF8574_DEFAULT_ADDR   0x20 #define PCF8574A_DEFAULT_ADDR  0x38
+
+**Parâmetros:**  
+- `bus_handle`: Handle do barramento I2C mestre (u8g2_hal_get_bus_handle()).
+- `val`: Valor a transmitir.
+
+**Retorno:**  
+- `esp_err_t`: ESP_OK se o expansor foi detectado e configurado com sucesso. esp_err_t pcf8574_init(i2c_master_bus_handle_t bus_handle);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task` ou `main`).
+- **Hardware Envolvido:** Barramento I2C compartilhado (SDA: GPIO 10, SCL: GPIO 9) com expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+
+## 📁 DSP - Equalizador Paramétrico de 10 Bandas
+
+### - [x] `eq_process_with_gain()`
+
+```c
+bool eq_process_with_gain(int32_t *buffer, size_t samples, float gain_l, float gain_r);
+```
+
+**Descrição Técnica:**  
+@brief Processa o equalizador paramétrico SVF de 10 bandas (-15 dB a +15 dB por banda, Pre-Amp -30 dB a +30 dB, 44.1 kHz a 384 kHz) fundindo o ganho de volume/balanço L/R em um único passe em IRAM (tiles de 64 pares com ILP). Se o equalizador estiver ativo e não-flat, aplica `gain_l` e `gain_r` na conversão de entrada Q31 -> float e retorna `true`; caso contrário, retorna `false` sem modificar o buffer.
+
+**Parâmetros:**  
+- `buffer`: Ponteiro para as amostras estéreo intercaladas (L, R).
+- `samples`: Número total de amostras escalares (frames * 2).
+- `gain_l`: Multiplicador linear de volume/balanço do canal esquerdo [0.0 .. 1.0].
+- `gain_r`: Multiplicador linear de volume/balanço do canal direito [0.0 .. 1.0].
+
+**Retorno:**  
+- `bool`: `true` se o buffer foi processado (incluindo ganho L/R), `false` se em bypass.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Core 0 ou Core 1 dependendo do contexto de chamada.
+- **Hardware Envolvido:** Barramento do subsistema correspondente (I2C, I2S, SDMMC ou UART).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+
+## 📁 Interface - Sistema de Menus e Navegação
+
+### - [x] `menu_get()`
+
+```c
+const menu_item_t * menu_get(int index);
+```
+
+**Descrição Técnica:**  
+Registro Central e Despachante Polimórfico de Menus do Sistema Fornece um barramento desacoplado para registro dos itens navegáveis no carrossel principal (Player, WiFi, Conf, USB, Game). Cada componente registra seus callbacks de ciclo de vida (`on_select`, `is_active`, `draw_status`, `request_exit`, etc.), permitindo que a `display_task` e a `touch_task` despachem eventos genericamente. #include <stdbool.h> #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `item`: Ponteiro para a estrutura com os dados e callbacks do menu. void menu_register(const menu_item_t *item);
+- `index`: Índice do item (0 a menu_count()-1).
+
+**Retorno:**  
+- `const menu_item_t *`: Total de itens cadastrados. int menu_count(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `menu_nav_left_active()`
+
+```c
+void menu_nav_left_active(void);
+```
+
+**Descrição Técnica:**  
+Registro Central e Despachante Polimórfico de Menus do Sistema Fornece um barramento desacoplado para registro dos itens navegáveis no carrossel principal (Player, WiFi, Conf, USB, Game). Cada componente registra seus callbacks de ciclo de vida (`on_select`, `is_active`, `draw_status`, `request_exit`, etc.), permitindo que a `display_task` e a `touch_task` despachem eventos genericamente. #include <stdbool.h> #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: Total de itens cadastrados. int menu_count(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+
+## 📁 Interface - Display OLED SSD1306
+
+### - [x] `bitmap_animations_init()`
+
+```c
+void bitmap_animations_init(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `bitmap_animations_init` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_capture_buffer()`
+
+```c
+esp_err_t oled_display_capture_buffer(uint8_t *dest_buf);
+```
+
+**Descrição Técnica:**  
+Interface Gráfica de Usuário e Controle do Display OLED SSD1306 (128x64) Gerencia a renderização de telas, animações, layouts e menus monocromáticos através da biblioteca U8g2 operando sobre o barramento I2C Master (GPIO 10 SDA, GPIO 9 SCL) a 400 kHz, sincronizado na taxa estável de 25.0 FPS cravados. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "audio_player.h" #include "rtc_ds3231.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `cursor`: Posição do cursor no texto.
+- `now_playing`: Estado da música em segundo plano (ou NULL). void oled_display_show_list(const char **names, int count, int cursor, const playback_state_t *now_playing);
+- `state`: Ponteiro para o estado atual de reprodução (`playback_state_t`). typedef enum { VIZ_MODE_CLASSIC  = 0,  /**< Metadados classicos completos com badges tecnicas. */ VIZ_MODE_HYBRID   = 1,  /**< Hibrido: Metadados com mini VU estereo L/R na base. */ VIZ_MODE_SPECTRUM = 2,  /**< Espectro Hi-Fi / RTA em tela cheia com overlay dinamico. */ VIZ_MODE_ANALOG   = 3,  /**< Medidores Analogicos Vintage McIntosh/Technics duplos. */ VIZ_MODE_COUNT    = 4 } oled_display_viz_mode_t; void oled_display_set_viz_mode(oled_display_viz_mode_t mode); oled_display_viz_mode_t oled_display_get_viz_mode(void); void oled_display_cycle_viz_mode(void); void oled_display_trigger_viz_overlay(void); void oled_display_show_now_playing(const playback_state_t *state);
+- `names`: Vetor com nomes dos dispositivos descobertos.
+- `count`: Total de arquivos no lote.
+- `letter`: Caractere inicial alcançado pelo salto (ex: 'A'..'Z' ou '#'). void oled_display_trigger_az_hud(char letter);
+- `line1`: Texto da primeira linha.
+- `line2`: Texto da segunda linha (ou NULL). void oled_display_show_message(const char *line1, const char *line2);
+- `scanning`: true se a varredura Bluetooth ainda estiver ativa. void oled_display_show_bt_devices(const char **names, int count, int cursor, bool scanning);
+- `dev_name`: Nome do dispositivo conectado.
+- `codec_name`: Nome do codec ativo (ex: "Sony LDAC", "SBC").
+- `sample_rate`: Frequência em Hz (ex: 96000).
+- `rssi`: Nível de sinal Wi-Fi (-dBm). void oled_display_show_wifi_streaming(const char *filename, int buffer_pct, float kbps, int rssi);
+- `volume_percent`: Volume atual de 0 a 100%. void oled_display_show_volume(int volume_percent);
+- `balance`: Valor de -100 (L) a +100 (R). void oled_display_show_balance(int balance);
+- `label`: Rótulo ou cabeçalho da operação.
+- `filename`: Nome do arquivo incompatível.
+- `percent`: Progresso percentual do download.
+- `eta_sec`: Tempo restante do arquivo atual.
+- `overall_pct`: Progresso geral do lote.
+- `ip`: Endereço IP ativo.
+- `mdns_host`: Nome de domínio local.
+- `dns_active`: true se o servidor DNS captive portal estiver ligado.
+- `clients`: Número de clientes simultâneos conectados. void oled_display_show_wifi_connected(const char *ip, const char *mdns_host, int rssi, int clients);
+- `file_pct`: Progresso percentual do arquivo atual.
+- `idx`: Índice do arquivo atual.
+- `kbps`: Taxa de transferência em KB/s.
+- `total_eta`: Tempo estimado restante para o lote completo.
+- `buffer_pct`: Porcentagem bufferizada da faixa (0-100%).
+- `files_received`: Quantidade de arquivos recebidos com sucesso. void oled_display_show_wifi_done(int files_received); typedef struct { char ssid[33]; int8_t rssi; uint8_t authmode; } wifi_scan_display_ap_t; void oled_display_show_wifi_submenu(int cursor); void oled_display_show_wifi_scan(const wifi_scan_display_ap_t *aps, int count, int cursor, int top_idx, bool is_scanning); void oled_display_show_wifi_keyboard(const char *ssid, const char *input_buf, int cur_r, int cur_c, int shift_mode); void oled_display_show_wifi_manage(const char (*ssids)[33], const char (*passes)[65], int count, int cursor, int top_idx); void oled_display_show_wifi_network_action(const char *ssid, const char *pass, int action_cursor);
+- `gains`: Vetor de ganhos em dB das 10 bandas + ganho geral.
+- `selected_band`: Banda atualmente selecionada pelo cursor.
+- `eq_enabled`: Estado ligado/desligado do equalizador.
+- `r`: Valor do canal Vermelho (0 a 255).
+- `g`: Valor do canal Verde (0 a 255).
+- `b`: Valor do canal Azul (0 a 255).
+- `selected_channel`: Canal em ajuste (0=R, 1=G, 2=B).
+- `enabled`: Estado ligado/desligado do LED. void oled_display_show_led(uint8_t r, uint8_t g, uint8_t b, int selected_channel, bool enabled);
+- `level`: Contraste de 0 (mínimo legível) a 255 (brilho máximo). void oled_display_set_brightness(uint8_t level);
+- `enable`: true para colocar o display em sleep (apagar matriz); false para religar. void oled_display_set_power_save(bool enable);
+- `brightness`: Nível de brilho configurado.
+- `timeout_idx`: Índice da opção de timeout de tela.
+- `fallback_idx`: Índice do temporizador de retorno para reprodução. void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx, int fallback_idx);
+- `volume`: Volume percentual atual.
+- `eq_cfg`: Ponteiro para a estrutura de presets. void oled_display_show_eq_preset_list(int cursor, int active_preset, bool eq_enabled, const void *eq_cfg);
+- `eq_focus`: Preset de equalização selecionado.
+- `voltage`: Tensão da bateria em Volts.
+- `percentage`: Porcentagem da bateria.
+- `time_left_mins`: Estimativa de autonomia restante em minutos.
+- `active_preset`: Índice do preset atualmente ativo.
+- `text`: Texto já digitado.
+- `grid_x`: Posição horizontal na grade de teclas.
+- `grid_y`: Posição vertical na grade de teclas.
+- `page`: Página de caracteres (maiúsculas, minúsculas, números/símbolos).
+- `is_confirming`: true se o botão de confirmação estiver em foco. void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int grid_y, int page, bool is_confirming);
+- `reason`: Motivo ou detalhe do erro (ex: "FLAC max 24b/192k", "WAV max 32b/384k", "Formato nao suportado"). void oled_display_show_unsupported_ex(const char *filename, const char *reason);
+- `mode`: Modo selecionado (0=Nome, 1=Data). void oled_display_show_sort_mode(int mode);
+- `current_idx`: Opção selecionada (Desligado, 1 min, 5 min, 15 min, atalho [>]). void oled_display_show_deepsleep_cfg(int current_idx);
+- `status_msg`: Mensagem contextual de status. void oled_display_show_podcast_sync(const char *program, const char *title, int cur_idx, int total_idx, int percent, float speed_kbs, const char *status_msg);
+- `program`: Nome do canal ou podcast.
+- `title`: Título do episódio sendo baixado.
+- `cur_idx`: Índice da rede exibida no carrossel.
+- `total_idx`: Total de redes disponíveis para alternância. void oled_display_show_wifi_qr(const char *ssid, const char *pass, const char *tag_label, int cur_idx, int total_idx);
+- `speed_kbs`: Velocidade de transferência em KB/s.
+- `ssid`: Nome da rede Wi-Fi / SSID.
+- `pass`: Senha da rede Wi-Fi (ou vazio para redes abertas).
+- `tag_label`: Rótulo exibido no cabeçalho da tela.
+- `info`: Ponteiro para a estrutura de telemetria do RTC (`rtc_clock_info_t`). void oled_display_show_clock(const rtc_clock_info_t *info);
+- `dest_buf`: Ponteiro para buffer de pelo menos 1024 bytes.
+
+**Retorno:**  
+- `esp_err_t`: ESP_OK se o display respondeu e foi inicializado com sucesso. esp_err_t oled_display_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_cycle_viz_mode()`
+
+```c
+void oled_display_cycle_viz_mode(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `oled_display_cycle_viz_mode` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_get_lock_anim_type()`
+
+```c
+oled_lock_anim_t oled_display_get_lock_anim_type(void);
+```
+
+**Descrição Técnica:**  
+Interface Gráfica de Usuário e Controle do Display OLED SSD1306 (128x64) Gerencia a renderização de telas, animações, layouts e menus monocromáticos através da biblioteca U8g2 operando sobre o barramento I2C Master (GPIO 10 SDA, GPIO 9 SCL) a 400 kHz, sincronizado na taxa estável de 25.0 FPS cravados. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "audio_player.h" #include "rtc_ds3231.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `oled_lock_anim_t`: ESP_OK se o display respondeu e foi inicializado com sucesso. esp_err_t oled_display_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_get_viz_mode()`
+
+```c
+oled_display_viz_mode_t oled_display_get_viz_mode(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `oled_display_get_viz_mode` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `oled_display_viz_mode_t`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_is_anim_enabled()`
+
+```c
+bool oled_display_is_anim_enabled(void);
+```
+
+**Descrição Técnica:**  
+Interface Gráfica de Usuário e Controle do Display OLED SSD1306 (128x64) Gerencia a renderização de telas, animações, layouts e menus monocromáticos através da biblioteca U8g2 operando sobre o barramento I2C Master (GPIO 10 SDA, GPIO 9 SCL) a 400 kHz, sincronizado na taxa estável de 25.0 FPS cravados. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "audio_player.h" #include "rtc_ds3231.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `bool`: ESP_OK se o display respondeu e foi inicializado com sucesso. esp_err_t oled_display_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_is_lock_anim_active()`
+
+```c
+bool oled_display_is_lock_anim_active(void);
+```
+
+**Descrição Técnica:**  
+Interface Gráfica de Usuário e Controle do Display OLED SSD1306 (128x64) Gerencia a renderização de telas, animações, layouts e menus monocromáticos através da biblioteca U8g2 operando sobre o barramento I2C Master (GPIO 10 SDA, GPIO 9 SCL) a 400 kHz, sincronizado na taxa estável de 25.0 FPS cravados. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "audio_player.h" #include "rtc_ds3231.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `bool`: ESP_OK se o display respondeu e foi inicializado com sucesso. esp_err_t oled_display_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_render_overlays()`
+
+```c
+void oled_display_render_overlays(void);
+```
+
+**Descrição Técnica:**  
+Interface Gráfica de Usuário e Controle do Display OLED SSD1306 (128x64) Gerencia a renderização de telas, animações, layouts e menus monocromáticos através da biblioteca U8g2 operando sobre o barramento I2C Master (GPIO 10 SDA, GPIO 9 SCL) a 400 kHz, sincronizado na taxa estável de 25.0 FPS cravados. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "audio_player.h" #include "rtc_ds3231.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: ESP_OK se o display respondeu e foi inicializado com sucesso. esp_err_t oled_display_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_set_anim_enabled()`
+
+```c
+void oled_display_set_anim_enabled(bool en);
+```
+
+**Descrição Técnica:**  
+Interface Gráfica de Usuário e Controle do Display OLED SSD1306 (128x64) Gerencia a renderização de telas, animações, layouts e menus monocromáticos através da biblioteca U8g2 operando sobre o barramento I2C Master (GPIO 10 SDA, GPIO 9 SCL) a 400 kHz, sincronizado na taxa estável de 25.0 FPS cravados. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "audio_player.h" #include "rtc_ds3231.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `cursor`: Índice do item selecionado (Play, Wifi, BT, Conf, USB, Life).
+- `now_playing`: Ponteiro para o estado atual de reprodução (ou NULL se ocioso). void oled_display_show_main_menu(int cursor, const playback_state_t *now_playing);
+- `en`: Parâmetro `bool en`.
+
+**Retorno:**  
+- `void`: ESP_OK se o display respondeu e foi inicializado com sucesso. esp_err_t oled_display_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_set_chord_hud()`
+
+```c
+void oled_display_set_chord_hud(bool visible, uint8_t progress_pct, int8_t selected_dir, bool is_liked);
+```
+
+**Descrição Técnica:**  
+Executa a operação `oled_display_set_chord_hud` no subsistema.
+
+**Parâmetros:**  
+- `visible`: Parâmetro `bool visible`.
+- `progress_pct`: Parâmetro `uint8_t progress_pct`.
+- `selected_dir`: Parâmetro `int8_t selected_dir`.
+- `is_liked`: Parâmetro `bool is_liked`.
+
+**Retorno:**  
+- `void`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_set_viz_mode()`
+
+```c
+void oled_display_set_viz_mode(oled_display_viz_mode_t mode);
+```
+
+**Descrição Técnica:**  
+Executa a operação `oled_display_set_viz_mode` no subsistema.
+
+**Parâmetros:**  
+- `mode`: Parâmetro `oled_display_viz_mode_t mode`.
+
+**Retorno:**  
+- `void`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_show_chrono()`
+
+```c
+void oled_display_show_chrono(bool running, uint32_t elapsed_ms, const uint32_t *laps, int lap_count);
+```
+
+**Descrição Técnica:**  
+Interface Gráfica de Usuário e Controle do Display OLED SSD1306 (128x64) Gerencia a renderização de telas, animações, layouts e menus monocromáticos através da biblioteca U8g2 operando sobre o barramento I2C Master (GPIO 10 SDA, GPIO 9 SCL) a 400 kHz, sincronizado na taxa estável de 25.0 FPS cravados. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "audio_player.h" #include "rtc_ds3231.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `cursor`: Posição do cursor no texto.
+- `now_playing`: Estado da música em segundo plano (ou NULL). void oled_display_show_list(const char **names, int count, int cursor, const playback_state_t *now_playing);
+- `state`: Ponteiro para o estado atual de reprodução (`playback_state_t`). typedef enum { VIZ_MODE_CLASSIC  = 0,  /**< Metadados classicos completos com badges tecnicas. */ VIZ_MODE_HYBRID   = 1,  /**< Hibrido: Metadados com mini VU estereo L/R na base. */ VIZ_MODE_SPECTRUM = 2,  /**< Espectro Hi-Fi / RTA em tela cheia com overlay dinamico. */ VIZ_MODE_ANALOG   = 3,  /**< Medidores Analogicos Vintage McIntosh/Technics duplos. */ VIZ_MODE_COUNT    = 4 } oled_display_viz_mode_t; void oled_display_set_viz_mode(oled_display_viz_mode_t mode); oled_display_viz_mode_t oled_display_get_viz_mode(void); void oled_display_cycle_viz_mode(void); void oled_display_trigger_viz_overlay(void); void oled_display_show_now_playing(const playback_state_t *state);
+- `names`: Vetor com nomes dos dispositivos descobertos.
+- `count`: Total de arquivos no lote.
+- `letter`: Caractere inicial alcançado pelo salto (ex: 'A'..'Z' ou '#'). void oled_display_trigger_az_hud(char letter);
+- `line1`: Texto da primeira linha.
+- `line2`: Texto da segunda linha (ou NULL). void oled_display_show_message(const char *line1, const char *line2);
+- `scanning`: true se a varredura Bluetooth ainda estiver ativa. void oled_display_show_bt_devices(const char **names, int count, int cursor, bool scanning);
+- `dev_name`: Nome do dispositivo conectado.
+- `codec_name`: Nome do codec ativo (ex: "Sony LDAC", "SBC").
+- `sample_rate`: Frequência em Hz (ex: 96000).
+- `rssi`: Nível de sinal Wi-Fi (-dBm). void oled_display_show_wifi_streaming(const char *filename, int buffer_pct, float kbps, int rssi);
+- `volume_percent`: Volume atual de 0 a 100%. void oled_display_show_volume(int volume_percent);
+- `balance`: Valor de -100 (L) a +100 (R). void oled_display_show_balance(int balance);
+- `label`: Rótulo ou cabeçalho da operação.
+- `filename`: Nome do arquivo incompatível.
+- `percent`: Progresso percentual do download.
+- `eta_sec`: Tempo restante do arquivo atual.
+- `overall_pct`: Progresso geral do lote.
+- `ip`: Endereço IP ativo.
+- `mdns_host`: Nome de domínio local.
+- `dns_active`: true se o servidor DNS captive portal estiver ligado.
+- `clients`: Número de clientes simultâneos conectados. void oled_display_show_wifi_connected(const char *ip, const char *mdns_host, int rssi, int clients);
+- `file_pct`: Progresso percentual do arquivo atual.
+- `idx`: Índice do arquivo atual.
+- `kbps`: Taxa de transferência em KB/s.
+- `total_eta`: Tempo estimado restante para o lote completo.
+- `buffer_pct`: Porcentagem bufferizada da faixa (0-100%).
+- `files_received`: Quantidade de arquivos recebidos com sucesso. void oled_display_show_wifi_done(int files_received); typedef struct { char ssid[33]; int8_t rssi; uint8_t authmode; } wifi_scan_display_ap_t; void oled_display_show_wifi_submenu(int cursor); void oled_display_show_wifi_scan(const wifi_scan_display_ap_t *aps, int count, int cursor, int top_idx, bool is_scanning); void oled_display_show_wifi_keyboard(const char *ssid, const char *input_buf, int cur_r, int cur_c, int shift_mode); void oled_display_show_wifi_manage(const char (*ssids)[33], const char (*passes)[65], int count, int cursor, int top_idx); void oled_display_show_wifi_network_action(const char *ssid, const char *pass, int action_cursor);
+- `gains`: Vetor de ganhos em dB das 10 bandas + ganho geral.
+- `selected_band`: Banda atualmente selecionada pelo cursor.
+- `eq_enabled`: Estado ligado/desligado do equalizador.
+- `r`: Valor do canal Vermelho (0 a 255).
+- `g`: Valor do canal Verde (0 a 255).
+- `b`: Valor do canal Azul (0 a 255).
+- `selected_channel`: Canal em ajuste (0=R, 1=G, 2=B).
+- `enabled`: Estado ligado/desligado do LED. void oled_display_show_led(uint8_t r, uint8_t g, uint8_t b, int selected_channel, bool enabled);
+- `level`: Contraste de 0 (mínimo legível) a 255 (brilho máximo). void oled_display_set_brightness(uint8_t level);
+- `enable`: true para colocar o display em sleep (apagar matriz); false para religar. void oled_display_set_power_save(bool enable);
+- `brightness`: Nível de brilho configurado.
+- `timeout_idx`: Índice da opção de timeout de tela.
+- `fallback_idx`: Índice do temporizador de retorno para reprodução. void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx, int fallback_idx);
+- `volume`: Volume percentual atual.
+- `eq_cfg`: Ponteiro para a estrutura de presets. void oled_display_show_eq_preset_list(int cursor, int active_preset, bool eq_enabled, const void *eq_cfg);
+- `eq_focus`: Preset de equalização selecionado.
+- `voltage`: Tensão da bateria em Volts.
+- `percentage`: Porcentagem da bateria.
+- `time_left_mins`: Estimativa de autonomia restante em minutos.
+- `active_preset`: Índice do preset atualmente ativo.
+- `text`: Texto já digitado.
+- `grid_x`: Posição horizontal na grade de teclas.
+- `grid_y`: Posição vertical na grade de teclas.
+- `page`: Página de caracteres (maiúsculas, minúsculas, números/símbolos).
+- `is_confirming`: true se o botão de confirmação estiver em foco. void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int grid_y, int page, bool is_confirming);
+- `reason`: Motivo ou detalhe do erro (ex: "FLAC max 24b/192k", "WAV max 32b/384k", "Formato nao suportado"). void oled_display_show_unsupported_ex(const char *filename, const char *reason);
+- `mode`: Modo selecionado (0=Nome, 1=Data). void oled_display_show_sort_mode(int mode);
+- `current_idx`: Opção selecionada (Desligado, 1 min, 5 min, 15 min, atalho [>]). void oled_display_show_deepsleep_cfg(int current_idx);
+- `status_msg`: Mensagem contextual de status. void oled_display_show_podcast_sync(const char *program, const char *title, int cur_idx, int total_idx, int percent, float speed_kbs, const char *status_msg);
+- `program`: Nome do canal ou podcast.
+- `title`: Título do episódio sendo baixado.
+- `cur_idx`: Índice da rede exibida no carrossel.
+- `total_idx`: Total de redes disponíveis para alternância. void oled_display_show_wifi_qr(const char *ssid, const char *pass, const char *tag_label, int cur_idx, int total_idx);
+- `speed_kbs`: Velocidade de transferência em KB/s.
+- `ssid`: Nome da rede Wi-Fi / SSID.
+- `pass`: Senha da rede Wi-Fi (ou vazio para redes abertas).
+- `tag_label`: Rótulo exibido no cabeçalho da tela.
+- `info`: Ponteiro para a estrutura de telemetria do RTC (`rtc_clock_info_t`). void oled_display_show_clock(const rtc_clock_info_t *info);
+- `running`: Parâmetro `bool running`.
+- `elapsed_ms`: Parâmetro `uint32_t elapsed_ms`.
+- `laps`: Parâmetro `const uint32_t *laps`.
+- `lap_count`: Parâmetro `int lap_count`.
+
+**Retorno:**  
+- `void`: ESP_OK se o display respondeu e foi inicializado com sucesso. esp_err_t oled_display_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_show_lock_clock()`
+
+```c
+void oled_display_show_lock_clock(const rtc_clock_info_t *info, bool is_locked, const char *track_title, int battery_pct, bool battery_charging);
+```
+
+**Descrição Técnica:**  
+Interface Gráfica de Usuário e Controle do Display OLED SSD1306 (128x64) Gerencia a renderização de telas, animações, layouts e menus monocromáticos através da biblioteca U8g2 operando sobre o barramento I2C Master (GPIO 10 SDA, GPIO 9 SCL) a 400 kHz, sincronizado na taxa estável de 25.0 FPS cravados. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "audio_player.h" #include "rtc_ds3231.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `cursor`: Posição do cursor no texto.
+- `now_playing`: Estado da música em segundo plano (ou NULL). void oled_display_show_list(const char **names, int count, int cursor, const playback_state_t *now_playing);
+- `state`: Ponteiro para o estado atual de reprodução (`playback_state_t`). typedef enum { VIZ_MODE_CLASSIC  = 0,  /**< Metadados classicos completos com badges tecnicas. */ VIZ_MODE_HYBRID   = 1,  /**< Hibrido: Metadados com mini VU estereo L/R na base. */ VIZ_MODE_SPECTRUM = 2,  /**< Espectro Hi-Fi / RTA em tela cheia com overlay dinamico. */ VIZ_MODE_ANALOG   = 3,  /**< Medidores Analogicos Vintage McIntosh/Technics duplos. */ VIZ_MODE_COUNT    = 4 } oled_display_viz_mode_t; void oled_display_set_viz_mode(oled_display_viz_mode_t mode); oled_display_viz_mode_t oled_display_get_viz_mode(void); void oled_display_cycle_viz_mode(void); void oled_display_trigger_viz_overlay(void); void oled_display_show_now_playing(const playback_state_t *state);
+- `names`: Vetor com nomes dos dispositivos descobertos.
+- `count`: Total de arquivos no lote.
+- `letter`: Caractere inicial alcançado pelo salto (ex: 'A'..'Z' ou '#'). void oled_display_trigger_az_hud(char letter);
+- `line1`: Texto da primeira linha.
+- `line2`: Texto da segunda linha (ou NULL). void oled_display_show_message(const char *line1, const char *line2);
+- `scanning`: true se a varredura Bluetooth ainda estiver ativa. void oled_display_show_bt_devices(const char **names, int count, int cursor, bool scanning);
+- `dev_name`: Nome do dispositivo conectado.
+- `codec_name`: Nome do codec ativo (ex: "Sony LDAC", "SBC").
+- `sample_rate`: Frequência em Hz (ex: 96000).
+- `rssi`: Nível de sinal Wi-Fi (-dBm). void oled_display_show_wifi_streaming(const char *filename, int buffer_pct, float kbps, int rssi);
+- `volume_percent`: Volume atual de 0 a 100%. void oled_display_show_volume(int volume_percent);
+- `balance`: Valor de -100 (L) a +100 (R). void oled_display_show_balance(int balance);
+- `label`: Rótulo ou cabeçalho da operação.
+- `filename`: Nome do arquivo incompatível.
+- `percent`: Progresso percentual do download.
+- `eta_sec`: Tempo restante do arquivo atual.
+- `overall_pct`: Progresso geral do lote.
+- `ip`: Endereço IP ativo.
+- `mdns_host`: Nome de domínio local.
+- `dns_active`: true se o servidor DNS captive portal estiver ligado.
+- `clients`: Número de clientes simultâneos conectados. void oled_display_show_wifi_connected(const char *ip, const char *mdns_host, int rssi, int clients);
+- `file_pct`: Progresso percentual do arquivo atual.
+- `idx`: Índice do arquivo atual.
+- `kbps`: Taxa de transferência em KB/s.
+- `total_eta`: Tempo estimado restante para o lote completo.
+- `buffer_pct`: Porcentagem bufferizada da faixa (0-100%).
+- `files_received`: Quantidade de arquivos recebidos com sucesso. void oled_display_show_wifi_done(int files_received); typedef struct { char ssid[33]; int8_t rssi; uint8_t authmode; } wifi_scan_display_ap_t; void oled_display_show_wifi_submenu(int cursor); void oled_display_show_wifi_scan(const wifi_scan_display_ap_t *aps, int count, int cursor, int top_idx, bool is_scanning); void oled_display_show_wifi_keyboard(const char *ssid, const char *input_buf, int cur_r, int cur_c, int shift_mode); void oled_display_show_wifi_manage(const char (*ssids)[33], const char (*passes)[65], int count, int cursor, int top_idx); void oled_display_show_wifi_network_action(const char *ssid, const char *pass, int action_cursor);
+- `gains`: Vetor de ganhos em dB das 10 bandas + ganho geral.
+- `selected_band`: Banda atualmente selecionada pelo cursor.
+- `eq_enabled`: Estado ligado/desligado do equalizador.
+- `r`: Valor do canal Vermelho (0 a 255).
+- `g`: Valor do canal Verde (0 a 255).
+- `b`: Valor do canal Azul (0 a 255).
+- `selected_channel`: Canal em ajuste (0=R, 1=G, 2=B).
+- `enabled`: Estado ligado/desligado do LED. void oled_display_show_led(uint8_t r, uint8_t g, uint8_t b, int selected_channel, bool enabled);
+- `level`: Contraste de 0 (mínimo legível) a 255 (brilho máximo). void oled_display_set_brightness(uint8_t level);
+- `enable`: true para colocar o display em sleep (apagar matriz); false para religar. void oled_display_set_power_save(bool enable);
+- `brightness`: Nível de brilho configurado.
+- `timeout_idx`: Índice da opção de timeout de tela.
+- `fallback_idx`: Índice do temporizador de retorno para reprodução. void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx, int fallback_idx);
+- `volume`: Volume percentual atual.
+- `eq_cfg`: Ponteiro para a estrutura de presets. void oled_display_show_eq_preset_list(int cursor, int active_preset, bool eq_enabled, const void *eq_cfg);
+- `eq_focus`: Preset de equalização selecionado.
+- `voltage`: Tensão da bateria em Volts.
+- `percentage`: Porcentagem da bateria.
+- `time_left_mins`: Estimativa de autonomia restante em minutos.
+- `active_preset`: Índice do preset atualmente ativo.
+- `text`: Texto já digitado.
+- `grid_x`: Posição horizontal na grade de teclas.
+- `grid_y`: Posição vertical na grade de teclas.
+- `page`: Página de caracteres (maiúsculas, minúsculas, números/símbolos).
+- `is_confirming`: true se o botão de confirmação estiver em foco. void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int grid_y, int page, bool is_confirming);
+- `reason`: Motivo ou detalhe do erro (ex: "FLAC max 24b/192k", "WAV max 32b/384k", "Formato nao suportado"). void oled_display_show_unsupported_ex(const char *filename, const char *reason);
+- `mode`: Modo selecionado (0=Nome, 1=Data). void oled_display_show_sort_mode(int mode);
+- `current_idx`: Opção selecionada (Desligado, 1 min, 5 min, 15 min, atalho [>]). void oled_display_show_deepsleep_cfg(int current_idx);
+- `status_msg`: Mensagem contextual de status. void oled_display_show_podcast_sync(const char *program, const char *title, int cur_idx, int total_idx, int percent, float speed_kbs, const char *status_msg);
+- `program`: Nome do canal ou podcast.
+- `title`: Título do episódio sendo baixado.
+- `cur_idx`: Índice da rede exibida no carrossel.
+- `total_idx`: Total de redes disponíveis para alternância. void oled_display_show_wifi_qr(const char *ssid, const char *pass, const char *tag_label, int cur_idx, int total_idx);
+- `speed_kbs`: Velocidade de transferência em KB/s.
+- `ssid`: Nome da rede Wi-Fi / SSID.
+- `pass`: Senha da rede Wi-Fi (ou vazio para redes abertas).
+- `tag_label`: Rótulo exibido no cabeçalho da tela.
+- `info`: Ponteiro para a estrutura de telemetria do RTC (`rtc_clock_info_t`). void oled_display_show_clock(const rtc_clock_info_t *info);
+- `is_locked`: Parâmetro `bool is_locked`.
+- `track_title`: Parâmetro `const char *track_title`.
+- `battery_pct`: Parâmetro `int battery_pct`.
+- `battery_charging`: Parâmetro `bool battery_charging`.
+
+**Retorno:**  
+- `void`: ESP_OK se o display respondeu e foi inicializado com sucesso. esp_err_t oled_display_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_show_lock_clock_cfg()`
+
+```c
+void oled_display_show_lock_clock_cfg(int opt_idx);
+```
+
+**Descrição Técnica:**  
+Interface Gráfica de Usuário e Controle do Display OLED SSD1306 (128x64) Gerencia a renderização de telas, animações, layouts e menus monocromáticos através da biblioteca U8g2 operando sobre o barramento I2C Master (GPIO 10 SDA, GPIO 9 SCL) a 400 kHz, sincronizado na taxa estável de 25.0 FPS cravados. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "audio_player.h" #include "rtc_ds3231.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `cursor`: Posição do cursor no texto.
+- `now_playing`: Estado da música em segundo plano (ou NULL). void oled_display_show_list(const char **names, int count, int cursor, const playback_state_t *now_playing);
+- `state`: Ponteiro para o estado atual de reprodução (`playback_state_t`). typedef enum { VIZ_MODE_CLASSIC  = 0,  /**< Metadados classicos completos com badges tecnicas. */ VIZ_MODE_HYBRID   = 1,  /**< Hibrido: Metadados com mini VU estereo L/R na base. */ VIZ_MODE_SPECTRUM = 2,  /**< Espectro Hi-Fi / RTA em tela cheia com overlay dinamico. */ VIZ_MODE_ANALOG   = 3,  /**< Medidores Analogicos Vintage McIntosh/Technics duplos. */ VIZ_MODE_COUNT    = 4 } oled_display_viz_mode_t; void oled_display_set_viz_mode(oled_display_viz_mode_t mode); oled_display_viz_mode_t oled_display_get_viz_mode(void); void oled_display_cycle_viz_mode(void); void oled_display_trigger_viz_overlay(void); void oled_display_show_now_playing(const playback_state_t *state);
+- `names`: Vetor com nomes dos dispositivos descobertos.
+- `count`: Total de arquivos no lote.
+- `letter`: Caractere inicial alcançado pelo salto (ex: 'A'..'Z' ou '#'). void oled_display_trigger_az_hud(char letter);
+- `line1`: Texto da primeira linha.
+- `line2`: Texto da segunda linha (ou NULL). void oled_display_show_message(const char *line1, const char *line2);
+- `scanning`: true se a varredura Bluetooth ainda estiver ativa. void oled_display_show_bt_devices(const char **names, int count, int cursor, bool scanning);
+- `dev_name`: Nome do dispositivo conectado.
+- `codec_name`: Nome do codec ativo (ex: "Sony LDAC", "SBC").
+- `sample_rate`: Frequência em Hz (ex: 96000).
+- `rssi`: Nível de sinal Wi-Fi (-dBm). void oled_display_show_wifi_streaming(const char *filename, int buffer_pct, float kbps, int rssi);
+- `volume_percent`: Volume atual de 0 a 100%. void oled_display_show_volume(int volume_percent);
+- `balance`: Valor de -100 (L) a +100 (R). void oled_display_show_balance(int balance);
+- `label`: Rótulo ou cabeçalho da operação.
+- `filename`: Nome do arquivo incompatível.
+- `percent`: Progresso percentual do download.
+- `eta_sec`: Tempo restante do arquivo atual.
+- `overall_pct`: Progresso geral do lote.
+- `ip`: Endereço IP ativo.
+- `mdns_host`: Nome de domínio local.
+- `dns_active`: true se o servidor DNS captive portal estiver ligado.
+- `clients`: Número de clientes simultâneos conectados. void oled_display_show_wifi_connected(const char *ip, const char *mdns_host, int rssi, int clients);
+- `file_pct`: Progresso percentual do arquivo atual.
+- `idx`: Índice do arquivo atual.
+- `kbps`: Taxa de transferência em KB/s.
+- `total_eta`: Tempo estimado restante para o lote completo.
+- `buffer_pct`: Porcentagem bufferizada da faixa (0-100%).
+- `files_received`: Quantidade de arquivos recebidos com sucesso. void oled_display_show_wifi_done(int files_received); typedef struct { char ssid[33]; int8_t rssi; uint8_t authmode; } wifi_scan_display_ap_t; void oled_display_show_wifi_submenu(int cursor); void oled_display_show_wifi_scan(const wifi_scan_display_ap_t *aps, int count, int cursor, int top_idx, bool is_scanning); void oled_display_show_wifi_keyboard(const char *ssid, const char *input_buf, int cur_r, int cur_c, int shift_mode); void oled_display_show_wifi_manage(const char (*ssids)[33], const char (*passes)[65], int count, int cursor, int top_idx); void oled_display_show_wifi_network_action(const char *ssid, const char *pass, int action_cursor);
+- `gains`: Vetor de ganhos em dB das 10 bandas + ganho geral.
+- `selected_band`: Banda atualmente selecionada pelo cursor.
+- `eq_enabled`: Estado ligado/desligado do equalizador.
+- `r`: Valor do canal Vermelho (0 a 255).
+- `g`: Valor do canal Verde (0 a 255).
+- `b`: Valor do canal Azul (0 a 255).
+- `selected_channel`: Canal em ajuste (0=R, 1=G, 2=B).
+- `enabled`: Estado ligado/desligado do LED. void oled_display_show_led(uint8_t r, uint8_t g, uint8_t b, int selected_channel, bool enabled);
+- `level`: Contraste de 0 (mínimo legível) a 255 (brilho máximo). void oled_display_set_brightness(uint8_t level);
+- `enable`: true para colocar o display em sleep (apagar matriz); false para religar. void oled_display_set_power_save(bool enable);
+- `brightness`: Nível de brilho configurado.
+- `timeout_idx`: Índice da opção de timeout de tela.
+- `fallback_idx`: Índice do temporizador de retorno para reprodução. void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx, int fallback_idx);
+- `volume`: Volume percentual atual.
+- `eq_cfg`: Ponteiro para a estrutura de presets. void oled_display_show_eq_preset_list(int cursor, int active_preset, bool eq_enabled, const void *eq_cfg);
+- `eq_focus`: Preset de equalização selecionado.
+- `voltage`: Tensão da bateria em Volts.
+- `percentage`: Porcentagem da bateria.
+- `time_left_mins`: Estimativa de autonomia restante em minutos.
+- `active_preset`: Índice do preset atualmente ativo.
+- `text`: Texto já digitado.
+- `grid_x`: Posição horizontal na grade de teclas.
+- `grid_y`: Posição vertical na grade de teclas.
+- `page`: Página de caracteres (maiúsculas, minúsculas, números/símbolos).
+- `is_confirming`: true se o botão de confirmação estiver em foco. void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int grid_y, int page, bool is_confirming);
+- `reason`: Motivo ou detalhe do erro (ex: "FLAC max 24b/192k", "WAV max 32b/384k", "Formato nao suportado"). void oled_display_show_unsupported_ex(const char *filename, const char *reason);
+- `mode`: Modo selecionado (0=Nome, 1=Data). void oled_display_show_sort_mode(int mode);
+- `current_idx`: Opção selecionada (Desligado, 1 min, 5 min, 15 min, atalho [>]). void oled_display_show_deepsleep_cfg(int current_idx);
+- `status_msg`: Mensagem contextual de status. void oled_display_show_podcast_sync(const char *program, const char *title, int cur_idx, int total_idx, int percent, float speed_kbs, const char *status_msg);
+- `program`: Nome do canal ou podcast.
+- `title`: Título do episódio sendo baixado.
+- `cur_idx`: Índice da rede exibida no carrossel.
+- `total_idx`: Total de redes disponíveis para alternância. void oled_display_show_wifi_qr(const char *ssid, const char *pass, const char *tag_label, int cur_idx, int total_idx);
+- `speed_kbs`: Velocidade de transferência em KB/s.
+- `ssid`: Nome da rede Wi-Fi / SSID.
+- `pass`: Senha da rede Wi-Fi (ou vazio para redes abertas).
+- `tag_label`: Rótulo exibido no cabeçalho da tela.
+- `info`: Ponteiro para a estrutura de telemetria do RTC (`rtc_clock_info_t`). void oled_display_show_clock(const rtc_clock_info_t *info);
+- `opt_idx`: Parâmetro `int opt_idx`.
+
+**Retorno:**  
+- `void`: ESP_OK se o display respondeu e foi inicializado com sucesso. esp_err_t oled_display_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_show_wifi_keyboard()`
+
+```c
+void oled_display_show_wifi_keyboard(const char *ssid, const char *input_buf, int cur_r, int cur_c, int shift_mode);
+```
+
+**Descrição Técnica:**  
+Executa a operação `oled_display_show_wifi_keyboard` no subsistema.
+
+**Parâmetros:**  
+- `ssid`: Parâmetro `const char *ssid`.
+- `input_buf`: Parâmetro `const char *input_buf`.
+- `cur_r`: Parâmetro `int cur_r`.
+- `cur_c`: Parâmetro `int cur_c`.
+- `shift_mode`: Parâmetro `int shift_mode`.
+
+**Retorno:**  
+- `void`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_show_wifi_manage()`
+
+```c
+void oled_display_show_wifi_manage(const char (*ssids)[33], const char (*passes)[65], int count, int cursor, int top_idx);
+```
+
+**Descrição Técnica:**  
+Executa a operação `oled_display_show_wifi_manage` no subsistema.
+
+**Parâmetros:**  
+- `(ssids)[33]`: Parâmetro `const char (*ssids)[33]`.
+- `(passes)[65]`: Parâmetro `const char (*passes)[65]`.
+- `count`: Parâmetro `int count`.
+- `cursor`: Parâmetro `int cursor`.
+- `top_idx`: Parâmetro `int top_idx`.
+
+**Retorno:**  
+- `void`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_show_wifi_network_action()`
+
+```c
+void oled_display_show_wifi_network_action(const char *ssid, const char *pass, int action_cursor);
+```
+
+**Descrição Técnica:**  
+Executa a operação `oled_display_show_wifi_network_action` no subsistema.
+
+**Parâmetros:**  
+- `ssid`: Parâmetro `const char *ssid`.
+- `pass`: Parâmetro `const char *pass`.
+- `action_cursor`: Parâmetro `int action_cursor`.
+
+**Retorno:**  
+- `void`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_show_wifi_scan()`
+
+```c
+void oled_display_show_wifi_scan(const wifi_scan_display_ap_t *aps, int count, int cursor, int top_idx, bool is_scanning);
+```
+
+**Descrição Técnica:**  
+Executa a operação `oled_display_show_wifi_scan` no subsistema.
+
+**Parâmetros:**  
+- `aps`: Parâmetro `const wifi_scan_display_ap_t *aps`.
+- `count`: Parâmetro `int count`.
+- `cursor`: Parâmetro `int cursor`.
+- `top_idx`: Parâmetro `int top_idx`.
+- `is_scanning`: Parâmetro `bool is_scanning`.
+
+**Retorno:**  
+- `void`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_show_wifi_submenu()`
+
+```c
+void oled_display_show_wifi_submenu(int cursor);
+```
+
+**Descrição Técnica:**  
+Executa a operação `oled_display_show_wifi_submenu` no subsistema.
+
+**Parâmetros:**  
+- `cursor`: Parâmetro `int cursor`.
+
+**Retorno:**  
+- `void`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_trigger_heart_anim()`
+
+```c
+void oled_display_trigger_heart_anim(bool liked, const char *toast_msg);
+```
+
+**Descrição Técnica:**  
+Interface Gráfica de Usuário e Controle do Display OLED SSD1306 (128x64) Gerencia a renderização de telas, animações, layouts e menus monocromáticos através da biblioteca U8g2 operando sobre o barramento I2C Master (GPIO 10 SDA, GPIO 9 SCL) a 400 kHz, sincronizado na taxa estável de 25.0 FPS cravados. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "audio_player.h" #include "rtc_ds3231.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `cursor`: Posição do cursor no texto.
+- `now_playing`: Estado da música em segundo plano (ou NULL). void oled_display_show_list(const char **names, int count, int cursor, const playback_state_t *now_playing);
+- `state`: Ponteiro para o estado atual de reprodução (`playback_state_t`). typedef enum { VIZ_MODE_CLASSIC  = 0,  /**< Metadados classicos completos com badges tecnicas. */ VIZ_MODE_HYBRID   = 1,  /**< Hibrido: Metadados com mini VU estereo L/R na base. */ VIZ_MODE_SPECTRUM = 2,  /**< Espectro Hi-Fi / RTA em tela cheia com overlay dinamico. */ VIZ_MODE_ANALOG   = 3,  /**< Medidores Analogicos Vintage McIntosh/Technics duplos. */ VIZ_MODE_COUNT    = 4 } oled_display_viz_mode_t; void oled_display_set_viz_mode(oled_display_viz_mode_t mode); oled_display_viz_mode_t oled_display_get_viz_mode(void); void oled_display_cycle_viz_mode(void); void oled_display_trigger_viz_overlay(void); void oled_display_show_now_playing(const playback_state_t *state);
+- `names`: Vetor com nomes dos dispositivos descobertos.
+- `count`: Total de arquivos no lote.
+- `letter`: Caractere inicial alcançado pelo salto (ex: 'A'..'Z' ou '#'). void oled_display_trigger_az_hud(char letter);
+- `line1`: Texto da primeira linha.
+- `line2`: Texto da segunda linha (ou NULL). void oled_display_show_message(const char *line1, const char *line2);
+- `scanning`: true se a varredura Bluetooth ainda estiver ativa. void oled_display_show_bt_devices(const char **names, int count, int cursor, bool scanning);
+- `dev_name`: Nome do dispositivo conectado.
+- `codec_name`: Nome do codec ativo (ex: "Sony LDAC", "SBC").
+- `sample_rate`: Frequência em Hz (ex: 96000).
+- `rssi`: Nível de sinal Wi-Fi (-dBm). void oled_display_show_wifi_streaming(const char *filename, int buffer_pct, float kbps, int rssi);
+- `volume_percent`: Volume atual de 0 a 100%. void oled_display_show_volume(int volume_percent);
+- `balance`: Valor de -100 (L) a +100 (R). void oled_display_show_balance(int balance);
+- `label`: Rótulo ou cabeçalho da operação.
+- `filename`: Nome do arquivo incompatível.
+- `percent`: Progresso percentual do download.
+- `eta_sec`: Tempo restante do arquivo atual.
+- `overall_pct`: Progresso geral do lote.
+- `ip`: Endereço IP ativo.
+- `mdns_host`: Nome de domínio local.
+- `dns_active`: true se o servidor DNS captive portal estiver ligado.
+- `clients`: Número de clientes simultâneos conectados. void oled_display_show_wifi_connected(const char *ip, const char *mdns_host, int rssi, int clients);
+- `file_pct`: Progresso percentual do arquivo atual.
+- `idx`: Índice do arquivo atual.
+- `kbps`: Taxa de transferência em KB/s.
+- `total_eta`: Tempo estimado restante para o lote completo.
+- `buffer_pct`: Porcentagem bufferizada da faixa (0-100%).
+- `files_received`: Quantidade de arquivos recebidos com sucesso. void oled_display_show_wifi_done(int files_received); typedef struct { char ssid[33]; int8_t rssi; uint8_t authmode; } wifi_scan_display_ap_t; void oled_display_show_wifi_submenu(int cursor); void oled_display_show_wifi_scan(const wifi_scan_display_ap_t *aps, int count, int cursor, int top_idx, bool is_scanning); void oled_display_show_wifi_keyboard(const char *ssid, const char *input_buf, int cur_r, int cur_c, int shift_mode); void oled_display_show_wifi_manage(const char (*ssids)[33], const char (*passes)[65], int count, int cursor, int top_idx); void oled_display_show_wifi_network_action(const char *ssid, const char *pass, int action_cursor);
+- `gains`: Vetor de ganhos em dB das 10 bandas + ganho geral.
+- `selected_band`: Banda atualmente selecionada pelo cursor.
+- `eq_enabled`: Estado ligado/desligado do equalizador.
+- `r`: Valor do canal Vermelho (0 a 255).
+- `g`: Valor do canal Verde (0 a 255).
+- `b`: Valor do canal Azul (0 a 255).
+- `selected_channel`: Canal em ajuste (0=R, 1=G, 2=B).
+- `enabled`: Estado ligado/desligado do LED. void oled_display_show_led(uint8_t r, uint8_t g, uint8_t b, int selected_channel, bool enabled);
+- `level`: Contraste de 0 (mínimo legível) a 255 (brilho máximo). void oled_display_set_brightness(uint8_t level);
+- `enable`: true para colocar o display em sleep (apagar matriz); false para religar. void oled_display_set_power_save(bool enable);
+- `brightness`: Nível de brilho configurado.
+- `timeout_idx`: Índice da opção de timeout de tela.
+- `fallback_idx`: Índice do temporizador de retorno para reprodução. void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx, int fallback_idx);
+- `volume`: Volume percentual atual.
+- `eq_cfg`: Ponteiro para a estrutura de presets. void oled_display_show_eq_preset_list(int cursor, int active_preset, bool eq_enabled, const void *eq_cfg);
+- `eq_focus`: Preset de equalização selecionado.
+- `voltage`: Tensão da bateria em Volts.
+- `percentage`: Porcentagem da bateria.
+- `time_left_mins`: Estimativa de autonomia restante em minutos.
+- `active_preset`: Índice do preset atualmente ativo.
+- `text`: Texto já digitado.
+- `grid_x`: Posição horizontal na grade de teclas.
+- `grid_y`: Posição vertical na grade de teclas.
+- `page`: Página de caracteres (maiúsculas, minúsculas, números/símbolos).
+- `is_confirming`: true se o botão de confirmação estiver em foco. void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int grid_y, int page, bool is_confirming);
+- `reason`: Motivo ou detalhe do erro (ex: "FLAC max 24b/192k", "WAV max 32b/384k", "Formato nao suportado"). void oled_display_show_unsupported_ex(const char *filename, const char *reason);
+- `mode`: Modo selecionado (0=Nome, 1=Data). void oled_display_show_sort_mode(int mode);
+- `current_idx`: Opção selecionada (Desligado, 1 min, 5 min, 15 min, atalho [>]). void oled_display_show_deepsleep_cfg(int current_idx);
+- `status_msg`: Mensagem contextual de status. void oled_display_show_podcast_sync(const char *program, const char *title, int cur_idx, int total_idx, int percent, float speed_kbs, const char *status_msg);
+- `program`: Nome do canal ou podcast.
+- `title`: Título do episódio sendo baixado.
+- `cur_idx`: Índice da rede exibida no carrossel.
+- `total_idx`: Total de redes disponíveis para alternância. void oled_display_show_wifi_qr(const char *ssid, const char *pass, const char *tag_label, int cur_idx, int total_idx);
+- `speed_kbs`: Velocidade de transferência em KB/s.
+- `ssid`: Nome da rede Wi-Fi / SSID.
+- `pass`: Senha da rede Wi-Fi (ou vazio para redes abertas).
+- `tag_label`: Rótulo exibido no cabeçalho da tela.
+- `info`: Ponteiro para a estrutura de telemetria do RTC (`rtc_clock_info_t`). void oled_display_show_clock(const rtc_clock_info_t *info);
+- `dest_buf`: Ponteiro para buffer de pelo menos 1024 bytes.
+- `liked`: true para coração cheio (Like), false para partido (Unlike).
+- `toast_msg`: Mensagem de feedback (ex: "+ Favoritos", "- Favoritos").
+
+**Retorno:**  
+- `void`: ESP_OK se o display respondeu e foi inicializado com sucesso. esp_err_t oled_display_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_trigger_lock_anim()`
+
+```c
+void oled_display_trigger_lock_anim(bool closing);
+```
+
+**Descrição Técnica:**  
+Interface Gráfica de Usuário e Controle do Display OLED SSD1306 (128x64) Gerencia a renderização de telas, animações, layouts e menus monocromáticos através da biblioteca U8g2 operando sobre o barramento I2C Master (GPIO 10 SDA, GPIO 9 SCL) a 400 kHz, sincronizado na taxa estável de 25.0 FPS cravados. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "audio_player.h" #include "rtc_ds3231.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `cursor`: Posição do cursor no texto.
+- `now_playing`: Estado da música em segundo plano (ou NULL). void oled_display_show_list(const char **names, int count, int cursor, const playback_state_t *now_playing);
+- `state`: Ponteiro para o estado atual de reprodução (`playback_state_t`). typedef enum { VIZ_MODE_CLASSIC  = 0,  /**< Metadados classicos completos com badges tecnicas. */ VIZ_MODE_HYBRID   = 1,  /**< Hibrido: Metadados com mini VU estereo L/R na base. */ VIZ_MODE_SPECTRUM = 2,  /**< Espectro Hi-Fi / RTA em tela cheia com overlay dinamico. */ VIZ_MODE_ANALOG   = 3,  /**< Medidores Analogicos Vintage McIntosh/Technics duplos. */ VIZ_MODE_COUNT    = 4 } oled_display_viz_mode_t; void oled_display_set_viz_mode(oled_display_viz_mode_t mode); oled_display_viz_mode_t oled_display_get_viz_mode(void); void oled_display_cycle_viz_mode(void); void oled_display_trigger_viz_overlay(void); void oled_display_show_now_playing(const playback_state_t *state);
+- `names`: Vetor com nomes dos dispositivos descobertos.
+- `count`: Total de arquivos no lote.
+- `letter`: Caractere inicial alcançado pelo salto (ex: 'A'..'Z' ou '#'). void oled_display_trigger_az_hud(char letter);
+- `line1`: Texto da linha principal de confirmacao (ex: "FAVORITADO").
+- `line2`: Texto complementar secundario (ex: nome da playlist ou acao).
+- `scanning`: true se a varredura Bluetooth ainda estiver ativa. void oled_display_show_bt_devices(const char **names, int count, int cursor, bool scanning);
+- `dev_name`: Nome do dispositivo conectado.
+- `codec_name`: Nome do codec ativo (ex: "Sony LDAC", "SBC").
+- `sample_rate`: Frequência em Hz (ex: 96000).
+- `rssi`: Nível de sinal Wi-Fi (-dBm). void oled_display_show_wifi_streaming(const char *filename, int buffer_pct, float kbps, int rssi);
+- `volume_percent`: Volume atual de 0 a 100%. void oled_display_show_volume(int volume_percent);
+- `balance`: Valor de -100 (L) a +100 (R). void oled_display_show_balance(int balance);
+- `label`: Rótulo ou cabeçalho da operação.
+- `filename`: Nome do arquivo incompatível.
+- `percent`: Progresso percentual do download.
+- `eta_sec`: Tempo restante do arquivo atual.
+- `overall_pct`: Progresso geral do lote.
+- `ip`: Endereço IP ativo.
+- `mdns_host`: Nome de domínio local.
+- `dns_active`: true se o servidor DNS captive portal estiver ligado.
+- `clients`: Número de clientes simultâneos conectados. void oled_display_show_wifi_connected(const char *ip, const char *mdns_host, int rssi, int clients);
+- `file_pct`: Progresso percentual do arquivo atual.
+- `idx`: Índice do arquivo atual.
+- `kbps`: Taxa de transferência em KB/s.
+- `total_eta`: Tempo estimado restante para o lote completo.
+- `buffer_pct`: Porcentagem bufferizada da faixa (0-100%).
+- `files_received`: Quantidade de arquivos recebidos com sucesso. void oled_display_show_wifi_done(int files_received); typedef struct { char ssid[33]; int8_t rssi; uint8_t authmode; } wifi_scan_display_ap_t; void oled_display_show_wifi_submenu(int cursor); void oled_display_show_wifi_scan(const wifi_scan_display_ap_t *aps, int count, int cursor, int top_idx, bool is_scanning); void oled_display_show_wifi_keyboard(const char *ssid, const char *input_buf, int cur_r, int cur_c, int shift_mode); void oled_display_show_wifi_manage(const char (*ssids)[33], const char (*passes)[65], int count, int cursor, int top_idx); void oled_display_show_wifi_network_action(const char *ssid, const char *pass, int action_cursor);
+- `gains`: Vetor de ganhos em dB das 10 bandas + ganho geral.
+- `selected_band`: Banda atualmente selecionada pelo cursor.
+- `eq_enabled`: Estado ligado/desligado do equalizador.
+- `r`: Valor do canal Vermelho (0 a 255).
+- `g`: Valor do canal Verde (0 a 255).
+- `b`: Valor do canal Azul (0 a 255).
+- `selected_channel`: Canal em ajuste (0=R, 1=G, 2=B).
+- `enabled`: Estado ligado/desligado do LED. void oled_display_show_led(uint8_t r, uint8_t g, uint8_t b, int selected_channel, bool enabled);
+- `level`: Contraste de 0 (mínimo legível) a 255 (brilho máximo). void oled_display_set_brightness(uint8_t level);
+- `enable`: true para colocar o display em sleep (apagar matriz); false para religar. void oled_display_set_power_save(bool enable);
+- `brightness`: Nível de brilho configurado.
+- `timeout_idx`: Índice da opção de timeout de tela.
+- `fallback_idx`: Índice do temporizador de retorno para reprodução. void oled_display_show_tela(int cursor, uint8_t brightness, int timeout_idx, int fallback_idx);
+- `volume`: Volume percentual atual.
+- `eq_cfg`: Ponteiro para a estrutura de presets. void oled_display_show_eq_preset_list(int cursor, int active_preset, bool eq_enabled, const void *eq_cfg);
+- `eq_focus`: Preset de equalização selecionado.
+- `voltage`: Tensão da bateria em Volts.
+- `percentage`: Porcentagem da bateria.
+- `time_left_mins`: Estimativa de autonomia restante em minutos.
+- `active_preset`: Índice do preset atualmente ativo.
+- `text`: Texto já digitado.
+- `grid_x`: Posição horizontal na grade de teclas.
+- `grid_y`: Posição vertical na grade de teclas.
+- `page`: Página de caracteres (maiúsculas, minúsculas, números/símbolos).
+- `is_confirming`: true se o botão de confirmação estiver em foco. void oled_display_show_keyboard(const char *text, int cursor, int grid_x, int grid_y, int page, bool is_confirming);
+- `reason`: Motivo ou detalhe do erro (ex: "FLAC max 24b/192k", "WAV max 32b/384k", "Formato nao suportado"). void oled_display_show_unsupported_ex(const char *filename, const char *reason);
+- `mode`: Tipo da semi aba ativa (NONE, PLAYLISTS ou EQUALIZER).
+- `current_idx`: Opção selecionada (Desligado, 1 min, 5 min, 15 min, atalho [>]). void oled_display_show_deepsleep_cfg(int current_idx);
+- `status_msg`: Mensagem contextual de status. void oled_display_show_podcast_sync(const char *program, const char *title, int cur_idx, int total_idx, int percent, float speed_kbs, const char *status_msg);
+- `program`: Nome do canal ou podcast.
+- `title`: Título do episódio sendo baixado.
+- `cur_idx`: Índice da rede exibida no carrossel.
+- `total_idx`: Total de redes disponíveis para alternância. void oled_display_show_wifi_qr(const char *ssid, const char *pass, const char *tag_label, int cur_idx, int total_idx);
+- `speed_kbs`: Velocidade de transferência em KB/s.
+- `ssid`: Nome da rede Wi-Fi / SSID.
+- `pass`: Senha da rede Wi-Fi (ou vazio para redes abertas).
+- `tag_label`: Rótulo exibido no cabeçalho da tela.
+- `info`: Ponteiro para a estrutura de telemetria do RTC (`rtc_clock_info_t`). void oled_display_show_clock(const rtc_clock_info_t *info);
+- `dest_buf`: Ponteiro para buffer de pelo menos 1024 bytes.
+- `liked`: true para coração cheio (Like), false para partido (Unlike).
+- `toast_msg`: Mensagem de feedback (ex: "+ Favoritos", "- Favoritos"). void oled_display_trigger_heart_anim(bool liked, const char *toast_msg);
+- `visible`: true se o HUD deve ser desenhado na tela.
+- `progress_pct`: Progresso de 0 a 100% até o bloqueio completo.
+- `selected_dir`: Direção ativa (-1 = nenhuma, 0 = UP, 1 = DOWN, 2 = LEFT, 3 = RIGHT). typedef enum { CHORD_DRAWER_NONE = 0, CHORD_DRAWER_PLAYLISTS, // Esquerda: Semi Aba de Playlists CHORD_DRAWER_EQUALIZER, // Direita: Semi Aba de Presets do Equalizador CHORD_DRAWER_MODES      // Baixo: Semi Aba de Modos de Reproducao (Loop e Shuffle) } chord_drawer_mode_t;
+- `expand_pct`: Porcentagem de expansao da bolha (0..100%).
+- `items`: Vetor de strings com os nomes dos itens (playlists ou presets de EQ).
+- `item_count`: Total de itens no vetor.
+- `cursor_idx`: Indice do item em foco.
+- `active_idx`: Indice do item atualmente em vigor no audio. void oled_display_set_chord_drawer(chord_drawer_mode_t mode, uint8_t expand_pct, const char **items, int item_count, int cursor_idx, int active_idx); void oled_display_set_chord_hud(bool visible, uint8_t progress_pct, int8_t selected_dir, bool is_liked);
+- `cx`: Coordenada X do centro da bolha (ex: 64, 0, 127).
+- `cy`: Coordenada Y do centro da bolha (ex: 0, 63, 31).
+- `icon_16x16`: Bitmap XBM 16x16 opcional (ex: coracao cheio/quebrado, ou NULL). void oled_display_trigger_bubble_expand_toast(int cx, int cy, const char *line1, const char *line2, const uint8_t *icon_16x16);
+- `closing`: true para fechar/bloquear (0 -> 74 px), false para abrir/desbloquear (74 -> 0 px).
+
+**Retorno:**  
+- `void`: ESP_OK se o display respondeu e foi inicializado com sucesso. esp_err_t oled_display_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `oled_display_trigger_viz_overlay()`
+
+```c
+void oled_display_trigger_viz_overlay(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `oled_display_trigger_viz_overlay` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `u8x8_cad_mps3_fast_i2c()`
+
+```c
+uint8_t u8x8_cad_mps3_fast_i2c(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr);
+```
+
+**Descrição Técnica:**  
+Camada de Abstração de Hardware (HAL) I2C para a Biblioteca Gráfica U8g2 Implementa a ponte de comunicação entre as rotinas de baixo nível da biblioteca U8g2/U8x8 e o driver mestre I2C moderno do ESP-IDF (`esp_driver_i2c_master`), fornecendo suporte a compartilhamento seguro do barramento físico com outros periféricos (como o RTC DS3231). #include <stdint.h> #include "esp_err.h" #include "driver/i2c_master.h" #include "u8g2.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `sda_gpio`: Número do pino GPIO para SDA (ex: 10).
+- `scl_gpio`: Número do pino GPIO para SCL (ex: 9).
+- `i2c_addr_7bit`: Endereço I2C de 7 bits do display (geralmente 0x3C).
+- `addr`: Endereço I2C de 7 bits a testar (ex: 0x68 para DS3231).
+- `timeout_ms`: Tempo limite de espera em milissegundos.
+- `u8x8`: Instância da estrutura U8x8.
+- `msg`: Mensagem de temporização (delays em microssegundos ou milissegundos).
+- `arg_int`: Quantidade de tempo ou nível lógico.
+- `arg_ptr`: Ponteiro auxiliar.
+
+**Retorno:**  
+- `uint8_t`: - ESP_OK: Barramento e dispositivo I2C inicializados com sucesso. - ESP_FAIL: Falha ao criar o barramento ou registrar o dispositivo. esp_err_t u8g2_hal_i2c_init(int sda_gpio, int scl_gpio, uint8_t i2c_addr_7bit);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`display_task`, prioridade 3).
+- **Hardware Envolvido:** Display OLED SSD1306 via barramento I2C a 800 kHz (SDA: GPIO 10, SCL: GPIO 9).
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+
+## 📁 Podcast - Sincronizador Automático & Histórico
+
+### - [x] `podcast_history_audio_player_cb()`
+
+```c
+void podcast_history_audio_player_cb(const char *rel_path, uint32_t elapsed_sec, uint32_t total_sec);
+```
+
+**Descrição Técnica:**  
+Inicializa o subsistema de historico de reproducao de podcasts. Carrega a tabela de episodios concluidos a partir de /sdcard/Podcasts/.played_history. esp_err_t podcast_history_init(void);
+
+**Parâmetros:**  
+- `rel_path`: Caminho do episodio.
+- `duration_sec`: Duracao total em segundos. void podcast_history_mark_played(const char *rel_path, uint32_t duration_sec);
+- `idx`: Indice (0 a count-1).
+- `out_rel_path`: Buffer para caminho relativo ("Show/ep.mp3").
+- `max_len`: Tamanho maximo do buffer.
+- `out_ts`: Timestamp opcional (pode ser NULL).
+- `out_dur`: Duracao em segundos opcional (pode ser NULL).
+- `elapsed_sec`: Parâmetro `uint32_t elapsed_sec`.
+- `total_sec`: Parâmetro `uint32_t total_sec`.
+
+**Retorno:**  
+- `void`: true se ja foi reproduzido, false caso contrario. bool podcast_history_is_played(const char *rel_path);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_history_get_count()`
+
+```c
+int podcast_history_get_count(void);
+```
+
+**Descrição Técnica:**  
+Inicializa o subsistema de historico de reproducao de podcasts. Carrega a tabela de episodios concluidos a partir de /sdcard/Podcasts/.played_history. esp_err_t podcast_history_init(void);
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `int`: true se ja foi reproduzido, false caso contrario. bool podcast_history_is_played(const char *rel_path);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_history_get_entry()`
+
+```c
+bool podcast_history_get_entry(int idx, char *out_rel_path, size_t max_len, uint32_t *out_ts, uint32_t *out_dur);
+```
+
+**Descrição Técnica:**  
+Inicializa o subsistema de historico de reproducao de podcasts. Carrega a tabela de episodios concluidos a partir de /sdcard/Podcasts/.played_history. esp_err_t podcast_history_init(void);
+
+**Parâmetros:**  
+- `rel_path`: Caminho do episodio.
+- `duration_sec`: Duracao total em segundos. void podcast_history_mark_played(const char *rel_path, uint32_t duration_sec);
+- `idx`: Indice (0 a count-1).
+- `out_rel_path`: Buffer para caminho relativo ("Show/ep.mp3").
+- `max_len`: Tamanho maximo do buffer.
+- `out_ts`: Timestamp opcional (pode ser NULL).
+- `out_dur`: Duracao em segundos opcional (pode ser NULL).
+
+**Retorno:**  
+- `bool`: true se ja foi reproduzido, false caso contrario. bool podcast_history_is_played(const char *rel_path);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_history_init()`
+
+```c
+esp_err_t podcast_history_init(void);
+```
+
+**Descrição Técnica:**  
+Inicializa o subsistema de historico de reproducao de podcasts. Carrega a tabela de episodios concluidos a partir de /sdcard/Podcasts/.played_history.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `esp_err_t`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_history_is_played()`
+
+```c
+bool podcast_history_is_played(const char *rel_path);
+```
+
+**Descrição Técnica:**  
+Inicializa o subsistema de historico de reproducao de podcasts. Carrega a tabela de episodios concluidos a partir de /sdcard/Podcasts/.played_history. esp_err_t podcast_history_init(void);
+
+**Parâmetros:**  
+- `rel_path`: Caminho relativo do podcast (ex: "Podcasts/Canal/ep.mp3" ou "Canal/ep.mp3").
+
+**Retorno:**  
+- `bool`: true se ja foi reproduzido, false caso contrario.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_history_mark_played()`
+
+```c
+void podcast_history_mark_played(const char *rel_path, uint32_t duration_sec);
+```
+
+**Descrição Técnica:**  
+Inicializa o subsistema de historico de reproducao de podcasts. Carrega a tabela de episodios concluidos a partir de /sdcard/Podcasts/.played_history. esp_err_t podcast_history_init(void);
+
+**Parâmetros:**  
+- `rel_path`: Caminho do episodio.
+- `duration_sec`: Duracao total em segundos.
+
+**Retorno:**  
+- `void`: true se ja foi reproduzido, false caso contrario. bool podcast_history_is_played(const char *rel_path);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_history_remove_entry()`
+
+```c
+void podcast_history_remove_entry(const char *rel_path);
+```
+
+**Descrição Técnica:**  
+Inicializa o subsistema de historico de reproducao de podcasts. Carrega a tabela de episodios concluidos a partir de /sdcard/Podcasts/.played_history. esp_err_t podcast_history_init(void);
+
+**Parâmetros:**  
+- `rel_path`: Caminho do episodio.
+- `duration_sec`: Duracao total em segundos. void podcast_history_mark_played(const char *rel_path, uint32_t duration_sec);
+
+**Retorno:**  
+- `void`: true se ja foi reproduzido, false caso contrario. bool podcast_history_is_played(const char *rel_path);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_history_unmark_played()`
+
+```c
+esp_err_t podcast_history_unmark_played(const char *rel_path);
+```
+
+**Descrição Técnica:**  
+Inicializa o subsistema de historico de reproducao de podcasts. Carrega a tabela de episodios concluidos a partir de /sdcard/Podcasts/.played_history. esp_err_t podcast_history_init(void);
+
+**Parâmetros:**  
+- `rel_path`: Caminho do episodio.
+- `duration_sec`: Duracao total em segundos. void podcast_history_mark_played(const char *rel_path, uint32_t duration_sec);
+
+**Retorno:**  
+- `esp_err_t`: true se ja foi reproduzido, false caso contrario. bool podcast_history_is_played(const char *rel_path);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_sync_check_auto()`
+
+```c
+esp_err_t podcast_sync_check_auto(void);
+```
+
+**Descrição Técnica:**  
+Subsistema Autônomo de Sincronização e Download de Podcasts em Segundo Plano Gerencia o download em lote de episódios novos diretamente para o cartão MicroSD a partir de servidores locais ou relays móveis (Android/Termux), com suporte a retomada de downloads parciais e sincronização automática ao plugar o carregador. #include <stdbool.h> #include <stddef.h> #include <stdint.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif #define PODCAST_DEFAULT_LOCAL_SERVER     "http://192.168.1.100:8088"   /**< URL do servidor local de desenvolvimento. */ #define PODCAST_DEFAULT_TAILSCALE_SERVER "http://100.64.0.1:8088"      /**< URL do servidor remoto via Tailscale (RFC 6598 CGNAT). */ #define PODCAST_MAX_EPISODES             32                            /**< Limite de episódios no catálogo por sincronização. */
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `esp_err_t`: ESP_OK em caso de sucesso. esp_err_t podcast_sync_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_sync_is_auto_mode()`
+
+```c
+bool podcast_sync_is_auto_mode(void);
+```
+
+**Descrição Técnica:**  
+Subsistema Autônomo de Sincronização e Download de Podcasts em Segundo Plano Gerencia o download em lote de episódios novos diretamente para o cartão MicroSD a partir de servidores locais ou relays móveis (Android/Termux), com suporte a retomada de downloads parciais e sincronização automática ao plugar o carregador. #include <stdbool.h> #include <stddef.h> #include <stdint.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif #define PODCAST_DEFAULT_LOCAL_SERVER     "http://192.168.1.100:8088"   /**< URL do servidor local de desenvolvimento. */ #define PODCAST_DEFAULT_TAILSCALE_SERVER "http://100.64.0.1:8088"      /**< URL do servidor remoto via Tailscale (RFC 6598 CGNAT). */ #define PODCAST_MAX_EPISODES             32                            /**< Limite de episódios no catálogo por sincronização. */
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `bool`: ESP_OK em caso de sucesso. esp_err_t podcast_sync_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_sync_mark_completed()`
+
+```c
+void podcast_sync_mark_completed(void);
+```
+
+**Descrição Técnica:**  
+Subsistema Autônomo de Sincronização e Download de Podcasts em Segundo Plano Gerencia o download em lote de episódios novos diretamente para o cartão MicroSD a partir de servidores locais ou relays móveis (Android/Termux), com suporte a retomada de downloads parciais e sincronização automática ao plugar o carregador. #include <stdbool.h> #include <stddef.h> #include <stdint.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif #define PODCAST_DEFAULT_LOCAL_SERVER     "http://192.168.1.100:8088"   /**< URL do servidor local de desenvolvimento. */ #define PODCAST_DEFAULT_TAILSCALE_SERVER "http://100.64.0.1:8088"      /**< URL do servidor remoto via Tailscale (RFC 6598 CGNAT). */ #define PODCAST_MAX_EPISODES             32                            /**< Limite de episódios no catálogo por sincronização. */
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: ESP_OK em caso de sucesso. esp_err_t podcast_sync_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_sync_notify_activity()`
+
+```c
+void podcast_sync_notify_activity(void);
+```
+
+**Descrição Técnica:**  
+Subsistema Autônomo de Sincronização e Download de Podcasts em Segundo Plano Gerencia o download em lote de episódios novos diretamente para o cartão MicroSD a partir de servidores locais ou relays móveis (Android/Termux), com suporte a retomada de downloads parciais e sincronização automática ao plugar o carregador. #include <stdbool.h> #include <stddef.h> #include <stdint.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif #define PODCAST_DEFAULT_LOCAL_SERVER     "http://192.168.1.100:8088"   /**< URL do servidor local de desenvolvimento. */ #define PODCAST_DEFAULT_TAILSCALE_SERVER "http://100.64.0.1:8088"      /**< URL do servidor remoto via Tailscale (RFC 6598 CGNAT). */ #define PODCAST_MAX_EPISODES             32                            /**< Limite de episódios no catálogo por sincronização. */
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: ESP_OK em caso de sucesso. esp_err_t podcast_sync_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_sync_on_begin()`
+
+```c
+void podcast_sync_on_begin(int total_files, uint64_t total_bytes);
+```
+
+**Descrição Técnica:**  
+Subsistema Autônomo de Sincronização e Download de Podcasts em Segundo Plano Gerencia o download em lote de episódios novos diretamente para o cartão MicroSD a partir de servidores locais ou relays móveis (Android/Termux), com suporte a retomada de downloads parciais e sincronização automática ao plugar o carregador. #include <stdbool.h> #include <stddef.h> #include <stdint.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif #define PODCAST_DEFAULT_LOCAL_SERVER     "http://192.168.1.100:8088"   /**< URL do servidor local de desenvolvimento. */ #define PODCAST_DEFAULT_TAILSCALE_SERVER "http://100.64.0.1:8088"      /**< URL do servidor remoto via Tailscale (RFC 6598 CGNAT). */ #define PODCAST_MAX_EPISODES             32                            /**< Limite de episódios no catálogo por sincronização. */
+
+**Parâmetros:**  
+- `total_files`: Parâmetro `int total_files`.
+- `total_bytes`: Parâmetro `uint64_t total_bytes`.
+
+**Retorno:**  
+- `void`: ESP_OK em caso de sucesso. esp_err_t podcast_sync_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_sync_request_cancel()`
+
+```c
+void podcast_sync_request_cancel(void);
+```
+
+**Descrição Técnica:**  
+Subsistema Autônomo de Sincronização e Download de Podcasts em Segundo Plano Gerencia o download em lote de episódios novos diretamente para o cartão MicroSD a partir de servidores locais ou relays móveis (Android/Termux), com suporte a retomada de downloads parciais e sincronização automática ao plugar o carregador. #include <stdbool.h> #include <stddef.h> #include <stdint.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif #define PODCAST_DEFAULT_LOCAL_SERVER     "http://192.168.1.100:8088"   /**< URL do servidor local de desenvolvimento. */ #define PODCAST_DEFAULT_TAILSCALE_SERVER "http://100.64.0.1:8088"      /**< URL do servidor remoto via Tailscale (RFC 6598 CGNAT). */ #define PODCAST_MAX_EPISODES             32                            /**< Limite de episódios no catálogo por sincronização. */
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: ESP_OK em caso de sucesso. esp_err_t podcast_sync_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `podcast_sync_start_manual()`
+
+```c
+esp_err_t podcast_sync_start_manual(void);
+```
+
+**Descrição Técnica:**  
+Subsistema Autônomo de Sincronização e Download de Podcasts em Segundo Plano Gerencia o download em lote de episódios novos diretamente para o cartão MicroSD a partir de servidores locais ou relays móveis (Android/Termux), com suporte a retomada de downloads parciais e sincronização automática ao plugar o carregador. #include <stdbool.h> #include <stddef.h> #include <stdint.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif #define PODCAST_DEFAULT_LOCAL_SERVER     "http://192.168.1.100:8088"   /**< URL do servidor local de desenvolvimento. */ #define PODCAST_DEFAULT_TAILSCALE_SERVER "http://100.64.0.1:8088"      /**< URL do servidor remoto via Tailscale (RFC 6598 CGNAT). */ #define PODCAST_MAX_EPISODES             32                            /**< Limite de episódios no catálogo por sincronização. */
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `esp_err_t`: ESP_OK em caso de sucesso. esp_err_t podcast_sync_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado cooperativamente pela máquina de estados não-bloqueante no Core 0.
+- **Hardware Envolvido:** Rádio Wi-Fi 2.4 GHz e sistema de arquivos FatFS no MicroSD.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+
+## 📁 Armazenamento - Cartão MicroSD (SDMMC 4-Bit)
+
+### - [x] `sd_card_get_frequency()`
+
+```c
+uint32_t sd_card_get_frequency(void);
+```
+
+**Descrição Técnica:**  
+Driver de Inicialização e Montagem FatFS do Cartão MicroSD (SDMMC 4-Bit) Configura o periférico host SDMMC nativo do ESP32-S3 em modo de 4 vias a 40 MHz (CLK: GPIO 5, CMD: GPIO 6, D0..D3: GPIOs 4, 17, 16, 7), aloca buffers DMA e monta o sistema de arquivos FAT32 em `/sdcard`. #include "esp_err.h" #include "sdmmc_cmd.h" #define SD_MOUNT_POINT "/sdcard" /**< Ponto de montagem no VFS do ESP-IDF. */ #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `uint32_t`: - ESP_OK: Cartão detectado, inicializado e montado em `/sdcard`. - ESP_ERR_TIMEOUT: Timeout na comunicação com o cartão. - ESP_FAIL: Falha ao montar o sistema de arquivos FatFS. esp_err_t sd_card_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 ou Core 0.
+- **Hardware Envolvido:** Host nativo SDMMC 4-Bit a 40 MHz.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `sd_card_get_handle()`
+
+```c
+sdmmc_card_t * sd_card_get_handle(void);
+```
+
+**Descrição Técnica:**  
+Driver de Inicialização e Montagem FatFS do Cartão MicroSD (SDMMC 4-Bit) Configura o periférico host SDMMC nativo do ESP32-S3 em modo de 4 vias a 40 MHz (CLK: GPIO 5, CMD: GPIO 6, D0..D3: GPIOs 4, 17, 16, 7), aloca buffers DMA e monta o sistema de arquivos FAT32 em `/sdcard`. #include "esp_err.h" #include "sdmmc_cmd.h" #define SD_MOUNT_POINT "/sdcard" /**< Ponto de montagem no VFS do ESP-IDF. */ #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `sdmmc_card_t *`: - ESP_OK: Cartão detectado, inicializado e montado em `/sdcard`. - ESP_ERR_TIMEOUT: Timeout na comunicação com o cartão. - ESP_FAIL: Falha ao montar o sistema de arquivos FatFS. esp_err_t sd_card_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 ou Core 0.
+- **Hardware Envolvido:** Host nativo SDMMC 4-Bit a 40 MHz.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `sd_card_set_frequency()`
+
+```c
+esp_err_t sd_card_set_frequency(uint32_t freq_khz);
+```
+
+**Descrição Técnica:**  
+Driver de Inicialização e Montagem FatFS do Cartão MicroSD (SDMMC 4-Bit) Configura o periférico host SDMMC nativo do ESP32-S3 em modo de 4 vias a 40 MHz (CLK: GPIO 5, CMD: GPIO 6, D0..D3: GPIOs 4, 17, 16, 7), aloca buffers DMA e monta o sistema de arquivos FAT32 em `/sdcard`. #include "esp_err.h" #include "sdmmc_cmd.h" #define SD_MOUNT_POINT "/sdcard" /**< Ponto de montagem no VFS do ESP-IDF. */ #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `freq_khz`: Frequência desejada em kHz (ex: 20000 para 20 MHz, 40000 para 40 MHz).
+
+**Retorno:**  
+- `esp_err_t`: - ESP_OK: Cartão detectado, inicializado e montado em `/sdcard`. - ESP_ERR_TIMEOUT: Timeout na comunicação com o cartão. - ESP_FAIL: Falha ao montar o sistema de arquivos FatFS. esp_err_t sd_card_init(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 1 ou Core 0.
+- **Hardware Envolvido:** Host nativo SDMMC 4-Bit a 40 MHz.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+
+## 📁 Entradas - Joystick 5 Vias, Cronômetro & Navegação
+
+### - [x] `debug_nav_dump_state()`
+
+```c
+void debug_nav_dump_state(void);
+```
+
+**Descrição Técnica:**  
+Camada de Injeção de Botões Virtuais e Telemetria de UI para Debug #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif // Botões correspondentes a touch_input (JOY_UP=0, JOY_LEFT=1, JOY_DOWN=2, JOY_RIGHT=3, JOY_CENTER=4) #define DEBUG_BTN_UP     (1u << 0) #define DEBUG_BTN_LEFT   (1u << 1) #define DEBUG_BTN_DOWN   (1u << 2) #define DEBUG_BTN_RIGHT  (1u << 3) #define DEBUG_BTN_CENTER (1u << 4)
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `debug_nav_enqueue_seq()`
+
+```c
+esp_err_t debug_nav_enqueue_seq(const char *seq_str);
+```
+
+**Descrição Técnica:**  
+Camada de Injeção de Botões Virtuais e Telemetria de UI para Debug #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif // Botões correspondentes a touch_input (JOY_UP=0, JOY_LEFT=1, JOY_DOWN=2, JOY_RIGHT=3, JOY_CENTER=4) #define DEBUG_BTN_UP     (1u << 0) #define DEBUG_BTN_LEFT   (1u << 1) #define DEBUG_BTN_DOWN   (1u << 2) #define DEBUG_BTN_RIGHT  (1u << 3) #define DEBUG_BTN_CENTER (1u << 4)
+
+**Parâmetros:**  
+- `seq_str`: Parâmetro `const char *seq_str`.
+
+**Retorno:**  
+- `esp_err_t`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `debug_nav_get_vmask()`
+
+```c
+uint8_t debug_nav_get_vmask(uint32_t now_ms);
+```
+
+**Descrição Técnica:**  
+Camada de Injeção de Botões Virtuais e Telemetria de UI para Debug #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif // Botões correspondentes a touch_input (JOY_UP=0, JOY_LEFT=1, JOY_DOWN=2, JOY_RIGHT=3, JOY_CENTER=4) #define DEBUG_BTN_UP     (1u << 0) #define DEBUG_BTN_LEFT   (1u << 1) #define DEBUG_BTN_DOWN   (1u << 2) #define DEBUG_BTN_RIGHT  (1u << 3) #define DEBUG_BTN_CENTER (1u << 4)
+
+**Parâmetros:**  
+- `now_ms`: Parâmetro `uint32_t now_ms`.
+
+**Retorno:**  
+- `uint8_t`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `debug_nav_init()`
+
+```c
+void debug_nav_init(void);
+```
+
+**Descrição Técnica:**  
+Camada de Injeção de Botões Virtuais e Telemetria de UI para Debug #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif // Botões correspondentes a touch_input (JOY_UP=0, JOY_LEFT=1, JOY_DOWN=2, JOY_RIGHT=3, JOY_CENTER=4) #define DEBUG_BTN_UP     (1u << 0) #define DEBUG_BTN_LEFT   (1u << 1) #define DEBUG_BTN_DOWN   (1u << 2) #define DEBUG_BTN_RIGHT  (1u << 3) #define DEBUG_BTN_CENTER (1u << 4)
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `debug_nav_is_enabled()`
+
+```c
+bool debug_nav_is_enabled(void);
+```
+
+**Descrição Técnica:**  
+Camada de Injeção de Botões Virtuais e Telemetria de UI para Debug #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif // Botões correspondentes a touch_input (JOY_UP=0, JOY_LEFT=1, JOY_DOWN=2, JOY_RIGHT=3, JOY_CENTER=4) #define DEBUG_BTN_UP     (1u << 0) #define DEBUG_BTN_LEFT   (1u << 1) #define DEBUG_BTN_DOWN   (1u << 2) #define DEBUG_BTN_RIGHT  (1u << 3) #define DEBUG_BTN_CENTER (1u << 4)
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `bool`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `debug_nav_notify_mode_change()`
+
+```c
+void debug_nav_notify_mode_change(int old_mode, int new_mode);
+```
+
+**Descrição Técnica:**  
+Camada de Injeção de Botões Virtuais e Telemetria de UI para Debug #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif // Botões correspondentes a touch_input (JOY_UP=0, JOY_LEFT=1, JOY_DOWN=2, JOY_RIGHT=3, JOY_CENTER=4) #define DEBUG_BTN_UP     (1u << 0) #define DEBUG_BTN_LEFT   (1u << 1) #define DEBUG_BTN_DOWN   (1u << 2) #define DEBUG_BTN_RIGHT  (1u << 3) #define DEBUG_BTN_CENTER (1u << 4)
+
+**Parâmetros:**  
+- `old_mode`: Parâmetro `int old_mode`.
+- `new_mode`: Parâmetro `int new_mode`.
+
+**Retorno:**  
+- `void`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `debug_nav_press()`
+
+```c
+esp_err_t debug_nav_press(uint8_t btn_mask, uint32_t duration_ms);
+```
+
+**Descrição Técnica:**  
+Camada de Injeção de Botões Virtuais e Telemetria de UI para Debug #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif // Botões correspondentes a touch_input (JOY_UP=0, JOY_LEFT=1, JOY_DOWN=2, JOY_RIGHT=3, JOY_CENTER=4) #define DEBUG_BTN_UP     (1u << 0) #define DEBUG_BTN_LEFT   (1u << 1) #define DEBUG_BTN_DOWN   (1u << 2) #define DEBUG_BTN_RIGHT  (1u << 3) #define DEBUG_BTN_CENTER (1u << 4)
+
+**Parâmetros:**  
+- `btn_mask`: Parâmetro `uint8_t btn_mask`.
+- `duration_ms`: Parâmetro `uint32_t duration_ms`.
+
+**Retorno:**  
+- `esp_err_t`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `debug_nav_release_all()`
+
+```c
+void debug_nav_release_all(void);
+```
+
+**Descrição Técnica:**  
+Camada de Injeção de Botões Virtuais e Telemetria de UI para Debug #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif // Botões correspondentes a touch_input (JOY_UP=0, JOY_LEFT=1, JOY_DOWN=2, JOY_RIGHT=3, JOY_CENTER=4) #define DEBUG_BTN_UP     (1u << 0) #define DEBUG_BTN_LEFT   (1u << 1) #define DEBUG_BTN_DOWN   (1u << 2) #define DEBUG_BTN_RIGHT  (1u << 3) #define DEBUG_BTN_CENTER (1u << 4)
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `debug_nav_request_screenshot()`
+
+```c
+esp_err_t debug_nav_request_screenshot(void);
+```
+
+**Descrição Técnica:**  
+Camada de Injeção de Botões Virtuais e Telemetria de UI para Debug #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif // Botões correspondentes a touch_input (JOY_UP=0, JOY_LEFT=1, JOY_DOWN=2, JOY_RIGHT=3, JOY_CENTER=4) #define DEBUG_BTN_UP     (1u << 0) #define DEBUG_BTN_LEFT   (1u << 1) #define DEBUG_BTN_DOWN   (1u << 2) #define DEBUG_BTN_RIGHT  (1u << 3) #define DEBUG_BTN_CENTER (1u << 4)
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `esp_err_t`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `debug_nav_reset_home()`
+
+```c
+void debug_nav_reset_home(void);
+```
+
+**Descrição Técnica:**  
+Camada de Injeção de Botões Virtuais e Telemetria de UI para Debug #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif // Botões correspondentes a touch_input (JOY_UP=0, JOY_LEFT=1, JOY_DOWN=2, JOY_RIGHT=3, JOY_CENTER=4) #define DEBUG_BTN_UP     (1u << 0) #define DEBUG_BTN_LEFT   (1u << 1) #define DEBUG_BTN_DOWN   (1u << 2) #define DEBUG_BTN_RIGHT  (1u << 3) #define DEBUG_BTN_CENTER (1u << 4)
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `debug_nav_set_enabled()`
+
+```c
+void debug_nav_set_enabled(bool enable);
+```
+
+**Descrição Técnica:**  
+Camada de Injeção de Botões Virtuais e Telemetria de UI para Debug #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #ifdef __cplusplus extern "C" { #endif // Botões correspondentes a touch_input (JOY_UP=0, JOY_LEFT=1, JOY_DOWN=2, JOY_RIGHT=3, JOY_CENTER=4) #define DEBUG_BTN_UP     (1u << 0) #define DEBUG_BTN_LEFT   (1u << 1) #define DEBUG_BTN_DOWN   (1u << 2) #define DEBUG_BTN_RIGHT  (1u << 3) #define DEBUG_BTN_CENTER (1u << 4)
+
+**Parâmetros:**  
+- `enable`: Parâmetro `bool enable`.
+
+**Retorno:**  
+- `void`: Retorno da operação.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_chrono_get_elapsed_ms()`
+
+```c
+uint32_t touch_input_chrono_get_elapsed_ms(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `touch_input_chrono_get_elapsed_ms` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `uint32_t`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_chrono_get_laps()`
+
+```c
+int touch_input_chrono_get_laps(uint32_t *out_laps, int max_laps);
+```
+
+**Descrição Técnica:**  
+Executa a operação `touch_input_chrono_get_laps` no subsistema.
+
+**Parâmetros:**  
+- `out_laps`: Parâmetro `uint32_t *out_laps`.
+- `max_laps`: Parâmetro `int max_laps`.
+
+**Retorno:**  
+- `int`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_chrono_is_running()`
+
+```c
+metro
+bool touch_input_chrono_is_running(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `touch_input_chrono_is_running` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `metro
+bool`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_enter_usb_dac()`
+
+```c
+void touch_input_enter_usb_dac(void);
+```
+
+**Descrição Técnica:**  
+Gerenciador de Entradas do Usuário (Joystick de 5 Vias e Navegação da UI) Configura os GPIOs de navegação (UP GPIO 2, DOWN GPIO 41, LEFT GPIO 39, RIGHT GPIO 42, CENTER GPIO 40) com resistores internos de pull-up, gerencia detecção de cliques rápidos, repetição contínua (*auto-repeat*), toque longo (*long press* para bloqueio), atalhos da tela superior e estados da interface gráfica. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "freertos/FreeRTOS.h" #include "freertos/task.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: ESP_OK se a tarefa foi criada com sucesso. esp_err_t touch_input_start(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_enter_usb_msc()`
+
+```c
+void touch_input_enter_usb_msc(void);
+```
+
+**Descrição Técnica:**  
+Gerenciador de Entradas do Usuário (Joystick de 5 Vias e Navegação da UI) Configura os GPIOs de navegação (UP GPIO 2, DOWN GPIO 41, LEFT GPIO 39, RIGHT GPIO 42, CENTER GPIO 40) com resistores internos de pull-up, gerencia detecção de cliques rápidos, repetição contínua (*auto-repeat*), toque longo (*long press* para bloqueio), atalhos da tela superior e estados da interface gráfica. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "freertos/FreeRTOS.h" #include "freertos/task.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: ESP_OK se a tarefa foi criada com sucesso. esp_err_t touch_input_start(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_get_action_cursor()`
+
+```c
+es e Clipboard
+int touch_input_get_action_cursor(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `touch_input_get_action_cursor` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `es e Clipboard
+int`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_get_clipboard_item()`
+
+```c
+const char * touch_input_get_clipboard_item(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `touch_input_get_clipboard_item` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `const char *`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_get_fallback_idx()`
+
+```c
+int touch_input_get_fallback_idx(void);
+```
+
+**Descrição Técnica:**  
+Gerenciador de Entradas do Usuário (Joystick de 5 Vias e Navegação da UI) Configura os GPIOs de navegação (UP GPIO 2, DOWN GPIO 41, LEFT GPIO 39, RIGHT GPIO 42, CENTER GPIO 40) com resistores internos de pull-up, gerencia detecção de cliques rápidos, repetição contínua (*auto-repeat*), toque longo (*long press* para bloqueio), atalhos da tela superior e estados da interface gráfica. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "freertos/FreeRTOS.h" #include "freertos/task.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `int`: ESP_OK se a tarefa foi criada com sucesso. esp_err_t touch_input_start(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_get_games_cursor()`
+
+```c
+int touch_input_get_games_cursor(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `touch_input_get_games_cursor` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `int`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_get_lock_clock_secs()`
+
+```c
+uint32_t touch_input_get_lock_clock_secs(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `touch_input_get_lock_clock_secs` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `uint32_t`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_get_lock_clock_timeout_idx()`
+
+```c
+int touch_input_get_lock_clock_timeout_idx(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `touch_input_get_lock_clock_timeout_idx` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `int`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_is_lock_clock_visible()`
+
+```c
+bloqueio
+bool touch_input_is_lock_clock_visible(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `touch_input_is_lock_clock_visible` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `bloqueio
+bool`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_register_chrono_entry()`
+
+```c
+void touch_input_register_chrono_entry(void);
+```
+
+**Descrição Técnica:**  
+Executa a operação `touch_input_register_chrono_entry` no subsistema.
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: Retorno da função.
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_reset_to_main_menu()`
+
+```c
+void touch_input_reset_to_main_menu(void);
+```
+
+**Descrição Técnica:**  
+Gerenciador de Entradas do Usuário (Joystick de 5 Vias e Navegação da UI) Configura os GPIOs de navegação (UP GPIO 2, DOWN GPIO 41, LEFT GPIO 39, RIGHT GPIO 42, CENTER GPIO 40) com resistores internos de pull-up, gerencia detecção de cliques rápidos, repetição contínua (*auto-repeat*), toque longo (*long press* para bloqueio), atalhos da tela superior e estados da interface gráfica. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "freertos/FreeRTOS.h" #include "freertos/task.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- *Nenhum parâmetro (void).*
+
+**Retorno:**  
+- `void`: ESP_OK se a tarefa foi criada com sucesso. esp_err_t touch_input_start(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---
+
+### - [x] `touch_input_set_menu_cursor()`
+
+```c
+void touch_input_set_menu_cursor(int c);
+```
+
+**Descrição Técnica:**  
+Gerenciador de Entradas do Usuário (Joystick de 5 Vias e Navegação da UI) Configura os GPIOs de navegação (UP GPIO 2, DOWN GPIO 41, LEFT GPIO 39, RIGHT GPIO 42, CENTER GPIO 40) com resistores internos de pull-up, gerencia detecção de cliques rápidos, repetição contínua (*auto-repeat*), toque longo (*long press* para bloqueio), atalhos da tela superior e estados da interface gráfica. #include <stdint.h> #include <stdbool.h> #include "esp_err.h" #include "freertos/FreeRTOS.h" #include "freertos/task.h" #ifdef __cplusplus extern "C" { #endif
+
+**Parâmetros:**  
+- `handle`: Handle da tarefa FreeRTOS do display. void touch_input_set_display_task_handle(TaskHandle_t handle);
+- `c`: Parâmetro `int c`.
+
+**Retorno:**  
+- `void`: ESP_OK se a tarefa foi criada com sucesso. esp_err_t touch_input_start(void);
+
+**Concorrência e Hardware:**  
+- **Núcleo / Tarefa:** Executado no Core 0 (`touch_task`, prioridade 4).
+- **Hardware Envolvido:** Pinos GPIO do joystick (GPIOs 2, 39, 40, 41, 42) e expansor PCF8574.
+
+- [x] *Função catalogada, documentada e verificada.*
+
+---

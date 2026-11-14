@@ -3,12 +3,14 @@
 
 /**
  * @file eq.h
- * @brief Equalizador Paramétrico de 10 Bandas IIR com Auto Pre-cut
+ * @brief Equalizador Paramétrico SVF Trapezoidal Linear de 10 Bandas
  *
- * Implementa 10 filtros biquad Direct Form I com ganhos ajustáveis de -12 dB a +12 dB
- * por banda, cálculo automático de atenuação de entrada (Auto Pre-cut) para prevenção
- * de ceifamento digital (*hard clipping*), alocação de coeficientes em SRAM interna rápida
- * e bypass Bit-Perfect automático para faixas Hi-Res acima de 48 kHz.
+ * Implementa 10 filtros SVF (State Variable Filter Trapezoidal Linear — Andrew Simper / Cytomic
+ * Peaking Bell) sintetizados em precisão dupla (`double` 64-bit com `g = tan(pi * f0 / Fs)`)
+ * e executados em ponto flutuante IEEE-754 de 32 bits em `IRAM_ATTR`, com ganhos ajustáveis
+ * de -15 dB a +15 dB por banda e Pre-Amp geral de -30 dB a +30 dB. Opera continuamente em
+ * todas as taxas de amostragem (44.1 kHz a 384 kHz) sem bypass, utilizando double-buffering
+ * lock-free (`s_eq_pool[2]`) em SRAM interna e processamento em tiles de 64 pares L/R com ILP.
  */
 
 #include <stdint.h>
@@ -51,17 +53,17 @@ typedef struct {
 void eq_init(void);
 
 /**
- * @brief Recalcula os coeficientes dos filtros biquad para a nova taxa de amostragem.
+ * @brief Recalcula os coeficientes dos filtros SVF trapezoidais lineares para a nova taxa de amostragem (suporta de 8 kHz a 384 kHz).
  *
  * Deve ser invocada antes de iniciar o processamento de novas faixas quando a taxa
- * de amostragem mudar (ex: de 44.1 kHz para 48 kHz).
+ * de amostragem mudar (ex: de 44.1 kHz para 96 kHz ou 384 kHz).
  *
  * @param[in] sample_rate Frequência de amostragem da faixa em Hz.
  */
 void eq_set_sample_rate(uint32_t sample_rate);
 
 /**
- * @brief Atualiza os ganhos das bandas, recalcula o Auto Pre-cut e persiste na NVS.
+ * @brief Atualiza os ganhos das bandas (-15 dB a +15 dB) e Pre-Amp (-30 dB a +30 dB) em double-buffer lock-free e agenda gravação debounced (1.5s) na NVS.
  *
  * @param[in] config Ponteiro para a nova configuração a ser aplicada.
  */

@@ -15,7 +15,7 @@ A divisão de trabalho entre processadores e núcleos independentes evita gargal
 
 1. **Placa Principal (ESP32-S3 N16R8 — Dual-Core Xtensa LX7 @ 240 MHz)**:
    * **Core 1 (Player & I/O Task)**: Leitura de alta velocidade do micro SD (SDMMC 4 vias a 40 MHz), pipeline assíncrono com ring buffer de 1 MB em PSRAM Octal e decodificação contínua de formatos Hi-Res (**WAV até 32-bit / 384 kHz nativo**, **FLAC 24-bit até 192 kHz com FastSeek**, MP3, AAC, M4A, OGG) com janela deslizante de cópias reduzidas e gatekeeper multinível anti-brick.
-   * **Core 0 (DSP, Áudio DMA & Interface)**: Tarefa dedicada de processamento de áudio (`audio_dsp_task`) gerenciando volume logarítmico com Fast-Path, balanço estéreo, equalizador de 10 bandas com compensação *Auto Pre-cut*, VU meter balístico estéreo decimado (stride 8x), entrega contínua nos descritores DMA do I2S, interface gráfica OLED SSD1306 fluida até 62.5 FPS e leitura de joystick/expansor I2C PCF8574 sem latência.
+   * **Core 0 (DSP, Áudio DMA & Interface)**: Tarefa dedicada de processamento de áudio (`audio_dsp_task`) gerenciando volume logarítmico com Fast-Path, balanço estéreo, equalizador SVF trapezoidal linear de 10 bandas (-15 a +15 dB, operando continuamente até 384 kHz sem bypass), VU meter balístico estéreo decimado (stride 8x), entrega contínua nos descritores DMA do I2S, interface gráfica OLED SSD1306 fluida até 62.5 FPS via I2C a 800 kHz e leitura de joystick/expansor I2C PCF8574 sem latência.
    * Conta também com subsistema **USB TinyUSB nativo** em modos exclusivos (Serial CDC, USB DAC UAC2 e USB Mass Storage) e Central Web embarcada modular com player web, raspador de podcasts no navegador e analytics.
 
 2. **Co-Processador de Bluetooth (`bt_companion` — ESP32 Clássico)**:
@@ -34,7 +34,7 @@ Este projeto preza pela honestidade técnica e relata com clareza o estado real 
 
 * **Saída Cabeada Hi-Res Extrema (PCM5102A até 32-bit / 384 kHz e FLAC 24-bit / 192 kHz)**: DAC Texas Instruments PCM5102A operando em modo **4-fios com Master Clock (MCLK) dedicado no GPIO 8** e clock base `PLL_240M` (multiplicadores de clock até 49.152 MHz para 384 kHz). Reproduz linearmente arquivos WAV PCM até **32-bit / 384 kHz** e FLAC comprimido sem perdas até **24-bit / 192 kHz**, sustentado por um ring buffer de I/O assíncrono de **1 MB em PSRAM Octal** com taxa de leitura de mais de 3.0 MB/s.
 * **Busca Veloz e Responsiva (FastSeek)**: Algoritmo de busca rápida por syncwords e quadros de metadados em faixas FLAC e WAV, permitindo pular trechos de áudio sem travamentos e com cancelamento imediato de prefetch.
-* **Gatekeeper Multinível Anti-Brick & Safe Resume em NVS**: Proteção de hardware ativa contra arquivos fora de especificação (ex: FLAC 32-bit ou taxas acima de 384 kHz). O player rejeita a faixa antes da alocação de buffers, cancela prefetch em andamento, limpa chaves de boot-loop na NVS e exibe tela de diagnóstico visual com indicação clara dos limites físicos de reprodução.
+* **Gatekeeper Multinível Anti-Brick, Tela SEELE 01 & Safe Resume em NVS**: Proteção de hardware ativa contra arquivos fora de especificação (ex: FLAC 32-bit ou taxas acima dos limites físicos). O player rejeita a faixa antes da alocação de buffers, cancela prefetch em andamento, expurga chaves residuais de boot-loop na NVS e renderiza a tela de diagnóstico visual com o monólito **SEELE 01 (`image_seele_bits`)** e badges de limite (`FLAC MAX 24-BIT / 192 KHZ` e `WAV MAX 32-BIT / 384 KHZ`).
 * **Modos de Reprodução Shuffle & Repeat / Loop**:
   * **Shuffle**: Desativado (`OFF`), Pasta (`FOLDER` com permutação pseudoaleatória Fisher-Yates alocada em PSRAM Octal sem repetições até esgotar a pasta) e Global (`ALL` em todo o acervo do cartão SD).
   * **Repeat**: Desativado (`NONE`), Repetir Lista (`ALL`) e Repetir Faixa 1x (`ONE` com liberação automática de loop ao avançar manualmente).
@@ -45,7 +45,7 @@ Este projeto preza pela honestidade técnica e relata com clareza o estado real 
 * **SBC de Alta Fidelidade**: Garante compatibilidade imediata com qualquer fone ou caixa Bluetooth do mercado em 44.1 ou 48 kHz (Bitpool 53, estéreo de alta qualidade).
 * **Decodificação de Múltiplos Formatos no S3**: Suporte completo a **FLAC** (16 e 24 bits, até 192 kHz na saída cabeada e 96 kHz no Bluetooth), **WAV** (PCM 16, 24 e 32 bits até 384 kHz), **MP3** (CBR/VBR até 320 kbps), **AAC / M4A** e **OGG Vorbis**.
 * **Leitura Rápida do Cartão SD (SDMMC 4-Bit 40 MHz)**: Barramento nativo de 4 vias a 40 MHz, permitindo navegar ágil pelas pastas e carregar arquivos pesados sem esvaziamento de buffer.
-* **Equalizador Paramétrico de 10 Bandas com Auto Pre-cut**: Filtros IIR biquad com ganho de -12 dB a +12 dB e cálculo automático de compensação de ganho (*Auto Pre-cut*) para prevenir ceifamento digital (*hard clipping*). Alocado em SRAM interna rápida com **bypass automático Bit-Perfect acima de 48 kHz** e Fast-Path de volume sem branches pesados.
+* **Equalizador Paramétrico SVF de 10 Bandas (384 kHz)**: Filtros *SVF Trapezoidais Lineares* (*Andrew Simper / Cytomic Peaking Bell*) sintetizados em dupla precisão (`double` 64-bit) e executados em `IRAM_ATTR` em tiles de 64 pares com ILP, ganhos de **-15 dB a +15 dB** por banda e Pre-Amp de **-30 dB a +30 dB**. Conta com *double-buffering* lock-free (`s_eq_pool[2]`) em SRAM interna, fusão direta de ganho/balanço L/R, Fast-Path de volume e operação contínua em todas as taxas (**44.1 kHz a 384 kHz sem bypass**).
 * **Interface Monocromática Fluida no OLED SSD1306**: Navegação intuitiva com joystick de 5 direções ou expansor PCF8574, menus em carrossel, visualização da biblioteca por pastas e arquivos, além da tela "Now Playing" com dados da faixa, formato, taxa de amostragem, profundidade de bits, tempo decorrido e modos de loop/shuffle.
 * **Persistência de Estado Segura (Safe NVS)**: Grava e recupera automaticamente a última música tocada, o ponto exato onde a reprodução foi pausada, o volume atual, a preferência de codec e o modo de ordenação das faixas, validando o cabeçalho antes de persistir para evitar boot-loops.
 * **Ordenação Flexível de Faixas (Nome A-Z vs Data / Tracklist Original)**: Configurado diretamente no menu **"Conf" (Opção 6 — "Ordenar")**. Permite alternar instantaneamente entre a ordem alfabética clássica e a ordem por data de modificação (`mtime` do cartão SD), preservando a sequência original de faixas das gravações/álbuns. A preferência é gravada na NVS e a pasta ativa é reordenada imediatamente.
@@ -54,7 +54,7 @@ Este projeto preza pela honestidade técnica e relata com clareza o estado real 
 * **Governador Dinâmico de Clock e Gerenciamento de Energia (DFS)**:
   * **Escalonamento Inteligente de Frequência**: Ajusta a CPU Xtensa LX7 dinamicamente entre **240 MHz**, **160 MHz**, **80 MHz** e **40 MHz** conforme a demanda de carga em tempo real.
   * **240 MHz**: Operações intensivas de I/O e rede (transferência Wi-Fi, upload OTA, busca/seek veloz, decodificação Hi-Res extrema >96 kHz e USB MSC).
-  * **160 MHz**: Interface gráfica ativa, renderização do display OLED a 25.0 FPS cravados e navegação de menus com equalizador paramétrico de 10 bandas.
+  * **160 MHz**: Interface gráfica ativa, renderização do display OLED a até 62.5 FPS dinâmicos e navegação de menus com equalizador paramétrico SVF de 10 bandas.
   * **80 MHz**: Reprodução contínua de áudio padrão (MP3, WAV, FLAC até 48 kHz) com tela apagada/repouso, mantendo o PLL base (`BBPLL`) travado e estável para nunca causar jitter no barramento I2S ou falhas de leitura no SDMMC.
   * **40 MHz**: Repouso ocioso com economia drástica de bateria e redução de aquecimento.
 * **Deep Sleep (< 100 µA) e Suspensão Inteligente**:
@@ -133,22 +133,24 @@ A PHY USB interna do ESP32-S3 é restrita ao padrão **USB 2.0 Full-Speed (12 Mb
 |   [CORE 1: I/O & DECODIFICAÇÃO (Prio 5)]                                                                |
 |  +--------------------+        +-----------------------+                                                |
 |  | MicroSD (SDMMC 4b) | -----> |  Decodificador Hi-Res |                                                |
-|  | (40 MHz FATFS)     |        | (FLAC 24b/192k, MP3)  |                                                |
+|  | (40 MHz FATFS)     |        | (WAV 384k/32b,        |                                                |
+|  |                    |        |  FLAC 24b/192k, MP3)  |                                                |
 |  +--------------------+        +-----------+-----------+                                                |
 |                                            |                                                            |
-|                           [Fila PCM em SRAM Interna (s_dsp_ready_queue)]                                |
+|                     [Fila DSP 96 Blocos (768 KB PSRAM) + RingBuf 1 MB PSRAM]                            |
 |                                            |                                                            |
 |                                            v                                                            |
 |   [CORE 0: DSP, SAÍDA & INTERFACE]         |                                                            |
 |  +-----------------------------------------+-----------+        +--------------------+                  |
 |  | audio_dsp_task (Prio 5): Vol / Balanço / Fade       | -----> |  Driver I2S Master |                  |
-|  | + Equalizador 10-Bandas com Auto Pre-cut            |        |  DMA 32-bit Stereo |                  |
+|  | + Equalizador SVF 10-Bandas (até 384 kHz)           |        |  DMA 32-bit Stereo |                  |
 |  +-----------------------------------------------------+        +---------+----------+                  |
 |                                                                           |                             |
 |  +--------------------+        +-----------------------+                  | I2S 4-Fios:                 |
 |  | Display OLED I2C   | <..... | Menu / GUI / Joystick |                  | DOUT (47), BCLK (48),       |
-|  | (SSD1306 a 25 FPS) |        | (touch_task Prio 5)   |                  | LRCK (21), MCLK (8)         |
-|  +--------------------+        +-----------+-----------+                  |                             |
+|  |(SSD1306 a 62.5 FPS)|        | (touch_task Prio 4    |                  | LRCK (21), MCLK (8)         |
+|  +--------------------+        |  + Expansor PCF8574)  |                  |                             |
+|                                +-----------+-----------+                  |                             |
 |                                            :                              |                             |
 |                                            : UART Link                    |                             |
 +--------------------------------------------:------------------------------:-----------------------------+
@@ -180,7 +182,7 @@ A PHY USB interna do ESP32-S3 é restrita ao padrão **USB 2.0 Full-Speed (12 Mb
                            v                                       +-------------------+                  |
                +-----------------------+                           |   DAC PCM5102A    |                  |
                | Fone de Ouvido / Caixa|                           | (Modo 4-Fios MCLK)| <----------------+
-               | Bluetooth Sem Fio     |                           | (Até 192kHz/24b)  |   (Até 192 kHz)
+               | Bluetooth Sem Fio     |                           | (Até 384kHz/32b)  |   (Até 384 kHz)
                +-----------------------+                           +-------------------+
 ```
 
@@ -212,9 +214,9 @@ O projeto adota o **ESP-IDF v6.0.1 puro** como *Single Source of Truth* para com
 | Sinal I2S | ESP32-S3 (Master TX) | ESP32 Companion (Slave RX) | DAC PCM5102A | Observações |
 |---|:---:|:---:|:---:|---|
 | **BCLK** (Bit Clock) | **GPIO 48** | **GPIO 26** | **BCK** | Clock de bits síncrono |
-| **LRCK / WS** (Word Select) | **GPIO 21** | **GPIO 25** | **LCK** | Frequência de amostragem da faixa (até 192 kHz) |
+| **LRCK / WS** (Word Select) | **GPIO 21** | **GPIO 25** | **LCK** | Frequência de amostragem da faixa (até 384 kHz) |
 | **DOUT / DIN** (Dados PCM) | **GPIO 47** | **GPIO 22** | **DIN** | Dados de áudio PCM estéreo |
-| **MCLK** (Master Clock) | **GPIO 8** | — | **SCK** | Master Clock dedicado (24,576 MHz max, jumper SCK-GND removido) |
+| **MCLK** (Master Clock) | **GPIO 8** | — | **SCK** | Master Clock dedicado (até 49,152 MHz em 384k / 24,576 MHz em 192k, jumper SCK-GND removido) |
 | **GND** | GND | GND | GND | Terra comum de referência |
 
 ### 2. Barramento de Controle UART (Comunicação S3 ↔ Companion)
@@ -229,8 +231,9 @@ O projeto adota o **ESP-IDF v6.0.1 puro** como *Single Source of Truth* para com
 
 | Periférico | Função | Pinos no ESP32-S3 |
 |---|---|---|
-| **Display OLED SSD1306** | I2C Mestre (128x64 monocromático) | **SDA: GPIO 10** \| **SCL: GPIO 9** (alimentação 3.3V) |
+| **Display OLED SSD1306** | I2C Mestre (128x64 monocromático a 800 kHz) | **SDA: GPIO 10** \| **SCL: GPIO 9** (alimentação 3.3V) |
 | **RTC DS3231** | Relógio de alta precisão I2C (compartilhado) | **SDA: GPIO 10** \| **SCL: GPIO 9** (mesmo barramento I2C, thread-safe) |
+| **Expansor I2C PCF8574** | Entradas dedicadas de volume e joystick | **SDA: GPIO 10** \| **SCL: GPIO 9** (barramento I2C compartilhado) |
 | **Cartão micro SD** | Barramento SDMMC 4-Bit (Slot nativo) | **CLK: GPIO 5** \| **CMD: GPIO 6** \| **D0: GPIO 4** \| **D1: GPIO 17** \| **D2: GPIO 16** \| **D3: GPIO 7** |
 | **Joystick de 5 Vias** | Botões de navegação & Wakeup | **UP: GPIO 2 (RTC IO / Wakeup)** \| **LEFT: GPIO 39** \| **DOWN: GPIO 41** \| **RIGHT: GPIO 42** \| **CENTER: GPIO 40** |
 | **Monitor de Bateria & TP4056** | Divisor Li-Ion + status TP4056 | **ADC: GPIO 1** (Tensão Li-Ion) \| **CHRG: GPIO 11 (Wakeup Carga)** |
@@ -256,8 +259,8 @@ O desenvolvimento do mps3 utilizou componentes consolidados do ecossistema de á
    * A pilha Bluetooth deriva do framework **Bluedroid** da Espressif, customizada com patches para suportar múltiplos SEPs e codecs proprietários (`ESP_A2D_MCT_NON_A2DP`).
 3. **BlueZ Linux Bluetooth Subsystem — Codificador SBC**:
    * A codificação SBC no `bt_companion` foi adaptada da implementação do Linux BlueZ, projetada para execução eficiente em microcontroladores.
-4. **Robert Bristow-Johnson — Audio EQ Cookbook**:
-   * O cálculo dos coeficientes dos filtros biquad do equalizador paramétrico de 10 bandas segue as formulações de domínio público de Robert Bristow-Johnson.
+4. **Andrew Simper (Cytomic) & Robert Bristow-Johnson — Teoria de Filtros SVF / Audio EQ**:
+   * A síntese de filtros do equalizador paramétrico SVF trapezoidal linear de 10 bandas baseia-se nas formulações matemáticas de domínio público de **Andrew Simper (Cytomic)** para Peaking Bell Integrators e nas referências clássicas de equalização paramétrica de **Robert Bristow-Johnson**.
 
 ---
 

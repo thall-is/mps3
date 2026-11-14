@@ -24,9 +24,9 @@ from pathlib import Path
 
 # Diretórios padrão
 if sys.platform.startswith("win"):
-    DEFAULT_DIR = r"R:\Podcasts"
+    DEFAULT_DIR = os.environ.get("MPS3_PODCAST_DIR", r"R:\Podcasts")
 else:
-    DEFAULT_DIR = "/mnt/USBT/Podcasts"
+    DEFAULT_DIR = os.environ.get("MPS3_PODCAST_DIR", "/mnt/USBT/Podcasts")
 
 
 class PodcastScraper:

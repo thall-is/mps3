@@ -5,7 +5,7 @@
 //  mps3 — Mapa Oficial de Pinos e Barramentos (ESP32-S3 N16R8)
 // ============================================================================
 
-// --- Display OLED SSD1306 (I2C a 400 kHz) -----------------------------------
+// --- Display OLED SSD1306, RTC DS3231 e PCF8574 (I2C Fast-Mode Plus a 800 kHz) ---
 #define PIN_OLED_SDA        10
 #define PIN_OLED_SCL        9
 

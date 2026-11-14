@@ -51,7 +51,7 @@ Este documento detalha todas as conexões físicas, níveis de tensão e recomen
           |                                      |
           |  [PERIFÉRICOS S3]                   GND COMUM DE TODAS AS PLACAS
           |
-          +----> OLED I2C: SDA (GPIO 10) | SCL (GPIO 9)
+          +----> Barramento I2C (800 kHz): OLED SSD1306 + RTC DS3231 + PCF8574 -> SDA (10) | SCL (9)
           +----> SDMMC 4-Bit: CLK (5), CMD (6), D0 (4), D1 (17), D2 (16), D3 (7)
           +----> Joystick 5-way: UP (2), LEFT (39), DOWN (41), RIGHT (42), CENTER (40)
           +----> Sensor Bateria: Divisor Resistivo 100k/100k ligado ao GPIO 1 (ADC)
@@ -69,7 +69,7 @@ Este documento detalha todas as conexões físicas, níveis de tensão e recomen
 | **BCLK** | **48** | **26** | **BCK** | Saída 3.3V (Master) / Entradas nos Slaves |
 | **LRCK** | **21** | **25** | **LCK** | Saída 3.3V (Master) / Entradas nos Slaves |
 | **DOUT** | **47** | **22 (DIN)** | **DIN** | Saída 3.3V (Master) / Entradas nos Slaves |
-| **MCLK** | **8**  | — | **SCK** | Master Clock dedicado (24,576 MHz max) para o DAC |
+| **MCLK** | **8**  | — | **SCK** | Master Clock dedicado (até 49,152 MHz em 384 kHz / 24,576 MHz em 192k e 96k) para o DAC |
 | **GND**  | GND | GND | GND | Terra comum de referência |
 
 > **Atenção**: No módulo DAC PCM5102A, o pino **SCK deve ser conectado ao GPIO 8** (MCLK). É **obrigatório** verificar e remover o resistor 0-ohm / ponte de solda (Jumper 1) no verso da plaquinha que aterra o pino SCK de fábrica, evitando curto-circuito com o GND.
@@ -94,8 +94,8 @@ Este documento detalha todas as conexões físicas, níveis de tensão e recomen
 ### 4. Entradas do Usuário e Sensores (ESP32-S3)
 | Periférico | GPIO ESP32-S3 | Conexão Elétrica |
 |---|:---:|---|
-| **OLED SDA** | **GPIO 10** | Linha de dados I2C (módulo já possui pull-up) |
-| **OLED SCL** | **GPIO 9** | Linha de clock I2C (módulo já possui pull-up) |
+| **Barramento I2C SDA (OLED / RTC / PCF8574)** | **GPIO 10** | Linha de dados I2C a 800 kHz (compartilhada entre OLED SSD1306, RTC DS3231 e expansor PCF8574) |
+| **Barramento I2C SCL (OLED / RTC / PCF8574)** | **GPIO 9** | Linha de clock I2C a 800 kHz (módulo OLED já possui pull-up) |
 | **Joystick UP** | **GPIO 2** | Chave normalmente aberta conectada ao GND |
 | **Joystick LEFT** | **GPIO 39** | Chave normalmente aberta conectada ao GND |
 | **Joystick DOWN** | **GPIO 41** | Chave normalmente aberta conectada ao GND |

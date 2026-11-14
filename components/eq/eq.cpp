@@ -1,19 +1,16 @@
-// Equalizador de 5 bandas usando filtros biquad IIR
-// Implementação puramente em software, sem dependência de biblioteca
-// externa. Cada banda usa um filtro "peaking EQ" (RBJ Audio EQ Cookbook,
-// seção "Peaking EQ filter"), que aplica ganho/atenuação apenas na
-// vizinhança da frequência central sem distorcer as outras bandas.
+// Equalizador Paramétrico de 10 Bandas usando Filtros SVF Trapezoidais Lineares
+// (Andrew Simper / Cytomic Peaking Bell), sintetizados em precisão dupla (double 64-bit)
+// e executados em ponto flutuante IEEE-754 de 32 bits em IRAM (IRAM_ATTR).
+// Opera em todas as taxas de amostragem (44.1 kHz a 384 kHz) sem perda de precisão nos graves,
+// com ganhos de -15 dB a +15 dB por banda e Pre-Amp geral de -30 dB a +30 dB.
 //
-// Formato do buffer: int32_t, left-justified (32 bits por amostra),
-// intercalado L,R,L,R,... — mesmo formato usado em todo o pipeline.
-// O EQ é aplicado in-place (mesmo buffer de entrada e saída).
+// Formato do buffer: int32_t Q31 (32 bits por amostra), intercalado L,R,L,R,...
+// Processamento in-place ou fundido com volume/balanço L/R (eq_process_with_gain)
+// em blocos de 64 pares (EQ_TILE_PAIRS) para maximizar localidade de cache D-Cache L1
+// e paralelismo de instruções (ILP) na FPU do Xtensa LX7.
 //
-// Thread safety: eq_update_config() copia os coeficientes de forma
-// atomica antes de substituir o ponteiro interno. A task de áudio
-// (player_task, core 1) só lê o ponteiro/coeficientes depois de qualquer
-// escrita da touch_task — em arquitetura ARM/Xtensa, a escrita de um
-// ponteiro de 32 bits é atômica, então não usamos mutex aqui para não
-// atrasar o caminho crítico de áudio.
+// Thread safety: eq_update_config() preenche o slot inativo de s_eq_pool[2] e realiza
+// troca atômica de ponteiro (s_active_eq) consumido pela audio_dsp_task (Core 0).
 
 #include "eq.h"
 #include "esp_attr.h"

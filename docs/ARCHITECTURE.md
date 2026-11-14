@@ -25,8 +25,8 @@ O **mps3** adota uma topologia de co-processamento distribuído (**Dual-MCU**) p
 |                                  ESP32-S3 (Placa Principal)                             |
 |                                                                                         |
 |  +--------------------+        +-----------------------+        +--------------------+  |
-|  | MicroSD (SDMMC 4b) | -----> |  Decodificador Hi-Res | -----> |   Equalizador IIR  |  |
-|  |  FLAC / MP3 / WAV  |        | (WAV 384k/32b, FLAC)  |        |   10 Bandas Biquad |  |
+|  | MicroSD (SDMMC 4b) | -----> |  Decodificador Hi-Res | -----> |   Equalizador SVF  |  |
+|  |  FLAC / MP3 / WAV  |        | (WAV 384k/32b, FLAC)  |        |   10 Bandas (384k) |  |
 |  +--------------------+        +-----------------------+        +--------------------+  |
 |                                            |                               |            |
 |                                [RingBuffer 1MB PSRAM]                      v            |
@@ -89,7 +89,7 @@ $$\text{step} = \left( \frac{\text{in\_rate}}{\text{out\_rate}} \right) \times 2
 
 * **Preservação de Resíduo de Fase (*Carry*):** O interpolador guarda as últimas amostras esquerda e direita (`carry_l`, `carry_r`) e o resíduo sub-amostral da fase entre chamadas DMA. A forma de onda gerada é rigorosamente contínua através das fronteiras dos buffers.
 * **Baixa Sobrecarga:** Totalmente baseado em aritmética inteira e deslocamento de bits, demandando menos de 8% de um núcleo de CPU a 240 MHz.
-* **Comutação Dinâmica:** Quando o S3 inicia uma nova faixa com taxa distinta, despacha `UART_CMD_SET_SAMPLE_RATE` (0x0B). O co-processador ajusta imediatamente os divisores do periférico I2S Slave sem interrupção de áudio audível.
+* **Comutação Dinâmica:** Quando o S3 inicia uma nova faixa com taxa distinta, despacha `UART_CMD_SET_SAMPLE_RATE` (0x16). O co-processador ajusta imediatamente os divisores do periférico I2S Slave sem interrupção de áudio audível.
 
 ---
 
@@ -131,9 +131,10 @@ Para reproduzir áudio extremo em **WAV 32-bit / 384 kHz estéreo** (vazão cont
 ### 5.2 Gatekeeper Multinível de Formato & Safe Resume na NVS
 - **Proteção Anti-Brick**: Arquivos codificados fora dos padrões suportados (como FLAC 32-bit, que não possui representação válida nos quadros da libFLAC) são interceptados logo na leitura de metadados (`play_track()`) e antes da alocação de buffers.
 - **Safe Resume NVS**: A gravação de estado de retomada (`last_path`) na memória NVS só é realizada após a confirmação de cabeçalho válido (`header_ready = true`). Caso um arquivo rejeitado seja identificado, qualquer chave residual é expurgada da NVS, impedindo loops de watchdog ou travamentos em reinicializações.
-- **Diagnóstico Visual na Rejeição**: Quando uma faixa excede os limites físicos de amostragem ou profundidade de bits, o display OLED exibe uma tela dedicada de rejeição indicando claramente o badge do codec (`FLAC`, `WAV`) e o teto máximo suportado (`MAX 24-BIT / 192 KHZ` ou `MAX 32-BIT / 384 KHZ`).
+- **Diagnóstico Visual na Rejeição**: Quando uma faixa excede os limites físicos de amostragem ou profundidade de bits, o display OLED exibe a tela de rejeição (`oled_display_show_unsupported_ex`) renderizando o monólito **SEELE 01 (`image_seele_bits`)** ao lado do badge do codec (`FLAC`, `WAV`) e o teto máximo suportado (`MAX 24-BIT / 192 KHZ` ou `MAX 32-BIT / 384 KHZ`).
 
-### 5.3 Decimação Dinâmica do VU Meter e Fast-Path de Volume
+### 5.3 Equalizador SVF Trapezoidal Linear (384 kHz), Decimação do VU Meter e Fast-Path de Volume
+- **Equalizador SVF Trapezoidal Linear de 10 Bandas (Andrew Simper / Cytomic)**: Filtros *Peaking Bell* sintetizados em dupla precisão (`double` 64-bit, `g = tan(pi * f0 / Fs)`) e executados em `float` 32-bit em `IRAM_ATTR`, com ganhos de **-15 dB a +15 dB** por banda e Pre-Amp geral de **-30 dB a +30 dB**. Opera continuamente de **44.1 kHz a 384 kHz sem bypass** (rejeitando apenas bandas acima de `0.45 * Fs`), processado em tiles de 64 pares L/R (`EQ_TILE_PAIRS`) com canais intercalados para FPU ILP do Xtensa LX7, *double-buffering* lock-free (`s_eq_pool[2]`) e *clamp* seguro Q31 (`2147483520.0f`).
 - **Decimação Balística (Stride 8x)**: Para frequências acima de 192 kHz (ex: WAV 384 kHz), o motor de análise de picos de áudio (`audio_meter_feed`) aplica stride 8x, preservando a taxa de amostragem efetiva de análise em 48 kHz e reduzindo em 50% o processamento do Core 0.
 - **Fast-Path de Ganho**: Durante o ajuste de volume em `audio_dsp_task`, quando ambos os canais operam em volume nominal $\le 100\%$ (`final_L <= 32768 && final_R <= 32768`), o teste condicional de saturação `int64` é omitido, economizando mais de 2 milhões de instruções de branch por segundo.
 
@@ -179,20 +180,22 @@ ota_1,    app,  ota_1,    0x420000, 0x400000,
 
 ## 7. Pipeline Dual-Core de Transferência Wi-Fi e Servidor Web (`wifi_transfer`)
 
-Para atingir vazão sustentada de **1,30 a 1,46 MB/s** na escrita em cartão microSD (FAT32 sobre SDMMC 4-bit) através do navegador web, o subsistema HTTP (`components/wifi_transfer/wifi_transfer.c`) implementa um pipeline assíncrono acoplado ao Cache L1 de 32 KB da PSRAM:
+Para atingir vazão sustentada de até **3,8 MB/s na escrita em cartão microSD** (FAT32 sobre SDMMC 4-bit com pré-alocação contígua `f_expand`) e **~1,51 MB/s em download HTTP** através do navegador web, o subsistema HTTP (`components/wifi_transfer/wifi_transfer.c`) implementa um pipeline assíncrono acoplado à PSRAM Octal e ao barramento SDMMC DMA:
 
-1. **Produtor TCP (Core 1 — `httpd`, Prioridade 5, Stack 8 KB em DRAM)**:
-   - Drena o socket TCP via `httpd_req_recv()` usando um buffer enxuto persistente (`s_recv_buf_persist`, 4–8 KB) e empurra os blocos imediatamente para um **RingBuffer elástico de 3 MB na PSRAM Octal** (`s_rb_persist`), mantendo a janela de transferência 100% quente no Cache L1 de 32 KB da PSRAM (`memcpy` a **44,4 MB/s**).
-2. **Consumidor SDMMC DMA (Core 0 — `upload_writer_task`, Prioridade 5, Stack 8 KB em PSRAM)**:
-   - Cria diretórios (`mkdir_p_for_file`) e abre o arquivo (`fopen`) em paralelo no Core 0 enquanto o Core 1 já recebe os primeiros pacotes TCP (`open_ms <= 4 ms`).
-   - Consome fatias de **16 KB (32 setores)** para um *bounce buffer* persistente alinhado em SRAM DMA interna (`s_bounce_persist`, `MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA`), executando comandos SDMMC `CMD25` (*Write Multiple Block*) diretos sem realocação por setor.
+0. **Gerenciamento Dinâmico de DMA Contíguo (`i2s_output_deinit`)**:
+   - Ao preparar o pipeline de transferência pesada (`prepare_transfer_pipeline`), desaloca temporariamente os buffers DMA do I2S (~96 KB de DRAM interna contígua) para liberar SRAM DMA ao *bounce buffer* SDMMC, restaurando o subsistema de áudio automaticamente após a sessão Wi-Fi.
+1. **Produtor / Consumidor TCP (`httpd` — Core 1)**:
+   - Drena ou alimenta o socket TCP via `httpd_req_recv()`/`httpd_resp_send_chunk()` usando um buffer persistente em PSRAM (`s_recv_buf_persist`, **32 KB**, `UPLOAD_RECV_BUF_SIZE`) acoplado a um **RingBuffer elástico de até 4 MB na PSRAM Octal** (`s_rb_persist`, `UPLOAD_RINGBUF_SIZE`).
+2. **Worker Unificado SDMMC DMA (Core 1 — `transfer_worker_task` / `"up_wr"`, Prioridade 4, Stack 16 KB em PSRAM e TCB em DRAM interna)**:
+   - Opera tanto trabalhos de escrita (`WORKER_JOB_UPLOAD`, com pré-alocação contígua `f_expand` no FAT32 eliminando atualizações repetidas da tabela FAT) quanto de leitura (`WORKER_JOB_DOWNLOAD`).
+   - Opera diretamente sobre um *bounce buffer* persistente alinhado em 16 bytes na SRAM DMA interna (`s_bounce_persist`, **até 64 KB / 128 setores ou 32 KB / 64 setores** via `MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA`), executando rajadas SDMMC `CMD25`/`CMD18` sem realocação por setor.
 3. **Isolamento de Pilha dos Handlers HTTP (`http_scratch_alloc`)**:
-   - Todos os buffers temporários de caminhos UTF-8, serialização JSON e leitura de diretórios (`list_scratch_t`, `upload_scratch_t`, `dl_scratch_t`, `del_scratch_t`) são alocados dinamicamente na PSRAM via `http_scratch_alloc()`, garantindo consumo de pilha `< 128 bytes` na task `httpd` mesmo sob rajadas concorrentes de requisições do navegador.
+   - Todos os buffers temporários de caminhos UTF-8, serialização JSON e leitura de diretórios (`list_scratch_t`, `upload_scratch_t`, `dl_scratch_t`, `del_scratch_t`) são alocados dinamicamente na PSRAM via `http_scratch_alloc()`, garantindo baixo consumo de pilha na task `httpd` mesmo sob rajadas concorrentes de requisições do navegador.
 4. **Sincronização Push de Podcasts v2.0 (`podcast_sync` + `mps3_sync`) e Dupla Verificação SHA-256**:
    - O MPS3 opera como servidor passivo (`podcast_sync.c` refatorado em máquina de estados não-bloqueante executada pela `display_task`, com **0 bytes** de alocação extra de pilha em DRAM interna), anunciando `_mps3._tcp` via mDNS (`mac`, `ver`, `proto=2`) quando ativado pelo menu ("Sincronizar Podcasts"), comando UART `sync`, ou automaticamente ao conectar o carregador TP4056 (respeitando *cooldown* de 6h em NVS).
    - O cliente multiplataforma (`tools/mps3_sync/`) descobre o MPS3 na LAN, consulta `GET /api/sync/manifest` (episódios presentes no SD + histórico `played_history` + espaço livre + bateria), reconcilia o livro-razão (`state.json`) e aplica a política determinística de retenção (**3 mais recentes de cada programa + todos os não ouvidos**).
-   - **Commit Atômico em 3 Etapas com Duplo SHA-256 (`mps3_sha256_ctx_t` Zero-Alloc)**:
-     1. `PUT /api/upload?path=/Podcasts/.staging/<Show>/<ep>` com cabeçalho `X-Expected-SHA256`: calcula o SHA-256 em tempo real na `upload_writer_task` (Core 0) sem alocação dinâmica nem contenção de DMA; em caso de divergência, remove o arquivo parcial e retorna `HTTP 422 Unprocessable Entity`.
+   - **Commit Atômico em 3 Etapas com Duplo SHA-256 (`mps3_sha256_ctx_t` PSA com fallback em software)**:
+     1. `PUT /api/upload?path=/Podcasts/.staging/<Show>/<ep>` com cabeçalho `X-Expected-SHA256`: calcula o SHA-256 por hardware (`psa_hash_setup`, com fallback em software) em tempo real durante a recepção na `transfer_worker_task`; em caso de divergência, remove o arquivo parcial e retorna `HTTP 422 Unprocessable Entity`.
      2. `POST /api/sync/verify`: relê o arquivo gravado fisicamente no cartão microSD (usando `s_bounce_persist` em SRAM DMA) e recalcula o SHA-256 antes do commit.
      3. `POST /api/rename`: move atomicamente de `/Podcasts/.staging/<Show>/<ep>` para `/Podcasts/<Show>/<ep>`, garantindo que o player nunca veja arquivos parciais (pastas iniciadas por `.` são ignoradas pelo `audio_player`).
 5. **Central Web Modular Embarcada (`components/wifi_transfer/web/src/`)**:

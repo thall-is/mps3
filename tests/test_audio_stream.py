@@ -49,22 +49,37 @@ class WAVEOUTCAPS(ctypes.Structure):
         ('dwSupport', wintypes.DWORD),
     ]
 
-num_devs = winmm.waveOutGetNumDevs()
-mps3_id = None
-for i in range(num_devs):
-    caps = WAVEOUTCAPS()
-    winmm.waveOutGetDevCapsA(i, ctypes.byref(caps), ctypes.sizeof(caps))
-    name = caps.szPname.decode('latin1')
-    if 'MPS3' in name:
-        mps3_id = i
-        print(f"Dispositivo MPS3 encontrado: ID {i} ({name})")
-        break
+def main():
+    num_devs = winmm.waveOutGetNumDevs()
+    mps3_id = None
+    for i in range(num_devs):
+        caps = WAVEOUTCAPS()
+        winmm.waveOutGetDevCapsA(i, ctypes.byref(caps), ctypes.sizeof(caps))
+        name = caps.szPname.decode('latin1')
+        if 'MPS3' in name:
+            mps3_id = i
+            print(f"Dispositivo MPS3 encontrado: ID {i} ({name})")
+            break
 
-if mps3_id is None:
-    print("ERRO: Dispositivo MPS3 DAC Audio nao encontrado!")
-    exit(1)
+    if mps3_id is None:
+        print("ERRO: Dispositivo MPS3 DAC Audio nao encontrado!")
+        return 1
 
-def play_tone(rate, freq, duration, desc):
+    # 1. 44.1 kHz / 24-bit (Nota Lá 440 Hz)
+    play_tone(mps3_id, 44100, 440.0, 2.0, "44.1 kHz / 24-bit (La 440 Hz)")
+    time.sleep(0.5)
+
+    # 2. 48.0 kHz / 24-bit (Nota Do# 554 Hz)
+    play_tone(mps3_id, 48000, 554.37, 2.0, "48.0 kHz / 24-bit (Do# 554 Hz)")
+    time.sleep(0.5)
+
+    # 3. 96.0 kHz / 24-bit (Nota Mi 659 Hz)
+    play_tone(mps3_id, 96000, 659.25, 2.0, "96.0 kHz / 24-bit Hi-Res (Mi 659 Hz)")
+
+    print("\nTODOS OS TESTES DE REPRODUCAO 24-BIT FINALIZADOS COM SUCESSO!")
+    return 0
+
+def play_tone(mps3_id, rate, freq, duration, desc):
     print(f"\n>>> Testando reproducao: {desc} - Freq={freq}Hz, Taxa={rate}Hz...")
     wfx = WAVEFORMATEXTENSIBLE()
     wfx.wFormatTag = WAVE_FORMAT_EXTENSIBLE
@@ -107,16 +122,6 @@ def play_tone(rate, freq, duration, desc):
     print(f"{desc}: OK!")
     return True
 
-# 1. 44.1 kHz / 24-bit (Nota Lá 440 Hz)
-play_tone(44100, 440.0, 2.0, "44.1 kHz / 24-bit (La 440 Hz)")
-time.sleep(0.5)
-
-# 2. 48.0 kHz / 24-bit (Nota Do# 554 Hz)
-play_tone(48000, 554.37, 2.0, "48.0 kHz / 24-bit (Do# 554 Hz)")
-time.sleep(0.5)
-
-# 3. 96.0 kHz / 24-bit (Nota Mi 659 Hz)
-play_tone(96000, 659.25, 2.0, "96.0 kHz / 24-bit Hi-Res (Mi 659 Hz)")
-
-print("\nTODOS OS TESTES DE REPRODUCAO 24-BIT FINALIZADOS COM SUCESSO!")
+if __name__ == '__main__':
+    exit(main())
 

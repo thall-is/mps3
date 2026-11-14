@@ -25,11 +25,11 @@ import socketserver
 DEFAULT_PORT = 8088
 DEFAULT_HOST = "0.0.0.0"
 
-# Se executado no Windows, usa R:\Podcasts como padrão; no Linux, /mnt/USBT/Podcasts
+# Se executado no Windows, usa R:\Podcasts (ou MPS3_PODCAST_DIR) como padrão; no Linux, /mnt/USBT/Podcasts
 if sys.platform.startswith("win"):
-    DEFAULT_DIR = r"R:\Podcasts"
+    DEFAULT_DIR = os.environ.get("MPS3_PODCAST_DIR", r"R:\Podcasts")
 else:
-    DEFAULT_DIR = "/mnt/USBT/Podcasts"
+    DEFAULT_DIR = os.environ.get("MPS3_PODCAST_DIR", "/mnt/USBT/Podcasts")
 
 SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".wav", ".m4a", ".ogg", ".opus", ".aac"}
 CHUNK_SIZE = 64 * 1024  # 64 KB por bloco de streaming
